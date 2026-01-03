@@ -13,6 +13,36 @@ def calculate_metrics(clean, noisy):
     return mse
 
 
+def save_signal_to_csv(df, filename="pressure_sim.csv"):
+    """
+    规范化写入函数：确保列名和精度统一
+    """
+    # 强制保留 6 位小数，确保 50Hz 或更高频率下的时间戳不丢失精度
+    df.to_csv(filename, index=False, float_format="%.6f")
+    print(f"✅ 数据已写入磁盘: {os.path.abspath(filename)}")
+
+
+def load_signal_from_csv(filename="pressure_sim.csv"):
+    """
+    规范化读取函数：后续算法处理的起点
+    """
+    if not os.path.exists(filename):
+        print(f"❌ 错误：文件 {filename} 不存在")
+        return None
+
+    # 读取数据
+    df = pd.read_csv(filename)
+
+    # 验证关键列是否存在 (这是工程鲁棒性的体现)
+    required_cols = ["timestamp", "clean_signal", "noisy_signal"]
+    if all(col in df.columns for col in required_cols):
+        print(f"📖 数据读取成功，样本数: {len(df)}")
+        return df
+    else:
+        print("❌ 错误：文件格式与规范不符")
+        return None
+
+
 class MassageChairSimulator:
     """
     按摩椅多模态信号仿真器
@@ -139,6 +169,13 @@ df_sim = pd.DataFrame(
         "noisy_signal": noisy_p,
     }
 )
+
+# # 写入文件
+# save_signal_to_csv(df_sim, "pressure_sim.csv")
+
+# # 验证读取 （写和读闭环）
+# df_loaded = load_signal_from_csv("pressure_sim.csv")
+
 # 4. 可视化对比
 plt.figure(figsize=(15, 6))
 plt.plot(
