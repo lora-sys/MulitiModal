@@ -32,6 +32,12 @@ def load_signal_from_csv(filename="pressure_sim.csv"):
         print("❌ 错误：文件格式与规范不符")
         return None
 
+def export_anomalies(df, filename="anomaly_points.csv"):
+    """导出异常点数据到CSV"""
+    anomaly_df = df[df['is_anomaly']][['timestamp', 'noisy_signal', 'upper_bound', 'lower_bound']]
+    anomaly_df.to_csv(filename, index=False)
+    print(f"✅ 异常点数据已导出至: {filename} (共{len(anomaly_df)}条)")
+
 # 1. 加载数据
 df = load_signal_from_csv("pressure_sim.csv")
 
@@ -68,7 +74,7 @@ if df is not None:
 
     plt.plot(df['timestamp'][view_slice], df['noisy_signal'][view_slice], color='red', alpha=0.15, label="Raw Noisy")
     plt.plot(df['timestamp'][view_slice], df['clean_signal'][view_slice], color='black', lw=2, label="Ground Truth")
-    plt.plot(df['timestamp'][view_slice], df['filter_ma'][view_slice], color='blue', alpha=0.8, label=f"MA 基准 (window={window_size})")
+    plt.plot(df['timestamp'][view_slice], df['filter_ma'][view_slice], color='blue', alpha=0.8, label=f"MA baseLine (window={window_size})")
 
     # 绘制 3-Sigma 置信区间（灰色阴影）
     plt.fill_between(df['timestamp'][view_slice],
@@ -95,6 +101,7 @@ if df is not None:
 
     plt.tight_layout()
     save_plot("anomaly_detection_v1.png")
+    export_anomalies(df)
     plt.show()
 
     print(f"📊 异常检测报告:")
