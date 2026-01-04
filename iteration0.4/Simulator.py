@@ -22,7 +22,10 @@ def save_signal_to_csv(df, filename="pressure_sim.csv"):
     # 强制保留 6 位小数，确保 50Hz 或更高频率下的时间戳不丢失精度
     df.to_csv(filename, index=False, float_format="%.6f")
     print(f"✅ 数据已写入磁盘: {os.path.abspath(filename)}")
-
+def export_to_csv(self, df: pd.DataFrame, filename: str):
+    """导出数据为标准CSV格式"""
+    df.to_csv(filename, index=False)
+    print(f"数据成功导出至: {filename}")
 
 def load_signal_from_csv(filename="pressure_sim.csv"):
     """
