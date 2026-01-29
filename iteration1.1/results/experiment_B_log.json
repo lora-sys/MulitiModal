@@ -1,0 +1,51 @@
+{
+  "experiment": "B",
+  "description": "精简特征 + 5-Fold交叉验证",
+  "feature_count": 6,
+  "features": [
+    "sensor1_std",
+    "sensor2_std",
+    "sensor1_ptp",
+    "sensor2_ptp",
+    "hr",
+    "spo2"
+  ],
+  "mean_accuracy": 1.0,
+  "std_accuracy": 0.0,
+  "max_accuracy": 1.0,
+  "min_accuracy": 1.0,
+  "training_time": 0.67513108253479,
+  "fold_scores": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "feature_importance": [
+    {
+      "feature": "hr",
+      "importance": 0.32509217962228154
+    },
+    {
+      "feature": "sensor1_std",
+      "importance": 0.3117999584956507
+    },
+    {
+      "feature": "sensor2_std",
+      "importance": 0.2903069463642776
+    },
+    {
+      "feature": "spo2",
+      "importance": 0.06773169697477349
+    },
+    {
+      "feature": "sensor2_ptp",
+      "importance": 0.0032927732196511832
+    },
+    {
+      "feature": "sensor1_ptp",
+      "importance": 0.0017764453233654678
+    }
+  ]
+}

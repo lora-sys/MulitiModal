@@ -1,0 +1,100 @@
+{
+  "experiment": "A",
+  "description": "全量特征 + 5-Fold交叉验证",
+  "feature_count": 16,
+  "features": [
+    "weight",
+    "height",
+    "hr",
+    "spo2",
+    "sensor1_mean",
+    "sensor1_std",
+    "sensor1_ptp",
+    "sensor1_min",
+    "sensor1_max",
+    "sensor2_mean",
+    "sensor2_std",
+    "sensor2_ptp",
+    "sensor2_min",
+    "sensor2_max",
+    "amplitude_ratio",
+    "offset_ratio"
+  ],
+  "mean_accuracy": 1.0,
+  "std_accuracy": 0.0,
+  "max_accuracy": 1.0,
+  "min_accuracy": 1.0,
+  "fold_scores": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "feature_importance": [
+    {
+      "feature": "sensor2_std",
+      "importance": 0.3168880749634104
+    },
+    {
+      "feature": "sensor1_std",
+      "importance": 0.3019606073219757
+    },
+    {
+      "feature": "hr",
+      "importance": 0.2371087572437654
+    },
+    {
+      "feature": "spo2",
+      "importance": 0.08708514511360645
+    },
+    {
+      "feature": "sensor2_min",
+      "importance": 0.022634425135059272
+    },
+    {
+      "feature": "sensor1_min",
+      "importance": 0.008783998266180114
+    },
+    {
+      "feature": "sensor1_mean",
+      "importance": 0.004049663577352823
+    },
+    {
+      "feature": "amplitude_ratio",
+      "importance": 0.004040561428898086
+    },
+    {
+      "feature": "sensor1_ptp",
+      "importance": 0.003996183968464715
+    },
+    {
+      "feature": "sensor2_ptp",
+      "importance": 0.0038990824838111863
+    },
+    {
+      "feature": "sensor2_mean",
+      "importance": 0.0030432071244658665
+    },
+    {
+      "feature": "weight",
+      "importance": 0.001731898282095092
+    },
+    {
+      "feature": "sensor2_max",
+      "importance": 0.0016395490786393072
+    },
+    {
+      "feature": "offset_ratio",
+      "importance": 0.00139158767114437
+    },
+    {
+      "feature": "sensor1_max",
+      "importance": 0.0009996034391931033
+    },
+    {
+      "feature": "height",
+      "importance": 0.0007476549019380744
+    }
+  ]
+}
