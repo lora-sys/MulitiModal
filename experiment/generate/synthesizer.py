@@ -142,40 +142,199 @@ class TemporalJitter :
         t_jittered = phase / (2 * np.pi * base_freq)
         
         return t_jittered 
-# test
+ # ========== Part 3: 软边界参数生成器 ==========
+class FuzzyBoundaryGenerator:
+    """
+    软边界参数生成器
+    
+    解决iteration1.1的问题：类别边界过于清晰（RandomForest一眼看穿）
+    
+    策略：
+    - 85%样本：清晰类别特征（硬边界）
+    - 15%样本：跨类别混合（软边界）
+    
+    混合方式：使用Beta分布生成混合比例，偏向中间但不完全平均
+    """        
+    def __init__(self,overlap_ratio:float = 0.15): #15% 保守
+        self.overlap_ratio = overlap_ratio
+        
+        # 类别参数定义
+        self.category_profiles = {
+            0 : {
+                # 身体表征很差
+                'hr_base' : 95, # 心率高
+                'hr_var' : 10., # 波动大
+                'pressure_factor' : 0.8, # 承受力低
+                'amplitude_var' : 0.2, # 振幅变化大
+            },
+            1 : {
+                # 身体表征一般
+                'hr_base':85,
+                'hr_var' : 8,
+                'pressure_factor':1.0,
+                'amplitude_var' : 0.15,
+          },
+            2 : {
+                ## 身体表征正常
+                'hr_base':75,
+                'hr_var' : 6,
+                'pressure_factor': 1.2,
+                'amplitude_var' : 0.1,
+            },
+            3 : {
+                # 身体表征很好
+                'hr_base' : 65, # 心率低
+                'hr_var' : 5,  # 波动小
+                'pressure_factor' : 1.5 , # 承受力高
+                'amplitude_var' : 0.08,   # 振幅稳定
+            }
+            
+        }
+    def generate_params(self,category : int) -> dict :
+        """
+        生成带软边界的物理参数
+        
+        Args:
+            category: 目标类别（0-3）
+            
+        Returns:
+            params: 包含所有物理参数的字典
+                  如果是软边界样本，会包含'mixed_with'和'mix_ratio'
+        """
+        # 决定是否生成为软边界样本（15%概率）
+        is_fuzzy = np.random.random() < self.overlap_ratio
+        
+        if is_fuzzy and category in [1, 2]:  # 只有中间类别才有软边界
+            # 选择相邻类别进行混合
+            neighbor = category - 1 if np.random.random() < 0.5 else category + 1
+            neighbor = np.clip(neighbor, 0, 3)
+            
+            # 使用Beta分布生成混合比例（α=2, β=2，中间偏向）
+            mix_ratio = np.random.beta(2, 2)
+            
+            # 混合参数
+            params = self._mix_params(category, neighbor, mix_ratio)
+            params['is_fuzzy'] = True
+            params['mixed_with'] = neighbor
+            params['mix_ratio'] = mix_ratio
+            
+        else:
+            # 硬边界：从目标类别直接采样
+            params = self._sample_from_category(category)
+            params['is_fuzzy'] = False
+            
+        return params
+    def _sample_from_category(self,cat: int) -> dict:
+         """从单个类别采样参数"""   
+         profile = self.category_profiles[cat]
+         
+         # 身高体重
+         height = np.random.randint(155,198)
+         weight = int(height-105 + np.random.normal(0,5))
+         
+         # 心率
+         hr = profile['hr_base'] + np.random.randint(-profile['hr_var'],profile['hr_var'])
+         hr= np.clip(hr,50,120)
+         
+         # 血氧（与类别相关）
+         spo2 = 98 - (3 - cat) + np.random.randint(-1, 1)
+         spo2 = np.clip(spo2, 90, 100)
+         
+         pressure_factor = profile['pressure_factor'] + np.random.normal(0,0.1)
+         base_pressure = weight*0.6*pressure_factor
+         amplitude = 15 * cat *8 + np.random.normal(0,profile['amplitude_var']+10)
+         
+         return {
+             'category' : cat,
+             'height' : height,
+             'weight' : weight,
+             'hr' : hr,
+             'spo2' : spo2,
+             'base_pressure' : base_pressure,
+             'amplitude' : amplitude 
+         }
+    
+    def _mix_params(self,cat1 : int ,cat2 : int,ratio : float) -> dict:
+        """混合两个类别的参数"""
+        param1 = self._sample_from_category(cat1)
+        param2 = self._sample_from_category(cat2)
+        
+        mixed = {
+            
+        }
+        for key in ["height",'weight','hr','spo2','base_pressure','amplitude']:
+            # 线性插值混合
+            mixed[key] = ratio * param1[key] + (1-ratio) * param2[key]
+        
+        # 类别标签使用混合比列最大的
+        mixed['category'] = cat1 if ratio > 0.5 else cat2
+        mixed['time_category'] = cat1 # 记录原始目标类别
+        
+        return  mixed
+# ========== Part 1+2+3 联合测试 ==========
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
-    wave_gen = WaveformGenerator(
-        base_freq=0.5
-    )
-    jitter  = TemporalJitter(
-        long_term_amp=0.10,  
-        short_term_amp=0.03,
-        transient_freq=0.033,
-    ) 
-    t =np.linspace(0,20,1000)
-    base_pressure= 50
-    amplitude = 20
-    wave_clean = wave_gen.generate(t,base_pressure,amplitude)
     
-    t_jittered= jitter.apply(t,0.5)
-    wave_jittered = wave_gen.generate(t_jittered,base_pressure,amplitude)
-    fig,axes = plt.subplots(2,1,figsize=(14,8))
-    # 图1 波形对比
-    axes[0].plot(t,wave_clean,'b-',alpha=0.5,linewidth =1.5,label = "original (too regular)")
-    axes[0].plot(t,wave_jittered,'r-',alpha=0.8,linewidth=1.5,label = "with jitterer realastic") 
-    axes[0].set_ylabel('Pressure (Pa)')
-    axes[0].set_title('Waveform: Original vs Jittered')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+    np.random.seed(42)  # 固定种子
     
-    # 图2 时间轴偏差累积
-    time_devation = t_jittered-t
-    axes[1].plot(t,time_devation,'g-',linewidth=2)
-    axes[1].set_xlabel('Time (s)')
-    axes[1].set_ylabel('Time Deviation (s)')
-    axes[1].set_title('Cumulative Time Jitter (Shows Frequency Drift)')
-    axes[1].grid(True, alpha=0.3)
+    # 创建组件
+    wave_gen = WaveformGenerator(base_freq=0.5)
+    jitter = TemporalJitter(long_term_amp=0.10, short_term_amp=0.03, transient_freq=0.033)
+    boundary_gen = FuzzyBoundaryGenerator(overlap_ratio=0.15)
+    
+    # 生成4个类别的样本（每类2个：1个硬边界，1个软边界）
+    categories = [0, 1, 2, 3]
+    fig, axes = plt.subplots(4, 2, figsize=(16, 12))
+    
+    for i, cat in enumerate(categories):
+        for j in range(2):  # 每类生成2个样本
+            # 生成参数
+            params = boundary_gen.generate_params(cat)
+            
+            # 生成时间轴
+            t = np.linspace(0, 10, 500)  # 10秒展示
+            
+            # 应用抖动
+            t_jittered = jitter.apply(t, 0.5)
+            
+            # 生成波形
+            waveform = wave_gen.generate(t_jittered, params['base_pressure'], params['amplitude'])
+            
+            # 绘制
+            ax = axes[i, j]
+            color = 'red' if params.get('is_fuzzy', False) else 'blue'
+            label = f"Cat{cat} {'(Fuzzy)' if params.get('is_fuzzy') else '(Hard)'}"
+            
+            ax.plot(t, waveform, color=color, linewidth=1.5)
+            ax.set_title(f"{label} HR:{int(params['hr'])} Amp:{params['amplitude']:.1f}")
+            ax.set_ylim(40, 120)
+            ax.grid(True, alpha=0.3)
+            
+            if i == 3:  # 最后一行
+                ax.set_xlabel('Time (s)')
+            if j == 0:  # 第一列
+                ax.set_ylabel('Pressure (Pa)')
+    
+    plt.suptitle('Waveform Samples by Category (Red=Fuzzy Boundary, Blue=Hard Boundary)', fontsize=14)
     plt.tight_layout()
-    plt.savefig('experiment/test/generate/test_part2.png', dpi=150)
-    plt.close()                    
+    plt.savefig('experiment/test/generate/test_part3.png', dpi=150)
+    plt.close()
+    
+    # 统计软边界比例
+    fuzzy_count = 0
+    total = 1000
+    for _ in range(total):
+        p = boundary_gen.generate_params(np.random.randint(0, 4))
+        if p.get('is_fuzzy', False):
+            fuzzy_count += 1
+    
+    print(f"\n✓ Part 3 完成！")
+    print(f"  总测试样本: {total}")
+    print(f"  软边界样本: {fuzzy_count} ({fuzzy_count/total*100:.1f}%)")
+    print(f"  预期比例: 15%")    
+    
+    
+
+        
+         
+             
