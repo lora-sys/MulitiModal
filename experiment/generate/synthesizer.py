@@ -1,141 +1,181 @@
-""""
-单一按摩椅数据合成器
-合成的数据格式规范
- "{global_id:03d}_{weight}_{hr}_{spo2}_{height}.csv"
-按人员组织
-数据合成和增强
-"""
-
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from typing import List,Dict,Tuple
+from typing import List, Dict, Tuple
 import logging
 
+# 设置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# -----    机械波形生成             -------
 class WaveformGenerator:
     """
     机械波形生成器
     模拟真实按摩椅机械手的往复运动：
-    - 推压期（35%）：sin²曲线，模拟滚轮下压
-    - 保持期（25%）：平顶，模拟停顿施压
-    - 回弹期（30%）：指数衰减，模拟快速回弹
-    - 复位期（10%）：基线，模拟机械复位
-    
-    设计依据：按摩椅机械结构（滚轮+导轨+弹簧）
+    - 推压期(35%):sin²曲线,模拟滚轮下压
+    - 保持期(25%）：平顶，模拟停顿施压
+    - 回弹期(30%）：指数衰减，模拟快速回弹
+    - 复位期(10%）：基线，模拟机械复位
     """
-    def __init__(self,base_freq:float = 0.5):
-        """
-        初始化波形生成器
-        Args:
-            base_freq: 基础频率(Hz),默认0.5Hz = 2秒/周期
-        """
-        self.base_freq= base_freq
-        self.period = 1.0/base_freq
+    def __init__(self, base_freq: float = 0.5):
+        self.base_freq = base_freq
+        self.period = 1.0 / base_freq
         self.duty_cycle = {
-            "push" : 0.35,    #指压期
-            "hold" : 0.25 ,   # 保持期
-            "release" : 0.30, # 回弹期
-            "reset" : 0.10    # 复位期   
+            "push": 0.35,
+            "hold": 0.25,
+            "release": 0.30,
+            "reset": 0.10   
         }
-    def generate(self,t : np.ndarray,base_pressure : float, amplitude : float , phase_shift : float = 0.0) -> np.ndarray :
+        # 预计算边界，避免重复计算
+        self._bound_push_end = self.duty_cycle['push']
+        self._bound_hold_end = self.duty_cycle['push'] + self.duty_cycle['hold']
+        self._bound_release_end = 1.0 - self.duty_cycle['reset']
+
+    def generate(self, t: np.ndarray, base_pressure: float, amplitude: float, phase_shift: float = 0.0) -> np.ndarray:
         """
         生成机械波形
+        """
+       
+        # phase_shift / (2*np.pi) 将弧度转换为归一化周期比例
+        phase = ((t / self.period) + (phase_shift / (2 * np.pi))) % 1.0
+        
+        # 初始化全0数组
+        waveform = np.zeros_like(phase)
+        
+        # --- 1. 推压期 ---
+        mask_push = phase < self._bound_push_end
+        if self.duty_cycle['push'] > 0:
+            # 归一化到 [0, 1]
+            p_norm = phase[mask_push] / self.duty_cycle['push']
+            # sin² 曲线
+            waveform[mask_push] = np.sin(np.pi * p_norm / 2) ** 2
+            
+        # --- 2. 保持期 ---
+        mask_hold = (phase >= self._bound_push_end) & (phase < self._bound_hold_end)
+        waveform[mask_hold] = 1.0
+        
+        # --- 3. 回弹期 ---
+        mask_release = (phase >= self._bound_hold_end) & (phase < self._bound_release_end)
+        if self.duty_cycle['release'] > 0:
+            # 归一化到 [0, 1]
+            p_norm = (phase[mask_release] - self._bound_hold_end) / self.duty_cycle['release']
+            # 指数衰减: exp(-5x), x从0到1，值从1衰减到exp(-5)≈0.006
+            waveform[mask_release] = np.exp(-5 * p_norm)
+            
+        # --- 4. 复位期 ---
+        # mask_reset = phase >= self._bound_release_end
+        # waveform 已经初始化为 0，所以这一步可以省略
+        
+        # 映射实际压力值
+        pressure = base_pressure + amplitude * waveform
+        return pressure
+class TemporalJitter :
+    """
+    时序抖动引擎 - 让机械运动更真实
+    
+    模拟三种电机不稳定性：
+    1. 长期漂移:电机发热,频率缓慢变化(±10%,周期100秒)
+    2. 短期抖动:齿轮间隙,相位随机偏移(±3%，平滑）
+    3. 瞬时事件：阻力变化，随机加速/减速(每30秒,持续4-6秒）
+    
+    保守参数，确保波形仍可识别但不再"太规律"
+    """    
+    def __init__(self, 
+                 long_term_amp: float = 0.10,   # 10%
+                 short_term_amp: float = 0.03,   # 3%
+                 transient_freq: float = 0.033):  # 每30秒1次
+        self.long_term_amp = long_term_amp
+        self.short_term_amp = short_term_amp
+        self.transient_freq = transient_freq
+        
+    def apply(self,t: np.ndarray,base_freq : float) -> np.ndarray:
+        """
+        对时间轴应用抖动，返回调整后的时间轴
         
         Args:
-            t: 时间数组（秒）
-            base_pressure: 基础压力( Pa)，与体重相关
-            amplitude: 振幅(Pa)，与身体表征相关
-            phase_shift: 相位偏移（弧度），用于双传感器区分
+            t: 原始时间数组（秒）
+            base_freq: 基础频率（Hz）
             
         Returns:
-            waveform: 压力波形数组(Pa)
+            t_jittered: 抖动后的时间轴（用于波形采样）
         """
-         # 计算每个时间点的相位（0-1表示一个周期内的位置）
-        # 将连续的时间点t映射到一个 0到1的归一化相位值
-        phase = ((t/self.period)+phase_shift/ (2*np.pi)) % 1.0
+        dt = t[1] - t[0]  
+        # 采样间隔（50Hz = 0.02s）
         
-        # 分段函数，根据相位生成波形
-        waveform = np.piecewise(
-           phase,
-           [
-               phase < self.duty_cycle['push'],      # 推压期
-               (phase >= self.duty_cycle['push']) &
-               (phase < self.duty_cycle['push'] + self.duty_cycle['hold']) , # 保持期
-               (phase >= self.duty_cycle['push'] + self.duty_cycle['hold']) & 
-                (phase < 1 - self.duty_cycle['reset']),      # 回弹期
-                phase >= 1- self.duty_cycle['reset']  # 复位期
-           ] ,
-            [
-                lambda p: self._push_phase(p),                                      # 推压期
-                lambda p: 1.0,                                                       # 保持期（平顶）
-                lambda p: self._release_phase(p),                                   # 回弹期
-                lambda p: 0.0                                                        # 复位期（基线）
-            ]
-        )
+        # 长期偏移： 慢变正弦调制
+        # 模拟电机发热导致的转速周期性变化
+        drift = 1.0 + self.long_term_amp * np.sin(2 * np.pi * t / 100.0)
         
-        # 映射实际压力值，归一化后的比例， base_pressure+ amplitude *waveform
-        pressure = base_pressure+amplitude * waveform
+        # --- 2. 短期抖动：平滑随机游走 ---
+        # 模拟齿轮间隙导致的微小相位抖动
+        # 生成随机噪声，然后用移动平均平滑（50点 = 1秒）
+        raw_noise = np.random.normal(0, self.short_term_amp, len(t))
+        jitter = np.convolve(raw_noise, np.ones(50)/50, mode='same') 
         
-        return pressure
-    
-    def _push_phase(self,phase : np.ndarray) -> np.ndarray :
-        """
-        推压期:sin²曲线模拟滚轮下压
+        # --- 3. 瞬时事件：随机变速 ---
+        # 模拟阻力变化导致的瞬时加速或减速
+        transient = np.ones_like(t)
+        if self.transient_freq > 0:
+            # 每30秒左右发生一次
+            event_interval = int(30.0 / dt)  # 30秒对应的采样点数
+            num_events = len(t) // event_interval
+            
+            for _ in range(num_events):
+                # 随机起始点
+                start = np.random.randint(0, len(t) - 300)
+                duration = np.random.randint(200, 300)  # 持续4-6秒
+                end = min(start + duration, len(t))
+                
+                # 随机选择加速或减速（1.1-1.3倍 或 0.7-0.9倍）随机因子
+                factor = np.random.choice([0.7, 0.8, 0.9, 1.1, 1.2, 1.3])
+                transient[start:end] = factor
+        # --- 组合所有抖动 ---
+        # 瞬时频率 = 基础频率 × 长期漂移 × 瞬时事件 
+        instantaneous_freq = base_freq * drift * transient  
         
-        从0平滑上升到1
-        """
-        normalized_phase = phase / self.duty_cycle['push']
-        # sin **2 曲线 ，平滑加速上升
-        return np.sin(np.pi * normalized_phase / 2) ** 2
-    
-    def _release_phase(self, phase: np.ndarray) -> np.ndarray:
-        """
-        回弹期：指数衰减模拟快速回弹
         
-        从1快速衰减到0
-        """
-        # 计算在回弹期的位置
-        release_start = self.duty_cycle['push'] + self.duty_cycle['hold']
-        normalized_phase = (phase - release_start) / self.duty_cycle['release']
-        # 指数衰减：快速回弹
-        return np.exp(-5 * normalized_phase)
-    
+      # 从频率重建时间轴：累积积分
+        # 频率是相位的变化率，所以相位 = 积分(频率) × 2π
+        # instantaneous_freq：决定这一刻跑多快。
+        # np.cumsum：算出总共跑了多远（真实相位）。
+        # `adjusted_t：算出“这段距离如果按正常跑，需要多少时间”。
+        phase = np.cumsum(instantaneous_freq) * dt * 2 * np.pi
+        t_jittered = phase / (2 * np.pi * base_freq)
+        
+        return t_jittered 
+# test
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
+    wave_gen = WaveformGenerator(
+        base_freq=0.5
+    )
+    jitter  = TemporalJitter(
+        long_term_amp=0.10,  
+        short_term_amp=0.03,
+        transient_freq=0.033,
+    ) 
+    t =np.linspace(0,20,1000)
+    base_pressure= 50
+    amplitude = 20
+    wave_clean = wave_gen.generate(t,base_pressure,amplitude)
     
-    # 创建波形生成器
-    gen = WaveformGenerator(base_freq=0.5)
+    t_jittered= jitter.apply(t,0.5)
+    wave_jittered = wave_gen.generate(t_jittered,base_pressure,amplitude)
+    fig,axes = plt.subplots(2,1,figsize=(14,8))
+    # 图1 波形对比
+    axes[0].plot(t,wave_clean,'b-',alpha=0.5,linewidth =1.5,label = "original (too regular)")
+    axes[0].plot(t,wave_jittered,'r-',alpha=0.8,linewidth=1.5,label = "with jitterer realastic") 
+    axes[0].set_ylabel('Pressure (Pa)')
+    axes[0].set_title('Waveform: Original vs Jittered')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
     
-    # 生成10秒数据（50Hz采样率）
-    t = np.linspace(0, 10, 500)  # 10秒，500个点
-    base_pressure = 50  # 基础压力50Pa
-    amplitude = 20      # 振幅20Pa
-    
-    # 生成波形
-    waveform = gen.generate(t, base_pressure, amplitude)
-    
-    # 可视化
-    plt.figure(figsize=(12, 6))
-    plt.plot(t, waveform, linewidth=2, label='Mechanical Waveform')
-    plt.axhline(y=base_pressure, color='r', linestyle='--', alpha=0.5, label='Base Pressure')
-    plt.axhline(y=base_pressure + amplitude, color='g', linestyle='--', alpha=0.5, label='Peak Pressure')
-    plt.xlabel('Time (s)')
-    plt.ylabel('Pressure (Pa)')
-    plt.title('Massage Chair Mechanical Waveform (10s)')
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    plt.savefig('experiment/test/generate/test_waveform_part1.png', dpi=150, bbox_inches='tight')
-    plt.show()
-    
-    print("✓ Part 1 测试完成！")
-    print(f"  - 生成 {len(t)} 个数据点")
-    print(f"  - 基础压力: {base_pressure}Pa")
-    print(f"  - 振幅: {amplitude}Pa")
-    print(f"  - 频率: 0.5Hz (2秒/周期)")
-        
-        
-        
-    
-
+    # 图2 时间轴偏差累积
+    time_devation = t_jittered-t
+    axes[1].plot(t,time_devation,'g-',linewidth=2)
+    axes[1].set_xlabel('Time (s)')
+    axes[1].set_ylabel('Time Deviation (s)')
+    axes[1].set_title('Cumulative Time Jitter (Shows Frequency Drift)')
+    axes[1].grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig('experiment/test/generate/test_part2.png', dpi=150)
+    plt.close()                    
