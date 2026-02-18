@@ -1,0 +1,42 @@
+# 数据集配置
+dataset:
+  name: "massage_v4"
+  num_workers: 4
+  batch_size: 32
+  pin_memory: true
+  shuffle: true
+
+# 数据源配置
+source:
+  type: "csv"
+  params:
+    base_path: "/root/repos/MulitiModal/experiment/data"
+    label_map:
+      身体表征很差: 0
+      身体表征一般: 1
+      身体表征正常: 2
+      身体表征良好: 3
+
+# 预处理器配置
+preprocessor:
+  type: "nk2"
+  params:
+    sampling_rate: 50
+    target_length: 1000
+    num_channels: 2
+    num_static_features: 4
+    filter:
+      lowcut: 0.1
+      highcut: 15
+      order: 2
+    normalization:
+      dynamic: "zscore"
+      static: "standard"
+
+# 模型配置
+model:
+  type: "inception"  # 可选: cnn / lstm / inception
+  params:
+    dyn_channels: 2
+    static_dim: 4
+    num_classes: 4
