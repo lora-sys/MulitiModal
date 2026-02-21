@@ -1,15 +1,20 @@
 """
 训练脚本 - 模型控制中心
 通过配置文件切换不同的模型架构 (CNN / LSTM / Inception)
+支持日志记录和多种学习率调度器
 """
 
 import os
 import sys
+import time
+import json
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
+from datetime import datetime
 
 sys.path.append("experiment/dataset")
 sys.path.append("experiment/model")
@@ -93,6 +98,63 @@ def evaluate(model, dataloader, criterion, device):
     return total_loss / len(dataloader), 100.0 * correct / total
 
 
+def plot_training_history(
+    history, save_path="experiment/test/result/test_result_inception.png"
+):
+    """绘制训练曲线"""
+    epochs = range(1, len(history["train_loss"]) + 1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Loss 曲线
+    axes[0].plot(epochs, history["train_loss"], "b-", label="Train Loss", linewidth=2)
+    axes[0].plot(epochs, history["val_loss"], "r--", label="Val Loss", linewidth=2)
+    axes[0].set_title("Training & Validation Loss", fontsize=14)
+    axes[0].set_xlabel("Epoch", fontsize=12)
+    axes[0].set_ylabel("Loss", fontsize=12)
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    # Accuracy 曲线
+    axes[1].plot(epochs, history["train_acc"], "b-", label="Train Acc", linewidth=2)
+    axes[1].plot(epochs, history["val_acc"], "r--", label="Val Acc", linewidth=2)
+    axes[1].set_title("Training & Validation Accuracy", fontsize=14)
+    axes[1].set_xlabel("Epoch", fontsize=12)
+    axes[1].set_ylabel("Accuracy (%)", fontsize=12)
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    print(f"📈 训练曲线已保存: {save_path}")
+    plt.close()
+
+
+def save_experiment_log(
+    model_type, train_config, best_acc, training_time, scheduler_type="CosineAnnealing"
+):
+    """保存实验日志"""
+    log_path = "experiment/model/log.txt"
+
+    log_entry = f"""================================================================================
+训练实验日志 - {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+================================================================================
+模型: {model_type}
+学习率: {train_config["learning_rate"]}
+批次大小: {train_config["batch_size"]}
+Epochs: {train_config["num_epochs"]}
+学习率调度器: {scheduler_type}
+最佳验证准确率: {best_acc:.2f}%
+训练时间: {training_time:.1f}秒
+--------------------------------------------------------------------------------
+"""
+
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(log_entry)
+
+    print(f"📝 实验日志已保存: {log_path}")
+
+
 def main():
     # 1. 加载配置
     dataset_config = load_dataset_config()
@@ -152,19 +214,22 @@ def main():
     # 4. 训练配置
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=train_config["learning_rate"])
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        patience=train_config["scheduler"]["patience"],
-        factor=train_config["scheduler"]["factor"],
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, T_0=10, T_mult=2, eta_min=1e-6
     )
+    scheduler_type = "CosineAnnealingWarmRestarts"
 
     # 5. 训练循环
     print("\n🚀 开始训练...")
     print("-" * 60)
 
+    start_time = time.time()
+
     num_epochs = train_config["num_epochs"]
     best_val_acc = 0
+
+    # 记录训练历史
+    history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
 
     for epoch in range(num_epochs):
         train_loss, train_acc = train_epoch(
@@ -172,7 +237,7 @@ def main():
         )
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
 
-        scheduler.step(val_loss)
+        scheduler.step(epoch)
 
         print(
             f"Epoch [{epoch + 1:2d}/{num_epochs}] "
@@ -180,13 +245,36 @@ def main():
             f"Val Loss: {val_loss:.4f} Acc: {val_acc:.2f}%"
         )
 
+        # 记录历史
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
+
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), "experiment/model/best_model.pth")
+            model_type = model_config["type"]
+            torch.save(
+                model.state_dict(), f"experiment/model/best_model_{model_type}.pth"
+            )
             print(f"  💾 保存最佳模型 (Acc: {val_acc:.2f}%)")
 
     print("-" * 60)
-    print(f"✅ 训练完成! 最佳验证准确率: {best_val_acc:.2f}%")
+    training_time = time.time() - start_time
+    print(
+        f"✅ 训练完成! 最佳验证准确率: {best_val_acc:.2f}% | 耗时: {training_time:.1f}秒"
+    )
+
+    # 6. 保存实验日志
+    model_type = model_config["type"]
+    save_experiment_log(
+        model_type, train_config, best_val_acc, training_time, scheduler_type
+    )
+
+    # 7. 绘制训练曲线
+    print("\n📈 生成训练曲线...")
+    result_path = f"experiment/test/result/test_result_{model_type}.png"
+    plot_training_history(history, result_path)
 
 
 if __name__ == "__main__":
