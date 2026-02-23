@@ -5,7 +5,7 @@
 
 # 模型配置
 MODEL_CONFIG = {
-    "type": "inception",  # 可选: cnn / lstm / inception
+    "type": "inception",  # 可选: cnn / lstm / inception / transformer
     "params": {
         "dyn_channels": 2,  # 动态特征通道数（传感器数量）
         "static_dim": 4,  # 静态特征维度
@@ -37,10 +37,33 @@ TRAIN_CONFIG = {
     "learning_rate": 0.001,
     "weight_decay": 1e-4,
     "dropout": 0.5,
-    "scheduler": {
+}
+
+# 调度器配置 (选择其中一个)
+SCHEDULER_CONFIGS = {
+    "ReduceLROnPlateau": {
         "type": "ReduceLROnPlateau",
         "mode": "min",
         "patience": 5,
         "factor": 0.5,
     },
+    "CosineAnnealingWarmRestarts": {
+        "type": "CosineAnnealingWarmRestarts",
+        "T_0": 10,
+        "T_mult": 2,
+        "eta_min": 1e-6,
+    },
+    "CosineAnnealingLR": {
+        "type": "CosineAnnealingLR",
+        "T_max": 20,
+        "eta_min": 1e-6,
+    },
+    "StepLR": {
+        "type": "StepLR",
+        "step_size": 10,
+        "gamma": 0.1,
+    },
 }
+
+# 当前使用的调度器
+CURRENT_SCHEDULER = "ReduceLROnPlateau"

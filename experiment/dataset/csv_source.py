@@ -80,71 +80,87 @@ class CSVDataSource(IDataSource):
                 "height": {"mean": np.mean(heights), "std": np.std(heights)},
             }
         return self._statistics
-    
+
+
 class NPZDataSource(IDataSource):
-    """npz文件数据源"""
-    
+    """npz文件数据源 - 支持多种键名格式"""
+
     def __init__(self, npz_path: str):
         self.npz_path = npz_path
         self._data = None
         self._sample_list = []
         self._statistics = {}
-    
+
+    def _get_array(self, key, *alt_keys):
+        """支持多种键名格式"""
+        for k in [key] + list(alt_keys):
+            if k in self._data.keys():
+                return self._data[k]
+        available = list(self._data.keys())
+        raise KeyError(
+            f"None of {[key] + list(alt_keys)} found. Available: {available}"
+        )
+
     def initialize(self) -> bool:
-        # TODO: 加载 npz 文件
         self._data = np.load(self.npz_path)
-        
-        # TODO: 构建样本列表（索引从 0 到 N-1）
-        n_samples = self._data['Y'].shape[0]
+
+        # 支持多种键名: Y / labels
+        Y = self._get_array("Y", "labels")
+        n_samples = Y.shape[0]
         self._sample_list = list(range(n_samples))
-        
-        print(f"📦 NPZDataSource initialized: {len(self._sample_list)} samples")
+
+        print(f"[*] NPZDataSource initialized: {len(self._sample_list)} samples")
         return True
-    
+
     def get_sample_list(self) -> List:
         return self._sample_list
-    
+
     def load_sample(self, sample_id: int) -> Sample:
-        # TODO: 根据索引提取数据，包装成 Sample
-        X_dynamic = self._data['X_dynamic']  # (N, 2, 1000)
-        X_static = self._data['X_static']   # (N, 4)
-        Y = self._data['Y']                   # (N,)
-        
-        # 提取单个样本
-        s1 = X_dynamic[sample_id, 0, :]  # 传感器1
-        s2 = X_dynamic[sample_id, 1, :]  # 传感器2
-        static = X_static[sample_id]       # 静态特征
-        label = Y[sample_id]              # 标签
-        
-        # 包装成 DataFrame（兼容 NK2Preprocessor）
-        df = pd.DataFrame({
-            '压力传感器1': s1,
-            '压力传感器2': s2
-        })
-        
-        # 静态特征字典
+        # 支持多种键名: X_dynamic/dynamic, X_static/static
+        X_dynamic = self._get_array("X_dynamic", "dynamic")
+        X_static = self._get_array("X_static", "static")
+        Y = self._get_array("Y", "labels")
+
+        s1 = X_dynamic[sample_id, 0, :]
+        s2 = X_dynamic[sample_id, 1, :]
+        static = X_static[sample_id]
+        label = Y[sample_id]
+
+        df = pd.DataFrame({"压力传感器1": s1, "压力传感器2": s2})
+
         static_dict = {
-            'weight': static[0],
-            'hr': static[1],
-            'spo2': static[2],
-            'height': static[3]
+            "weight": static[0],
+            "hr": static[1],
+            "spo2": static[2],
+            "height": static[3],
         }
-        
+
         return Sample(
             sample_id=str(sample_id),
             raw_data=df,
-            metadata={'label': int(label), 'static': static_dict}
+            metadata={"label": int(label), "static": static_dict},
         )
-    
+
     def get_statistics(self) -> Dict:
-        # TODO: 计算静态特征的统计量
         if not self._statistics and self._data is not None:
-            X_static = self._data['X_static']  # (N, 4)
-            
+            X_static = self._get_array("X_static", "static")
+
             self._statistics = {
-                'weight': {'mean': float(X_static[:, 0].mean()), 'std': float(X_static[:, 0].std())},
-                'hr': {'mean': float(X_static[:, 1].mean()), 'std': float(X_static[:, 1].std())},
-                'spo2': {'mean': float(X_static[:, 2].mean()), 'std': float(X_static[:, 2].std())},
-                'height': {'mean': float(X_static[:, 3].mean()), 'std': float(X_static[:, 3].std())},
+                "weight": {
+                    "mean": float(X_static[:, 0].mean()),
+                    "std": float(X_static[:, 0].std()),
+                },
+                "hr": {
+                    "mean": float(X_static[:, 1].mean()),
+                    "std": float(X_static[:, 1].std()),
+                },
+                "spo2": {
+                    "mean": float(X_static[:, 2].mean()),
+                    "std": float(X_static[:, 2].std()),
+                },
+                "height": {
+                    "mean": float(X_static[:, 3].mean()),
+                    "std": float(X_static[:, 3].std()),
+                },
             }
         return self._statistics
