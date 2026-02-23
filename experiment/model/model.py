@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import math
 
 # =========================================================================
 # 核心组件 1: InceptionTime 模块 (SOTA 标杆)
@@ -126,6 +126,47 @@ class SimpleCNNEncoder(nn.Module):
     def forward(self, x):
         return self.net(x).squeeze(-1)
 
+class TransformerEncoder(nn.Module):
+    # 适合大数据
+    def __init__(self, in_channels=2, d_model=64, nhead=4, num_layers=2):
+        super().__init__()
+        self.input_proj = nn.Conv1d(in_channels, d_model, 1)
+        self.residual_proj = nn.Conv1d(in_channels, d_model, 1)  # 残差适配层
+        
+        # 混合位置编码（正弦余弦+可学习）
+        self.fixed_pos = self._sinusoidal_pos_enc(1000, d_model)
+        self.learnable_pos = nn.Parameter(torch.randn(1, 1000, d_model))
+        self.pos_alpha = nn.Parameter(torch.tensor(0.5))
+        
+        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead, d_model*4, 0.2, batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
+        self.pool = nn.AdaptiveAvgPool1d(1)
+
+    def _sinusoidal_pos_enc(self, seq_len, d_model):
+        pos = torch.arange(seq_len).unsqueeze(1)
+        div = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0)/d_model))
+        pos_enc = torch.zeros(1, seq_len, d_model)
+        pos_enc[0, :, 0::2] = torch.sin(pos * div)
+        pos_enc[0, :, 1::2] = torch.cos(pos * div)
+        return nn.Parameter(pos_enc, requires_grad=False)
+
+    def forward(self, x):
+        x_res = self.residual_proj(x)  # 残差分支
+        x = self.input_proj(x) + x_res  # 残差连接
+        x = F.relu(x)
+        
+        x = x.permute(0,2,1)
+        pos_enc = self.pos_alpha * self.fixed_pos + (1-self.pos_alpha)*self.learnable_pos
+        x = x + pos_enc
+        
+        x = self.transformer(x)
+        x = x.permute(0,2,1)
+        return self.pool(x).squeeze(-1)
+
+
+
+
+
 
 # =========================================================================
 # 主控中心: 按摩椅双流融合网络 (MassageFusionNet)
@@ -149,6 +190,9 @@ class MassageFusionNet(nn.Module):
         elif model_type == "cnn":
             self.dynamic_encoder = SimpleCNNEncoder(in_channels=dyn_channels)
             dyn_out_dim = 32
+        elif model_type == 'transformer':
+            self.dynamic_encoder = TransformerEncoder(in_channels=dyn_channels)
+            dyn_out_dim = 64
         else:
             raise ValueError(f"未知模型类型: {model_type}")
 
@@ -197,7 +241,7 @@ if __name__ == "__main__":
     dummy_dyn = torch.randn(8, 2, 1000)
     dummy_stat = torch.randn(8, 4)
 
-    for m_type in ["cnn", "lstm", "inception"]:
+    for m_type in ["cnn", "lstm", "inception","transformer"]:
         print(f"\n--- Testing {m_type} ---")
         model = MassageFusionNet(model_type=m_type)
         output = model(dummy_dyn, dummy_stat)

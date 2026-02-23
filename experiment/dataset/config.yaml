@@ -19,16 +19,22 @@ source:
 
 # 预处理器配置
 preprocessor:
-  type: "nk2"
+  type: "self_healing"  # 可选: nk2 / self_healing
   params:
     sampling_rate: 50
     target_length: 1000
     num_channels: 2
     num_static_features: 4
+    # 自愈参数（仅 self_healing 模式生效）
+    healing:
+      window_size: 15        # 滚动窗口大小
+      sigma_threshold: 3      # 3-Sigma 阈值
+    # 滤波参数
     filter:
       lowcut: 0.1
-      highcut: 15
+      highcut: 10            # 降低到10Hz，更平滑
       order: 2
+    # 归一化参数
     normalization:
       dynamic: "zscore"
       static: "standard"

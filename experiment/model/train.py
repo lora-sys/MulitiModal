@@ -21,9 +21,10 @@ sys.path.append("experiment/model")
 
 from csv_source import NPZDataSource
 from nk2_processor import NK2Preprocessor
+from self_healing_processor import SelfHealingPreprocessor
 from massage_dataset import MassageDataset
 from model import get_model
-from config import MODEL_CONFIG, TRAIN_CONFIG
+from config import MODEL_CONFIG, TRAIN_CONFIG, SCHEDULER_CONFIGS, CURRENT_SCHEDULER
 
 
 def load_dataset_config():
@@ -42,7 +43,16 @@ def create_dataset(dataset_config):
     source = NPZDataSource(npz_path)
     source.initialize()
 
-    preprocessor = NK2Preprocessor(dataset_config)
+    # 根据配置选择预处理器
+    preprocessor_type = dataset_config.get("preprocessor", {}).get("type", "nk2")
+
+    if preprocessor_type == "self_healing":
+        print("🔧 使用自研信号自愈预处理器")
+        preprocessor = SelfHealingPreprocessor(dataset_config)
+    else:
+        print("🔧 使用 NK2 预处理器")
+        preprocessor = NK2Preprocessor(dataset_config)
+
     dataset = MassageDataset(source, preprocessor)
 
     return dataset
@@ -213,11 +223,44 @@ def main():
 
     # 4. 训练配置
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=train_config["learning_rate"])
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=10, T_mult=2, eta_min=1e-6
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=train_config["learning_rate"],
+        weight_decay=train_config.get("weight_decay", 1e-4),
     )
-    scheduler_type = "CosineAnnealingWarmRestarts"
+
+    # 根据配置选择调度器
+    scheduler_cfg = SCHEDULER_CONFIGS[CURRENT_SCHEDULER]
+    scheduler_type = scheduler_cfg.get("type")
+
+    if scheduler_type == "ReduceLROnPlateau":
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=scheduler_cfg.get("mode", "min"),
+            patience=scheduler_cfg.get("patience", 5),
+            factor=scheduler_cfg.get("factor", 0.5),
+        )
+    elif scheduler_type == "CosineAnnealingLR":
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=scheduler_cfg.get("T_max", train_config["num_epochs"]),
+            eta_min=scheduler_cfg.get("eta_min", 1e-6),
+        )
+    elif scheduler_type == "CosineAnnealingWarmRestarts":
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=scheduler_cfg.get("T_0", 10),
+            T_mult=scheduler_cfg.get("T_mult", 2),
+            eta_min=scheduler_cfg.get("eta_min", 1e-6),
+        )
+    elif scheduler_type == "StepLR":
+        scheduler = optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=scheduler_cfg.get("step_size", 10),
+            gamma=scheduler_cfg.get("gamma", 0.1),
+        )
+    else:
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
 
     # 5. 训练循环
     print("\n🚀 开始训练...")
@@ -237,12 +280,19 @@ def main():
         )
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
 
-        scheduler.step(epoch)
+        # 更新学习率
+        if scheduler_type in ["ReduceLROnPlateau"]:
+            scheduler.step(val_loss)
+        else:
+            scheduler.step()
+
+        lr = optimizer.param_groups[0]["lr"]
 
         print(
             f"Epoch [{epoch + 1:2d}/{num_epochs}] "
             f"Train Loss: {train_loss:.4f} Acc: {train_acc:.2f}% | "
-            f"Val Loss: {val_loss:.4f} Acc: {val_acc:.2f}%"
+            f"Val Loss: {val_loss:.4f} Acc: {val_acc:.2f}% | "
+            f"LR: {lr:.6f}"
         )
 
         # 记录历史
