@@ -30,15 +30,25 @@ class MassageDataset(BaseDataset):
         raw_sample = self.source.load_sample(sample_id)
 
         # 3. 预处理
-        processed = self.preprocessor.process(raw_sample)
-
-        # 4. 构建输出
-        item = {
-            "dynamic": processed.dynamic,  # [2, 1000]
-            "static": processed.static,  # [4]
-            "label": processed.label,  # scalar
-        }
-
+        if self.preprocessor is None:
+            
+            raw_df = raw_sample.raw_data  # DataFrame with 压力传感器1, 压力传感器2
+            static = raw_sample.metadata["static"]
+            
+            item = {
+                "dynamic": torch.tensor(raw_df.values.T, dtype=torch.float32),  # (2, 1000)
+                "static": torch.tensor([
+                    static["weight"], static["hr"], static["spo2"], static["height"]
+                ], dtype=torch.float32),
+                "label": torch.tensor(raw_sample.metadata["label"], dtype=torch.long),
+            }
+        else:
+            processed = self.preprocessor.process(raw_sample)
+            item = {
+                "dynamic": processed.dynamic,
+                "static": processed.static,
+                "label": processed.label,
+            }
         # 5. 可选变换
         if self.transform:
             item = self.transform(item)

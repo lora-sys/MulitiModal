@@ -5,7 +5,7 @@
 
 # 模型配置
 MODEL_CONFIG = {
-    "type": "inception",  # 可选: cnn / lstm / inception / transformer
+    "type": "transformer",  # 可选: cnn / lstm / inception / transformer
     "params": {
         "dyn_channels": 2,  # 动态特征通道数（传感器数量）
         "static_dim": 4,  # 静态特征维度
@@ -28,13 +28,18 @@ MODEL_PARAMS = {
     "cnn": {
         # 使用默认配置
     },
+    "transformer": {                          # 新增
+        "d_model": 64,     # 64→32 降低复杂度
+        "nhead": 8,
+        "num_layers": 3,  # 2→4 增加深度
+    },
 }
 
 # 训练超参数
 TRAIN_CONFIG = {
-    "batch_size": 32,
-    "num_epochs": 20,
-    "learning_rate": 0.001,
+    "batch_size": 128,
+    "num_epochs": 50,
+    "learning_rate": 0.0008,
     "weight_decay": 1e-4,
     "dropout": 0.5,
 }
