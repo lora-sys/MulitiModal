@@ -5,7 +5,7 @@
 
 # 模型配置
 MODEL_CONFIG = {
-    "type": "transformer",  # 可选: cnn / lstm / inception / transformer
+    "type": "inception",  # 可选: cnn / lstm / inception / transformer
     "params": {
         "dyn_channels": 2,  # 动态特征通道数（传感器数量）
         "static_dim": 4,  # 静态特征维度
