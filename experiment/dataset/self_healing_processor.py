@@ -62,7 +62,7 @@ class SelfHealingPreprocessor(IPreprocessor):
         ).std()
 
         # 填补 std 边缘的 NaN
-        rolling_std = rolling_std.fillna(method="bfill").fillna(method="ffill")
+        rolling_std = rolling_std.bfill().ffill()
 
         # 识别异常点
         is_anomaly = (s > rolling_mean + self.sigma_threshold * rolling_std) | (
@@ -80,7 +80,7 @@ class SelfHealingPreprocessor(IPreprocessor):
         s_clean = s_clean.interpolate(method="cubic")
 
         # 边缘用 ffill/bfill 兜底
-        s_clean = s_clean.fillna(method="bfill").fillna(method="ffill")
+        s_clean = s_clean.bfill().ffill()
 
         # 3. NeuroKit2 专业滤波 (消除剩余的高频底噪)
         s_filtered = nk.signal_filter(

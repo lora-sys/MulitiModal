@@ -173,8 +173,7 @@ class TransformerEncoder(nn.Module):
 # =========================================================================
 class MassageFusionNet(nn.Module):
     def __init__(
-        self, model_type="inception", num_classes=4, dyn_channels=2, static_dim=4
-    ):
+        self, model_type="inception", num_classes=4, dyn_channels=2, static_dim=4 ,**kwarg):
         super(MassageFusionNet, self).__init__()
 
         self.model_type = model_type
@@ -191,8 +190,13 @@ class MassageFusionNet(nn.Module):
             self.dynamic_encoder = SimpleCNNEncoder(in_channels=dyn_channels)
             dyn_out_dim = 32
         elif model_type == 'transformer':
-            self.dynamic_encoder = TransformerEncoder(in_channels=dyn_channels)
-            dyn_out_dim = 64
+            self.dynamic_encoder = TransformerEncoder(
+                in_channels=dyn_channels,
+                d_model=kwarg.get("d_model",64),
+                nhead=kwarg.get("nhead",4),
+                num_layers=kwarg.get("num_layers",2),
+            )
+            dyn_out_dim = kwarg.get("d_model",64)
         else:
             raise ValueError(f"未知模型类型: {model_type}")
 
@@ -224,13 +228,14 @@ class MassageFusionNet(nn.Module):
 # =========================================================================
 # 工厂函数: 根据配置返回模型
 # =========================================================================
-def get_model(model_type="inception", num_classes=4, dyn_channels=2, static_dim=4):
+def get_model(model_type="inception", num_classes=4, dyn_channels=2, static_dim=4,**kwarg):
     """工厂函数：根据配置返回模型"""
     return MassageFusionNet(
         model_type=model_type,
         num_classes=num_classes,
         dyn_channels=dyn_channels,
         static_dim=static_dim,
+        **kwarg
     )
 
 

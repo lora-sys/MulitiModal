@@ -24,7 +24,7 @@ from nk2_processor import NK2Preprocessor
 from self_healing_processor import SelfHealingPreprocessor
 from massage_dataset import MassageDataset
 from model import get_model
-from config import MODEL_CONFIG, TRAIN_CONFIG, SCHEDULER_CONFIGS, CURRENT_SCHEDULER
+from config import MODEL_CONFIG, MODEL_PARAMS, TRAIN_CONFIG, SCHEDULER_CONFIGS, CURRENT_SCHEDULER
 
 
 def load_dataset_config():
@@ -37,25 +37,21 @@ def load_dataset_config():
 
 
 def create_dataset(dataset_config):
-    """创建数据集"""
-    npz_path = "experiment/model/processed_data.npz"
+    """创建数据集 - 跳过预处理，直接加载已处理好的数据"""
+    npz_path = "experiment/model/pretrain_10k.npz"
 
-    source = NPZDataSource(npz_path)
-    source.initialize()
+    # 直接加载 NPZ 数据到内存
+    data = np.load(npz_path)
+    all_dynamic = torch.tensor(data["dynamic"], dtype=torch.float32)
+    all_static = torch.tensor(data["static"], dtype=torch.float32)
+    all_labels = torch.tensor(data["labels"], dtype=torch.long)
 
-    # 根据配置选择预处理器
-    preprocessor_type = dataset_config.get("preprocessor", {}).get("type", "nk2")
+    print(
+        f"[*] Loaded data: dynamic {all_dynamic.shape}, static {all_static.shape}, labels {all_labels.shape}"
+    )
 
-    if preprocessor_type == "self_healing":
-        print("🔧 使用自研信号自愈预处理器")
-        preprocessor = SelfHealingPreprocessor(dataset_config)
-    else:
-        print("🔧 使用 NK2 预处理器")
-        preprocessor = NK2Preprocessor(dataset_config)
-
-    dataset = MassageDataset(source, preprocessor)
-
-    return dataset
+    # 直接返回 TensorDataset，不需要任何预处理
+    return TensorDataset(all_dynamic, all_static, all_labels)
 
 
 def train_epoch(model, dataloader, criterion, optimizer, device):
@@ -66,9 +62,10 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     total = 0
 
     for batch in dataloader:
-        x_dynamic = batch["dynamic"].to(device)
-        x_static = batch["static"].to(device)
-        y = batch["label"].to(device)
+        x_dynamic, x_static, y = batch
+        x_dynamic = x_dynamic.to(device)
+        x_static = x_static.to(device)
+        y = y.to(device)
 
         optimizer.zero_grad()
         outputs = model(x_dynamic, x_static)
@@ -93,9 +90,10 @@ def evaluate(model, dataloader, criterion, device):
 
     with torch.no_grad():
         for batch in dataloader:
-            x_dynamic = batch["dynamic"].to(device)
-            x_static = batch["static"].to(device)
-            y = batch["label"].to(device)
+            x_dynamic, x_static, y = batch
+            x_dynamic = x_dynamic.to(device)
+            x_static = x_static.to(device)
+            y = y.to(device)
 
             outputs = model(x_dynamic, x_static)
             loss = criterion(outputs, y)
@@ -212,12 +210,14 @@ def main():
     print("\n🏗️ 创建模型...")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"设备: {device}")
-
+    model_params = MODEL_PARAMS.get(model_config["type"], {})
     model = get_model(
         model_type=model_config["type"],
         num_classes=model_config["params"]["num_classes"],
         dyn_channels=model_config["params"]["dyn_channels"],
         static_dim=model_config["params"]["static_dim"],
+        **model_params # 传入模型专属参数 (如 transformer 的 d_model, nhead 等)
+        
     )
     model = model.to(device)
 
@@ -305,7 +305,8 @@ def main():
             best_val_acc = val_acc
             model_type = model_config["type"]
             torch.save(
-                model.state_dict(), f"experiment/model/best_model_{model_type}.pth"
+                model.state_dict(),
+                f"experiment/model/bfoundation_model_{model_type}.pth",
             )
             print(f"  💾 保存最佳模型 (Acc: {val_acc:.2f}%)")
 
