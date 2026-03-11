@@ -1,2 +1,7 @@
 ./mulitModal/
 ./env/
+experiment/rawdata/row_data/
+*.xlsx
+*.npz
+*.pth
+*.csv
