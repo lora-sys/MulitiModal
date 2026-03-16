@@ -1,6 +1,6 @@
 # 数据集配置
 dataset:
-  name: "massage_v4"
+  name: "multimodal_realonly"
   num_workers: 4
   batch_size: 32
   pin_memory: true
@@ -17,32 +17,33 @@ source:
       身体表征正常: 2
       身体表征良好: 3
 
+# 统一 NPZ 数据集配置（只使用真实数据，无虚拟样本）
+unified_npz:
+  path: "experiment/model/unified_dataset_realonly.npz"  # 3750 样本，3分类
+
 # 预处理器配置
 preprocessor:
-  type: "self_healing"  # 可选: nk2 / self_healing
+  type: "self_healing"
   params:
     sampling_rate: 50
     target_length: 1000
     num_channels: 2
     num_static_features: 4
-    # 自愈参数（仅 self_healing 模式生效）
     healing:
-      window_size: 15        # 滚动窗口大小
-      sigma_threshold: 3      # 3-Sigma 阈值
-    # 滤波参数
+      window_size: 15
+      sigma_threshold: 3
     filter:
       lowcut: 0.1
-      highcut: 10            # 降低到10Hz，更平滑
+      highcut: 10
       order: 2
-    # 归一化参数
     normalization:
       dynamic: "zscore"
       static: "standard"
 
 # 模型配置
 model:
-  type: "inception"  # 可选: cnn / lstm / inception
+  type: "multimodal"
   params:
     dyn_channels: 2
     static_dim: 4
-    num_classes: 4
+    num_classes: 3  # 改为 3 分类
