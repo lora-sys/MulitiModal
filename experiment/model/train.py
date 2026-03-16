@@ -19,10 +19,10 @@ from datetime import datetime
 sys.path.append("experiment/dataset")
 sys.path.append("experiment/model")
 
-from csv_source import NPZDataSource
+from unified_source import UnifiedNPZDataSource
 from nk2_processor import NK2Preprocessor
 from self_healing_processor import SelfHealingPreprocessor
-from massage_dataset import MassageDataset
+from unified_dataset import UnifiedMultimodalDataset
 from model import get_model
 from config import MODEL_CONFIG, MODEL_PARAMS, TRAIN_CONFIG, SCHEDULER_CONFIGS, CURRENT_SCHEDULER
 
@@ -37,24 +37,22 @@ def load_dataset_config():
 
 
 def create_dataset(dataset_config):
-    """创建数据集 - 跳过预处理，直接加载已处理好的数据"""
-    npz_path = "experiment/model/pretrain_10k.npz"
+    """创建数据集 - 使用统一NPZ数据源"""
+    # 从配置文件读取数据集路径
+    npz_path = dataset_config.get('unified_npz', {}).get('path', "experiment/model/unified_dataset_100.npz")
+    
+    # 创建数据源
+    source = UnifiedNPZDataSource(npz_path)
+    source.initialize()
 
-    # 直接加载 NPZ 数据到内存
-    data = np.load(npz_path)
-    all_dynamic = torch.tensor(data["dynamic"], dtype=torch.float32)
-    all_static = torch.tensor(data["static"], dtype=torch.float32)
-    all_labels = torch.tensor(data["labels"], dtype=torch.long)
+    # 创建数据集（不使用预处理器，NPZ数据已预处理）
+    dataset = UnifiedMultimodalDataset(source, preprocessor=None)
 
-    print(
-        f"[*] Loaded data: dynamic {all_dynamic.shape}, static {all_static.shape}, labels {all_labels.shape}"
-    )
-
-    # 直接返回 TensorDataset，不需要任何预处理
-    return TensorDataset(all_dynamic, all_static, all_labels)
+    print(f"[*] Created dataset: {len(dataset)} samples")
+    return dataset
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device):
+def train_epoch(model, dataloader, criterion, optimizer, device, model_type):
     """训练一个 epoch"""
     model.train()
     total_loss = 0
@@ -62,48 +60,135 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     total = 0
 
     for batch in dataloader:
-        x_dynamic, x_static, y = batch
-        x_dynamic = x_dynamic.to(device)
-        x_static = x_static.to(device)
-        y = y.to(device)
+        # 新数据集返回字典格式
+        dynamic = batch['dynamic'].to(device)
+        static_basic = batch['static_basic'].to(device)
+        labels = batch['label'].to(device)
 
         optimizer.zero_grad()
-        outputs = model(x_dynamic, x_static)
-        loss = criterion(outputs, y)
+
+        # 根据模型类型调用不同的 forward
+        if model_type == "multimodal":
+            static_scores = batch['static_scores'].to(device)
+            constitution = batch['constitution'].to(device)
+            outputs = model(dynamic, static_basic, static_scores, constitution)
+        else:
+            outputs = model(dynamic, static_basic)
+
+        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
         _, predicted = outputs.max(1)
-        total += y.size(0)
-        correct += predicted.eq(y).sum().item()
+        total += labels.size(0)
+        correct += predicted.eq(labels).sum().item()
 
     return total_loss / len(dataloader), 100.0 * correct / total
 
 
-def evaluate(model, dataloader, criterion, device):
+def evaluate(model, dataloader, criterion, device, model_type):
     """评估模型"""
     model.eval()
     total_loss = 0
     correct = 0
     total = 0
 
+    all_labels = []
+    all_preds = []
+    all_probs = []
+
     with torch.no_grad():
         for batch in dataloader:
-            x_dynamic, x_static, y = batch
-            x_dynamic = x_dynamic.to(device)
-            x_static = x_static.to(device)
-            y = y.to(device)
+            dynamic = batch['dynamic'].to(device)
+            static_basic = batch['static_basic'].to(device)
+            labels = batch['label'].to(device)
 
-            outputs = model(x_dynamic, x_static)
-            loss = criterion(outputs, y)
+            # 根据模型类型调用不同的 forward
+            if model_type == "multimodal":
+                static_scores = batch['static_scores'].to(device)
+                constitution = batch['constitution'].to(device)
+                outputs = model(dynamic, static_basic, static_scores, constitution)
+            else:
+                outputs = model(dynamic, static_basic)
+
+            loss = criterion(outputs, labels)
 
             total_loss += loss.item()
             _, predicted = outputs.max(1)
-            total += y.size(0)
-            correct += predicted.eq(y).sum().item()
+            probs = torch.softmax(outputs, dim=1)
 
-    return total_loss / len(dataloader), 100.0 * correct / total
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
+
+            all_labels.extend(labels.cpu().numpy())
+            all_preds.extend(predicted.cpu().numpy())
+            all_probs.extend(probs.cpu().numpy())
+
+    return total_loss / len(dataloader), 100.0 * correct / total, all_labels, all_preds, all_probs
+
+
+def detailed_evaluation(labels, preds, probs, num_classes=4, class_names=['很差(0)', '一般(1)', '正常(2)', '良好(3)']):
+    """详细评估 - 打印分类报告和混淆矩阵"""
+    from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_recall_fscore_support
+    import seaborn as sns
+
+    print("\n" + "=" * 60)
+    print("📊 详细评估报告")
+    print("=" * 60)
+
+    # 1. 分类报告
+    print("\n📋 分类报告:")
+    report = classification_report(labels, preds, target_names=class_names, digits=4)
+    print(report)
+
+    # 2. 混淆矩阵
+    cm = confusion_matrix(labels, preds)
+    print("\n📊 混淆矩阵:")
+    print(cm)
+
+    # 3. 每类指标
+    precision, recall, f1, support = precision_recall_fscore_support(labels, preds, average=None)
+
+    print("\n📈 每类详细指标:")
+    for i, name in enumerate(class_names):
+        print(f"  {name}:")
+        print(f"    Precision: {precision[i]:.4f}")
+        print(f"    Recall:    {recall[i]:.4f}")
+        print(f"    F1-Score:  {f1[i]:.4f}")
+        print(f"    Support:   {support[i]}")
+
+    # 4. 宏平均和加权平均
+    precision_macro, recall_macro, f1_macro, _ = precision_recall_fscore_support(labels, preds, average='macro')
+    precision_weighted, recall_weighted, f1_weighted, _ = precision_recall_fscore_support(labels, preds, average='weighted')
+
+    print("\n📊 总体指标:")
+    print(f"  Accuracy:         {accuracy_score(labels, preds):.4f}")
+    print(f"  Macro Precision:  {precision_macro:.4f}")
+    print(f"  Macro Recall:     {recall_macro:.4f}")
+    print(f"  Macro F1-Score:   {f1_macro:.4f}")
+    print(f"  Weighted F1-Score:{f1_weighted:.4f}")
+
+    return cm
+
+
+def plot_confusion_matrix(cm, class_names=['很差(0)', '一般(1)', '正常(2)', '良好(3)'], save_path="experiment/test/result/confusion_matrix_multimodal.png"):
+    """绘制混淆矩阵热力图"""
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'WenQuanYi Zen Hei']
+    plt.rcParams['axes.unicode_minus'] = False
+
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names, cbar_kws={'label': '样本数'})
+    plt.title('混淆矩阵 - Multi-Expert Fusion', fontsize=14, fontweight='bold')
+    plt.xlabel('预测标签', fontsize=12)
+    plt.ylabel('真实标签', fontsize=12)
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    print(f"\n📈 混淆矩阵已保存: {save_path}")
+    plt.close()
 
 
 def plot_training_history(
@@ -234,7 +319,7 @@ def main():
     scheduler_type = scheduler_cfg.get("type")
 
     if scheduler_type == "ReduceLROnPlateau":
-        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        scheduler = optim.lr_scheduler.ReduceLoroPlateau(
             optimizer,
             mode=scheduler_cfg.get("mode", "min"),
             patience=scheduler_cfg.get("patience", 5),
@@ -252,6 +337,32 @@ def main():
             T_0=scheduler_cfg.get("T_0", 10),
             T_mult=scheduler_cfg.get("T_mult", 2),
             eta_min=scheduler_cfg.get("eta_min", 1e-6),
+        )
+    elif scheduler_type == "OneCycleLR":
+        scheduler = optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=scheduler_cfg.get("max_lr", 2e-3),
+            total_steps=scheduler_cfg.get("total_steps", 4000),
+            pct_start=scheduler_cfg.get("pct_start", 0.3),
+            anneal_strategy=scheduler_cfg.get("anneal_strategy", "cos"),
+        )
+    elif scheduler_type == "CosineAnnealingWarmup":
+        # Cosine Annealing + Warmup
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=train_config["num_epochs"] - scheduler_cfg.get("warmup_epochs", 5),
+            eta_min=scheduler_cfg.get("eta_min", 1e-6),
+        )
+        # 创建 warmup 调度器
+        warmup_scheduler = optim.lr_scheduler.LinearLR(
+            optimizer,
+            start_factor=0.1,  # warmup 从 0.1x 开始
+            end_factor=1.0,
+            total_iters=scheduler_cfg.get("warmup_epochs", 5)
+        )
+        scheduler = optim.lr_scheduler.SequentialLR(
+            warmup_scheduler,
+            scheduler
         )
     elif scheduler_type == "StepLR":
         scheduler = optim.lr_scheduler.StepLR(
@@ -276,15 +387,19 @@ def main():
 
     for epoch in range(num_epochs):
         train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, device
+            model, train_loader, criterion, optimizer, device, model_config["type"]
         )
-        val_loss, val_acc = evaluate(model, val_loader, criterion, device)
+        val_loss, val_acc, _, _, _ = evaluate(model, val_loader, criterion, device, model_config["type"])
 
         # 更新学习率
         if scheduler_type in ["ReduceLROnPlateau"]:
             scheduler.step(val_loss)
-        else:
+        elif scheduler_type in ["OneCycleLR"]:
             scheduler.step()
+        elif scheduler_type in ["CosineAnnealingWarmup", "CosineAnnealingLR", "CosineAnnealingWarmRestarts", "StepLR"]:
+            scheduler.step()
+        else:
+            scheduler.step(val_loss)
 
         lr = optimizer.param_groups[0]["lr"]
 
@@ -316,13 +431,40 @@ def main():
         f"✅ 训练完成! 最佳验证准确率: {best_val_acc:.2f}% | 耗时: {training_time:.1f}秒"
     )
 
-    # 6. 保存实验日志
+    # 6. 详细评估
+    print("\n" + "=" * 60)
+    print("🔍 加载最佳模型进行详细评估...")
+    print("=" * 60)
+
+    # 加载最佳模型
+    best_model_path = f"experiment/model/best_model_{model_config['type']}.pth"
+    if os.path.exists(best_model_path):
+        model.load_state_dict(torch.load(best_model_path))
+
+    # 在验证集上评估
+    val_loss, val_acc, all_labels, all_preds, all_probs = evaluate(
+        model, val_loader, criterion, device, model_config["type"]
+    )
+
+    # 调试信息
+    print(f"\n[调试] 验证集大小: {len(all_labels)}")
+    print(f"[调试] 预测数量: {len(all_preds)}")
+    print(f"[调试] 标签分布: {np.bincount(all_labels)}")
+
+    # 详细评估报告
+    cm = detailed_evaluation(all_labels, all_preds, all_probs)
+
+    # 绘制混淆矩阵
+    cm_path = f"experiment/test/result/confusion_matrix_{model_config['type']}.png"
+    plot_confusion_matrix(cm, save_path=cm_path)
+
+    # 7. 保存实验日志
     model_type = model_config["type"]
     save_experiment_log(
         model_type, train_config, best_val_acc, training_time, scheduler_type
     )
 
-    # 7. 绘制训练曲线
+    # 8. 绘制训练曲线
     print("\n📈 生成训练曲线...")
     result_path = f"experiment/test/result/test_result_{model_type}.png"
     plot_training_history(history, result_path)

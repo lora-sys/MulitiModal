@@ -173,7 +173,7 @@ class TransformerEncoder(nn.Module):
 # =========================================================================
 class MassageFusionNet(nn.Module):
     def __init__(
-        self, model_type="inception", num_classes=4, dyn_channels=2, static_dim=4 ,**kwarg):
+        self, model_type="inception", num_classes=3, dyn_channels=2, static_dim=4 ,**kwarg):
         super(MassageFusionNet, self).__init__()
 
         self.model_type = model_type
@@ -226,10 +226,203 @@ class MassageFusionNet(nn.Module):
 
 
 # =========================================================================
+# Multi-Expert Fusion 模型 (多专家融合)
+# =========================================================================
+
+class StaticMLPEncoder(nn.Module):
+    """静态特征编码器"""
+    def __init__(self, in_dim, out_dim=128, hidden_dim=64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_dim, out_dim),
+            nn.LayerNorm(out_dim),
+        )
+    def forward(self, x):
+        return self.net(x)
+
+
+class ConstitutionEmbedding(nn.Module):
+    """体质类型 Embedding"""
+    def __init__(self, num_constitutions=38, embed_dim=32, out_dim=128):
+        super().__init__()
+        self.embedding = nn.Embedding(num_constitutions, embed_dim)
+        self.proj = nn.Sequential(
+            nn.Linear(embed_dim, out_dim),
+            nn.LayerNorm(out_dim),
+        )
+    def forward(self, x):
+        embed = self.embedding(x)
+        out = self.proj(embed)
+        return out
+
+
+class CrossAttentionGate(nn.Module):
+    """改进的交叉注意力门控: 用静态特征调制动态特征
+    - 先将动态特征降采样成多个 token
+    - 使用 Multi-Head Attention
+    - 静态特征生成 Query
+    """
+    def __init__(self, dim=128, static_dim=None, num_tokens=4, num_heads=4):
+        super().__init__()
+        static_dim = static_dim or dim
+        self.num_tokens = num_tokens
+
+        # 静态特征投影为 Query
+        self.q_proj = nn.Linear(static_dim, dim)
+
+        # 动态特征投影为 Key/Value
+        self.k_proj = nn.Linear(dim, dim)
+        self.v_proj = nn.Linear(dim, dim)
+
+        # Multi-Head Attention
+        self.mha = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+
+        # Gate 投影
+        self.gate_proj = nn.Linear(dim, dim)
+
+        # 注册位置编码为 buffer（自动移动到正确的设备）
+        self.register_buffer('pos_encoding', torch.randn(1, num_tokens, dim) * 0.1)
+
+    def forward(self, dynamic, static):
+        """
+        Args:
+            dynamic: (B, D) - 动态特征编码
+            static: (B, D) - 静态特征编码
+        Returns:
+            gated_dynamic: (B, D) - 门控后的动态特征
+            attn_weights: (B, num_tokens) - 注意力权重
+        """
+        B, D = dynamic.shape
+
+        # 1. 将动态特征降采样成多个 token
+        # 方法：使用线性层 + reshape 创建多个 token
+        dynamic_tokens = self.k_proj(dynamic).unsqueeze(1)  # (B, 1, D)
+        # 复制多次并添加位置编码
+        dynamic_tokens = dynamic_tokens.repeat(1, self.num_tokens, 1)  # (B, num_tokens, D)
+        # 添加位置编码
+        dynamic_tokens = dynamic_tokens + self.pos_encoding  # (B, num_tokens, D)
+
+        # 2. 静态特征生成 Query
+        q = self.q_proj(static).unsqueeze(1)  # (B, 1, D)
+
+        # 3. 使用 MHA 计算注意力
+        attn_output, attn_weights = self.mha(
+            query=q,
+            key=dynamic_tokens,
+            value=dynamic_tokens,
+            need_weights=True
+        )
+        # attn_output: (B, 1, D), attn_weights: (B, 1, num_tokens)
+
+        gated = attn_output.squeeze(1)  # (B, D)
+        attn_weights = attn_weights.squeeze(1)  # (B, num_tokens)
+
+        # 4. 计算 Gate
+        gate = torch.sigmoid(self.gate_proj(gated))
+
+        # 5. 残差连接
+        gated_dynamic = dynamic * gate + dynamic
+
+        return gated_dynamic, attn_weights
+
+
+class MultiExpertFusionModel(nn.Module):
+    """多专家融合分类模型 - 输出 logits (CrossEntropyLoss 需要)"""
+    def __init__(self, num_classes=3, num_constitutions=38, shared_dim=128, hidden_dim=256, dropout=0.3):
+        super().__init__()
+
+        # 独立编码器
+        self.dynamic_encoder = InceptionEncoder(in_channels=2, out_channels=shared_dim, depth=3)
+        self.static_basic_encoder = StaticMLPEncoder(in_dim=4, out_dim=shared_dim)
+        self.static_scores_encoder = StaticMLPEncoder(in_dim=2, out_dim=shared_dim)
+        self.constitution_encoder = ConstitutionEmbedding(num_constitutions=num_constitutions, embed_dim=32, out_dim=shared_dim)
+
+        # Cross-Attention Gating - dynamic 输出维度是 shared_dim * 4
+        self.cross_attn = CrossAttentionGate(
+            dim=shared_dim * 4,
+            static_dim=shared_dim,
+            num_tokens=4,  # 降采样成 4 个 token
+            num_heads=4   # 4 个注意力头
+        )
+
+        # 投影到统一维度
+        self.dynamic_proj = nn.Linear(shared_dim * 4, shared_dim)
+        self.static_basic_proj = nn.Linear(shared_dim, shared_dim)
+        self.static_scores_proj = nn.Linear(shared_dim, shared_dim)
+        self.constitution_proj = nn.Linear(shared_dim, shared_dim)
+
+        # 融合层
+        self.fusion = nn.Sequential(
+            nn.Linear(shared_dim * 4, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim // 2),
+            nn.Dropout(dropout),
+        )
+
+        # 分类头 (输出原始 logits，不使用 softmax)
+        self.classifier = nn.Linear(hidden_dim // 2, num_classes)
+
+    def forward(self, dynamic, static_basic, static_scores, constitution, return_attention=False):
+        """
+        Args:
+            dynamic: (B, 2, 1000)
+            static_basic: (B, 4)
+            static_scores: (B, 2)
+            constitution: (B,) long
+            return_attention: 是否返回注意力权重
+
+        Returns:
+            logits: (B, num_classes) 原始 logits
+            attention_weights: (B, num_tokens) (optional)
+        """
+        # 1. 独立编码
+        z_d = self.dynamic_encoder(dynamic)
+        z_b = self.static_basic_encoder(static_basic)
+        z_s = self.static_scores_encoder(static_scores)
+        z_c = self.constitution_encoder(constitution)
+
+        # 2. Cross-Attention Gating
+        z_d_gated, attn_weights = self.cross_attn(z_d, z_b)
+
+        # 3. 投影到统一维度
+        z_d_proj = self.dynamic_proj(z_d_gated)
+        z_b_proj = self.static_basic_proj(z_b)
+        z_s_proj = self.static_scores_proj(z_s)
+        z_c_proj = self.constitution_proj(z_c)
+
+        # 4. 拼接融合
+        fused = torch.cat([z_d_proj, z_b_proj, z_s_proj, z_c_proj], dim=-1)
+        fusion_feat = self.fusion(fused)
+
+        # 5. 分类 (输出 logits)
+        logits = self.classifier(fusion_feat)
+
+        if return_attention:
+            return logits, attn_weights
+        return logits
+
+
+# =========================================================================
 # 工厂函数: 根据配置返回模型
 # =========================================================================
-def get_model(model_type="inception", num_classes=4, dyn_channels=2, static_dim=4,**kwarg):
+def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=4, **kwarg):
     """工厂函数：根据配置返回模型"""
+    if model_type == "multimodal":
+        return MultiExpertFusionModel(
+            num_classes=num_classes,
+            num_constitutions=kwarg.get('num_constitutions', 38),
+            shared_dim=kwarg.get('shared_dim', 128),
+            hidden_dim=kwarg.get('hidden_dim', 256),
+            dropout=kwarg.get('dropout', 0.3),
+        )
     return MassageFusionNet(
         model_type=model_type,
         num_classes=num_classes,
