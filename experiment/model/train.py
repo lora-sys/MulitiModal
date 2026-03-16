@@ -52,14 +52,25 @@ def create_dataset(dataset_config):
     return dataset
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, model_type):
-    """训练一个 epoch"""
+def train_epoch(model, dataloader, criterion, optimizer, device, model_type, scheduler=None):
+    """
+    训练一个 epoch
+
+    Args:
+        model: 模型
+        dataloader: 数据加载器
+        criterion: 损失函数
+        optimizer: 优化器
+        device: 设备
+        model_type: 模型类型
+        scheduler: 可选的调度器（按 step 更新）
+    """
     model.train()
     total_loss = 0
     correct = 0
     total = 0
 
-    for batch in dataloader:
+    for batch_idx, batch in enumerate(dataloader):
         # 新数据集返回字典格式
         dynamic = batch['dynamic'].to(device)
         static_basic = batch['static_basic'].to(device)
@@ -78,6 +89,10 @@ def train_epoch(model, dataloader, criterion, optimizer, device, model_type):
         loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
+
+        # 按 step 更新调度器（如果需要）
+        if scheduler is not None:
+            scheduler.step()
 
         total_loss += loss.item()
         _, predicted = outputs.max(1)
@@ -248,6 +263,46 @@ Epochs: {train_config["num_epochs"]}
     print(f"📝 实验日志已保存: {log_path}")
 
 
+def get_parameter_groups(model, model_type, encoder_lr_ratio=0.1):
+    """
+    将模型参数分为两组：encoder 组和 fusion/classifier 组
+    encoder 组使用较小的学习率（适合预训练或低容量模块）
+    fusion/classifier 组使用较大的学习率（适合从头训练）
+
+    Args:
+        model: 模型实例
+        model_type: 模型类型
+        encoder_lr_ratio: encoder 学习率相对于主学习率的比例
+
+    Returns:
+        parameter_groups: 参数组列表
+    """
+    if model_type != "multimodal":
+        # 非多模态模型，所有参数使用相同学习率
+        return [{"params": model.parameters(), "lr": None}]
+
+    # 多模态模型：分割参数组
+    encoder_params = []
+    fusion_params = []
+
+    for name, param in model.named_parameters():
+        if any(keyword in name for keyword in [
+            'encoder', 'embedding',  # encoder 相关
+        ]):
+            encoder_params.append(param)
+        else:
+            fusion_params.append(param)
+
+    print(f"[优化] Encoder 参数: {len(encoder_params)} 个")
+    print(f"[优化] Fusion/Classifier 参数: {len(fusion_params)} 个")
+    print(f"[优化] Encoder 学习率比例: {encoder_lr_ratio}")
+
+    return [
+        {"params": encoder_params, "lr": None, "lr_ratio": encoder_lr_ratio},
+        {"params": fusion_params, "lr": None, "lr_ratio": 1.0},
+    ]
+
+
 def main():
     # 1. 加载配置
     dataset_config = load_dataset_config()
@@ -302,17 +357,35 @@ def main():
         dyn_channels=model_config["params"]["dyn_channels"],
         static_dim=model_config["params"]["static_dim"],
         **model_params # 传入模型专属参数 (如 transformer 的 d_model, nhead 等)
-        
+
     )
     model = model.to(device)
 
     # 4. 训练配置
     criterion = nn.CrossEntropyLoss()
+
+    # 使用参数组（不同模块不同学习率）
+    param_groups = get_parameter_groups(
+        model,
+        model_type=model_config["type"],
+        encoder_lr_ratio=train_config.get("encoder_lr_ratio", 0.1)
+    )
+
+    # 为每个参数组设置实际的学习率
+    base_lr = train_config["learning_rate"]
+    for group in param_groups:
+        if "lr_ratio" in group:
+            group["lr"] = base_lr * group["lr_ratio"]
+            del group["lr_ratio"]
+
     optimizer = optim.Adam(
-        model.parameters(),
-        lr=train_config["learning_rate"],
+        param_groups,
         weight_decay=train_config.get("weight_decay", 1e-4),
     )
+
+    print(f"[优化] 基础学习率: {base_lr}")
+    for i, group in enumerate(optimizer.param_groups):
+        print(f"[优化] 参数组 {i}: lr={group['lr']:.6f}, 参数数量={len(group['params'])}")
 
     # 根据配置选择调度器
     scheduler_cfg = SCHEDULER_CONFIGS[CURRENT_SCHEDULER]
@@ -385,21 +458,39 @@ def main():
     # 记录训练历史
     history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
 
+    # 滑动平均队列（用于平滑 val 指标）
+    from collections import deque
+    smoothing_window = train_config.get("smoothing_window", 5)
+    val_loss_history = deque(maxlen=smoothing_window)
+    val_acc_history = deque(maxlen=smoothing_window)
+
+    print(f"[优化] 滑动平均窗口大小: {smoothing_window}")
+
     for epoch in range(num_epochs):
+        # 决定调度器更新策略
+        use_step_scheduler = scheduler_type in ["OneCycleLR", "CosineAnnealingWarmup"]
+
+        # 训练一个 epoch（如果需要按 step 更新，传递 scheduler）
         train_loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, device, model_config["type"]
+            model, train_loader, criterion, optimizer, device, model_config["type"],
+            scheduler=scheduler if use_step_scheduler else None
         )
         val_loss, val_acc, _, _, _ = evaluate(model, val_loader, criterion, device, model_config["type"])
 
-        # 更新学习率
-        if scheduler_type in ["ReduceLROnPlateau"]:
-            scheduler.step(val_loss)
-        elif scheduler_type in ["OneCycleLR"]:
-            scheduler.step()
-        elif scheduler_type in ["CosineAnnealingWarmup", "CosineAnnealingLR", "CosineAnnealingWarmRestarts", "StepLR"]:
-            scheduler.step()
-        else:
-            scheduler.step(val_loss)
+        # 计算平滑后的 val 指标
+        val_loss_history.append(val_loss)
+        val_acc_history.append(val_acc)
+        smoothed_val_loss = sum(val_loss_history) / len(val_loss_history)
+        smoothed_val_acc = sum(val_acc_history) / len(val_acc_history)
+
+        # 更新学习率（如果未按 step 更新）
+        if not use_step_scheduler:
+            if scheduler_type in ["ReduceLROnPlateau"]:
+                scheduler.step(smoothed_val_loss)  # 使用平滑后的 val_loss
+            elif scheduler_type in ["CosineAnnealingLR", "CosineAnnealingWarmRestarts", "StepLR"]:
+                scheduler.step()
+            else:
+                scheduler.step(smoothed_val_loss)
 
         lr = optimizer.param_groups[0]["lr"]
 
@@ -407,6 +498,7 @@ def main():
             f"Epoch [{epoch + 1:2d}/{num_epochs}] "
             f"Train Loss: {train_loss:.4f} Acc: {train_acc:.2f}% | "
             f"Val Loss: {val_loss:.4f} Acc: {val_acc:.2f}% | "
+            f"Smoothed Val: {smoothed_val_loss:.4f} {smoothed_val_acc:.2f}% | "
             f"LR: {lr:.6f}"
         )
 
@@ -416,14 +508,15 @@ def main():
         history["train_acc"].append(train_acc)
         history["val_acc"].append(val_acc)
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        # 使用平滑后的 val_acc 来选择最佳模型
+        if smoothed_val_acc > best_val_acc:
+            best_val_acc = smoothed_val_acc
             model_type = model_config["type"]
             torch.save(
                 model.state_dict(),
                 f"experiment/model/bfoundation_model_{model_type}.pth",
             )
-            print(f"  💾 保存最佳模型 (Acc: {val_acc:.2f}%)")
+            print(f"  💾 保存最佳模型 (Smoothed Acc: {smoothed_val_acc:.2f}%)")
 
     print("-" * 60)
     training_time = time.time() - start_time
