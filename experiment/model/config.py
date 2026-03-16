@@ -48,6 +48,10 @@ TRAIN_CONFIG = {
     "learning_rate": 1e-3,  # 配合 warmup 使用
     "weight_decay": 1e-4,
     "dropout": 0.5,
+    # Parameter Groups 优化
+    "encoder_lr_ratio": 0.1,  # encoder 学习率相对于主学习率的比例（0.1 = 1/10）
+    # 滑动平均优化
+    "smoothing_window": 5,    # val 指标滑动平均窗口大小
 }
 
 # 调度器配置 (选择其中一个)
