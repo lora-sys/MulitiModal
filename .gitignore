@@ -7,3 +7,12 @@ experiment/rawdata/row_data/
 *.csv
 experiment/rawdata/clean_data
 /.opencode/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Training logs
+experiment/model/log.txt
+training_output.log
