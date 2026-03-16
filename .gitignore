@@ -5,3 +5,5 @@ experiment/rawdata/row_data/
 *.npz
 *.pth
 *.csv
+experiment/rawdata/clean_data
+/.opencode/
