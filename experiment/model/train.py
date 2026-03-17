@@ -143,7 +143,7 @@ def evaluate(model, dataloader, criterion, device, model_type):
     return total_loss / len(dataloader), 100.0 * correct / total, all_labels, all_preds, all_probs
 
 
-def detailed_evaluation(labels, preds, probs, num_classes=4, class_names=['很差(0)', '一般(1)', '正常(2)', '良好(3)']):
+def detailed_evaluation(labels, preds, probs, num_classes=3, class_names=['一般(0)', '正常(1)', '良好(2)']):
     """详细评估 - 打印分类报告和混淆矩阵"""
     from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_recall_fscore_support
     import seaborn as sns
@@ -187,7 +187,7 @@ def detailed_evaluation(labels, preds, probs, num_classes=4, class_names=['很�
     return cm
 
 
-def plot_confusion_matrix(cm, class_names=['很差(0)', '一般(1)', '正常(2)', '良好(3)'], save_path="experiment/test/result/confusion_matrix_multimodal.png"):
+def plot_confusion_matrix(cm, class_names=['一般(0)', '正常(1)', '良好(2)'], save_path="experiment/test/result/confusion_matrix_multimodal.png"):
     """绘制混淆矩阵热力图"""
     import seaborn as sns
     import matplotlib.pyplot as plt
