@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import json
+import random
 import numpy as np
 import torch
 import torch.nn as nn
@@ -15,6 +16,17 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader, TensorDataset
 from datetime import datetime
+
+# 固定随机种子，确保实验可复现
+RANDOM_SEED = 42
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+torch.manual_seed(RANDOM_SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(RANDOM_SEED)
+    torch.cuda.manual_seed_all(RANDOM_SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 sys.path.append("experiment/dataset")
 sys.path.append("experiment/model")
@@ -569,6 +581,134 @@ def main():
     print("\n📈 生成训练曲线...")
     result_path = f"experiment/test/result/test_result_{model_type}.png"
     plot_training_history(history, result_path)
+
+
+def k_fold_train(n_folds=5, num_epochs=30):
+    """K-Fold 交叉验证训练
+    
+    Args:
+        n_folds: 折数
+        num_epochs: 每折训练轮数
+    """
+    from sklearn.model_selection import StratifiedKFold
+    
+    print("=" * 60)
+    print(f"🔄 K-Fold 交叉验证训练 (K={n_folds})")
+    print("=" * 60)
+    
+    # 加载配置
+    dataset_config = load_dataset_config()
+    model_config = MODEL_CONFIG
+    train_config = TRAIN_CONFIG
+    
+    # 加载完整训练集
+    print("\n📂 加载训练数据集...")
+    npz_path = dataset_config.get('unified_npz', {}).get('path', "experiment/model/unified_dataset_realonly.npz")
+    source = UnifiedNPZDataSource(npz_path)
+    source.initialize()
+    full_dataset = UnifiedMultimodalDataset(source, preprocessor=None)
+    
+    # 获取所有标签用于分层采样
+    all_labels = full_dataset._labels.numpy()
+    
+    # 创建 K-Fold
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=RANDOM_SEED)
+    
+    fold_results = []
+    
+    for fold, (train_idx, val_idx) in enumerate(skf.split(np.zeros(len(all_labels)), all_labels)):
+        print(f"\n{'='*60}")
+        print(f"📁 Fold {fold + 1}/{n_folds}")
+        print(f"{'='*60}")
+        print(f"训练集: {len(train_idx)} 样本")
+        print(f"验证集: {len(val_idx)} 样本")
+        
+        # 创建数据加载器
+        train_subset = torch.utils.data.Subset(full_dataset, train_idx)
+        val_subset = torch.utils.data.Subset(full_dataset, val_idx)
+        
+        train_loader = DataLoader(train_subset, batch_size=train_config["batch_size"], shuffle=True, num_workers=0)
+        val_loader = DataLoader(val_subset, batch_size=train_config["batch_size"], shuffle=False, num_workers=0)
+        
+        # 创建模型
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model_params = MODEL_PARAMS.get(model_config["type"], {})
+        model = get_model(
+            model_type=model_config["type"],
+            num_classes=model_config["params"]["num_classes"],
+            dyn_channels=model_config["params"]["dyn_channels"],
+            static_dim=model_config["params"]["static_dim"],
+            **model_params
+        )
+        model = model.to(device)
+        
+        # 训练配置
+        criterion = nn.CrossEntropyLoss()
+        
+        # Parameter Groups
+        param_groups = get_parameter_groups(model, train_config)
+        optimizer = optim.Adam(param_groups)
+        
+        # 调度器
+        scheduler_cfg = SCHEDULER_CONFIGS[CURRENT_SCHEDULER]
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=num_epochs - scheduler_cfg.get("warmup_epochs", 5),
+            eta_min=scheduler_cfg.get("eta_min", 1e-6),
+        )
+        
+        # 训练
+        best_val_acc = 0
+        val_loss_history = []
+        val_acc_history = []
+        smoothing_window = train_config.get("smoothing_window", 5)
+        
+        for epoch in range(num_epochs):
+            train_loss, train_acc = train_epoch(
+                model, train_loader, criterion, optimizer, device, model_config["type"],
+                scheduler=None
+            )
+            val_loss, val_acc, _, _, _ = evaluate(model, val_loader, criterion, device, model_config["type"])
+            
+            val_loss_history.append(val_loss)
+            val_acc_history.append(val_acc)
+            
+            if len(val_loss_history) > smoothing_window:
+                val_loss_history.pop(0)
+                val_acc_history.pop(0)
+            
+            smoothed_val_acc = sum(val_acc_history) / len(val_acc_history)
+            scheduler.step()
+            
+            if (epoch + 1) % 10 == 0:
+                print(f"  Epoch [{epoch+1:2d}/{num_epochs}] Val Acc: {val_acc:.2f}% | Smoothed: {smoothed_val_acc:.2f}%")
+            
+            if smoothed_val_acc > best_val_acc:
+                best_val_acc = smoothed_val_acc
+        
+        fold_results.append({
+            'fold': fold + 1,
+            'best_val_acc': best_val_acc,
+            'final_train_acc': train_acc,
+            'final_val_acc': val_acc
+        })
+        
+        print(f"  ✅ Fold {fold + 1} 完成! 最佳验证准确率: {best_val_acc:.2f}%")
+    
+    # 汇总结果
+    print("\n" + "=" * 60)
+    print("📊 K-Fold 交叉验证结果汇总")
+    print("=" * 60)
+    
+    val_accs = [r['best_val_acc'] for r in fold_results]
+    print(f"\n各折验证准确率:")
+    for r in fold_results:
+        print(f"  Fold {r['fold']}: {r['best_val_acc']:.2f}%")
+    
+    print(f"\n平均验证准确率: {np.mean(val_accs):.2f}% ± {np.std(val_accs):.2f}%")
+    print(f"最高: {np.max(val_accs):.2f}%, 最低: {np.min(val_accs):.2f}%")
+    
+    return fold_results
 
 
 if __name__ == "__main__":

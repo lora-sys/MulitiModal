@@ -24,15 +24,30 @@ CONSTITUTION_ID_TO_NAME = {v: k for k, v in CONSTITUTION_MAP.items()}
 
 def generate_realonly_dataset(
     output_path='experiment/model/unified_dataset_realonly.npz',
-    n_samples_per_class=1250,
+    test_output_path='experiment/model/test_dataset.npz',
+    n_samples_per_class=2000,  # 增加到 2000，总计 6000 样本
+    test_ratio=0.15,  # 15% 作为独立测试集
+    random_seed=42,  # 固定随机种子
     profile_csv='experiment/rawdata/train_data/train_data.csv',
     wave_npz_path='experiment/model/pretrain_10k.npz'
 ):
-    """生成只使用真实数据的多模态数据集（无虚拟样本）"""
+    """生成只使用真实数据的多模态数据集（无虚拟样本）
+    
+    改进：
+    1. 增加样本数到 6000
+    2. 固定随机种子确保可复现
+    3. 创建独立测试集（15%）
+    """
+    
+    # 固定随机种子
+    np.random.seed(random_seed)
     
     print("=" * 60)
-    print("生成真实数据集（无虚拟样本）")
+    print("生成真实数据集（改进版：6000样本 + 独立测试集）")
     print("=" * 60)
+    print(f"随机种子: {random_seed}")
+    print(f"每类样本: {n_samples_per_class}")
+    print(f"测试集比例: {test_ratio*100:.0f}%")
     
     # 动作1: 异常值截断配置
     print("\n[动作1] 异常值截断配置:")
@@ -83,123 +98,156 @@ def generate_realonly_dataset(
         print(f"      标签 {label}: {len(indices)} 条波形")
     
     # [4/6] 采样（只使用真实数据，标签1,2,3）
-    print(f"\n[4/6] 采样真实数据（标签1,2,3，每类 {n_samples_per_class} 人）...")
+    # 受限于标签3只有1870人，我们最大化使用数据
+    max_samples_per_class = min(n_samples_per_class, 1870)  # 标签3最多1870人
+    print(f"\n[4/6] ���样真实数据（标签1,2,3，每类最多 {max_samples_per_class} 人）...")
+    print(f"      注意：标签3原始数据仅1870人，将全部使用")
     
-    n_samples = n_samples_per_class * 3  # 3类
-    dynamic_arr = np.zeros((n_samples, 2, 1000), dtype=np.float32)
-    static_basic_arr = np.zeros((n_samples, 4), dtype=np.float32)
-    static_scores_arr = np.zeros((n_samples, 2), dtype=np.float32)
-    constitution_arr = np.zeros(n_samples, dtype=np.int64)
-    labels_arr = np.zeros(n_samples, dtype=np.int64)
+    # 先收集所有数据
+    all_dynamic = []
+    all_static_basic = []
+    all_static_scores = []
+    all_constitution = []
+    all_labels = []
     
-    idx = 0
     for label in [1, 2, 3]:  # 只处理标签1,2,3
         label_profiles = profiles[profiles['身体状态'] == label]
         available = len(label_profiles)
         
-        to_sample = min(n_samples_per_class, available)
+        # 标签3使用全部数据，其他标签采样相同数量
+        to_sample = min(available, max_samples_per_class)
         print(f"      标签 {label}: 采样 {to_sample} 人 (原始: {available} 人)")
         
         # 采样真实用户
-        sampled_profiles = label_profiles.sample(n=to_sample, replace=False)
+        sampled_profiles = label_profiles.sample(n=to_sample, replace=False, random_state=random_seed)
         
         for _, row in sampled_profiles.iterrows():
-            static_basic_arr[idx] = [row['年龄'], row['BMI 数值'], row['血氧'], row['心率']]
-            static_scores_arr[idx] = [row['健康指数'], row['诊断得分']]
+            all_static_basic.append([row['年龄'], row['BMI 数值'], row['血氧'], row['心率']])
+            all_static_scores.append([row['健康指数'], row['诊断得分']])
             
             constitution_name = row['体质类型名称']
-            constitution_arr[idx] = CONSTITUTION_MAP.get(constitution_name, 0)
-            labels_arr[idx] = label
+            all_constitution.append(CONSTITUTION_MAP.get(constitution_name, 0))
+            all_labels.append(label)
             
             # 从同标签波形库随机抽取
             possible_indices = label_to_wave_idx.get(label, np.arange(len(waves)))
             chosen_idx = np.random.choice(possible_indices)
-            dynamic_arr[idx] = waves[chosen_idx]
-            
-            idx += 1
+            all_dynamic.append(waves[chosen_idx])
     
-    print(f"      总采样: {idx} 人")
+    # 转换为数组
+    dynamic_arr = np.array(all_dynamic, dtype=np.float32)
+    static_basic_arr = np.array(all_static_basic, dtype=np.float32)
+    static_scores_arr = np.array(all_static_scores, dtype=np.float32)
+    constitution_arr = np.array(all_constitution, dtype=np.int64)
+    labels_arr = np.array(all_labels, dtype=np.int64)
     
-    # 裁剪数组到实际采样数量
-    dynamic_arr = dynamic_arr[:idx]
-    static_basic_arr = static_basic_arr[:idx]
-    static_scores_arr = static_scores_arr[:idx]
-    constitution_arr = constitution_arr[:idx]
-    labels_arr = labels_arr[:idx]
+    print(f"      总采样: {len(labels_arr)} 人")
     
-    print(f"      实际生成: {idx} 人")
+    # 划分训练集和独立测试集
+    print(f"\n[划分] 创建独立测试集 ({test_ratio*100:.0f}%)...")
     
-    # [5/6] 计算归一化参数
-    print("\n[5/6] 计算归一化参数...")
+    # 为每类单独划分，保持平衡
+    train_indices = []
+    test_indices = []
     
-    # 计算均值和标准差
-    age_mean, age_std = static_basic_arr[:, 0].mean(), static_basic_arr[:, 0].std()
-    bmi_mean, bmi_std = static_basic_arr[:, 1].mean(), static_basic_arr[:, 1].std()
-    hr_mean, hr_std = static_basic_arr[:, 3].mean(), static_basic_arr[:, 3].std()
-    spo2_mean, spo2_std = static_basic_arr[:, 2].mean(), static_basic_arr[:, 2].std()
+    for label in [1, 2, 3]:
+        label_indices = np.where(labels_arr == label)[0]
+        np.random.shuffle(label_indices)  # 打乱
+        
+        n_test = int(len(label_indices) * test_ratio)
+        test_indices.extend(label_indices[:n_test])
+        train_indices.extend(label_indices[n_test:])
+    
+    train_indices = np.array(train_indices)
+    test_indices = np.array(test_indices)
+    
+    print(f"      训练集: {len(train_indices)} 人")
+    print(f"      测试集: {len(test_indices)} 人")
+    
+    # [5/6] 计算归一化参数（仅使用训练集）
+    print("\n[5/6] 计算归一化参数（仅使用训练集）...")
+    
+    # 提取训练集数据
+    train_static_basic = static_basic_arr[train_indices]
+    train_static_scores = static_scores_arr[train_indices]
+    
+    # 计算均值和标准差（仅训练集）
+    age_mean, age_std = train_static_basic[:, 0].mean(), train_static_basic[:, 0].std()
+    bmi_mean, bmi_std = train_static_basic[:, 1].mean(), train_static_basic[:, 1].std()
+    hr_mean, hr_std = train_static_basic[:, 3].mean(), train_static_basic[:, 3].std()
+    spo2_mean, spo2_std = train_static_basic[:, 2].mean(), train_static_basic[:, 2].std()
     
     print(f"      年龄: mean={age_mean:.1f}, std={age_std:.1f}")
     print(f"      BMI:  mean={bmi_mean:.1f}, std={bmi_std:.1f}")
     print(f"      心率: mean={hr_mean:.1f}, std={hr_std:.1f}")
     print(f"      血氧: mean={spo2_mean:.1f}, std={spo2_std:.1f}")
     
-    # 归一化
+    # 归一化（应用全部数据）
     static_basic_arr[:, 0] = (static_basic_arr[:, 0] - age_mean) / (age_std + 1e-8)
     static_basic_arr[:, 1] = (static_basic_arr[:, 1] - bmi_mean) / (bmi_std + 1e-8)
     static_basic_arr[:, 2] = (static_basic_arr[:, 2] - spo2_mean) / (spo2_std + 1e-8)
     static_basic_arr[:, 3] = (static_basic_arr[:, 3] - hr_mean) / (hr_std + 1e-8)
     
-    health_mean, health_std = static_scores_arr[:, 0].mean(), static_scores_arr[:, 0].std()
-    diagnosis_mean, diagnosis_std = static_scores_arr[:, 1].mean(), static_scores_arr[:, 1].std()
+    health_mean, health_std = train_static_scores[:, 0].mean(), train_static_scores[:, 0].std()
+    diagnosis_mean, diagnosis_std = train_static_scores[:, 1].mean(), train_static_scores[:, 1].std()
     
     static_scores_arr[:, 0] = (static_scores_arr[:, 0] - health_mean) / (health_std + 1e-8)
     static_scores_arr[:, 1] = (static_scores_arr[:, 1] - diagnosis_mean) / (diagnosis_std + 1e-8)
     
-    # [6/6] 保存
-    print(f"\n[保存] 写入: {output_path}")
+    # [6/6] 保存训练集和测试集
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
+    # 保存训练集
+    print(f"\n[保存训练集] 写入: {output_path}")
     np.savez_compressed(output_path,
-        dynamic=dynamic_arr,
-        static_basic=static_basic_arr,
-        static_scores=static_scores_arr,
-        constitution=constitution_arr,
-        labels=labels_arr,
+        dynamic=dynamic_arr[train_indices],
+        static_basic=static_basic_arr[train_indices],
+        static_scores=static_scores_arr[train_indices],
+        constitution=constitution_arr[train_indices],
+        labels=labels_arr[train_indices],
+    )
+    
+    # 保存独立测试集
+    print(f"[保存测试集] 写入: {test_output_path}")
+    np.savez_compressed(test_output_path,
+        dynamic=dynamic_arr[test_indices],
+        static_basic=static_basic_arr[test_indices],
+        static_scores=static_scores_arr[test_indices],
+        constitution=constitution_arr[test_indices],
+        labels=labels_arr[test_indices],
     )
     
     print(f"\n✅ 生成完成!")
-    print(f"   - dynamic:      {dynamic_arr.shape}")
-    print(f"   - static_basic: {static_basic_arr.shape}")
-    print(f"   - static_scores:{static_scores_arr.shape}")
-    print(f"   - constitution: {constitution_arr.shape}")
-    print(f"   - labels:       {labels_arr.shape}")
+    print(f"\n📊 训练集:")
+    print(f"   - 样本数: {len(train_indices)}")
+    print(f"   - dynamic: {dynamic_arr[train_indices].shape}")
+    for label in [1, 2, 3]:
+        count = (labels_arr[train_indices] == label).sum()
+        print(f"   - 标签 {label}: {count} 人")
     
-    print(f"\n📊 标签分布:")
-    for label in range(4):
-        count = (labels_arr == label).sum()
-        pct = count / len(labels_arr) * 100
-        print(f"   标签 {label}: {count} ({pct:.1f}%)")
-    
-    print(f"\n📊 体质分布:")
-    unique, counts = np.unique(constitution_arr, return_counts=True)
-    for cid, cnt in sorted(zip(unique, counts), key=lambda x: -x[1])[:10]:
-        name = CONSTITUTION_ID_TO_NAME.get(cid, f"ID:{cid}")
-        print(f"   {name}: {cnt}")
+    print(f"\n📊 测试集:")
+    print(f"   - 样本数: {len(test_indices)}")
+    for label in [1, 2, 3]:
+        count = (labels_arr[test_indices] == label).sum()
+        print(f"   - 标签 {label}: {count} 人")
     
     return {
-        'dynamic': dynamic_arr,
-        'static_basic': static_basic_arr,
-        'static_scores': static_scores_arr,
-        'constitution': constitution_arr,
-        'labels': labels_arr
+        'train_dynamic': dynamic_arr[train_indices],
+        'train_labels': labels_arr[train_indices],
+        'test_dynamic': dynamic_arr[test_indices],
+        'test_labels': labels_arr[test_indices]
     }
 
 
 if __name__ == "__main__":
-    # 生成真实数据集（无虚拟样本）
+    # 生成改进版真实数据集
+    # 最大化使用数据：每类 1870 人（受限于标签3），总计 5610 人
+    # 15% 作为独立测试集
     result = generate_realonly_dataset(
         output_path='experiment/model/unified_dataset_realonly.npz',
-        n_samples_per_class=1250
+        test_output_path='experiment/model/test_dataset.npz',
+        n_samples_per_class=1870,  # 最大化使用标签3的数据
+        test_ratio=0.15,
+        random_seed=42
     )
-    print(f'\n✅ 真实数据集已生成!')
-    print(f'样本数: {len(result["labels"])}')
+    print(f'\n✅ 改进版数据集已生成!')
