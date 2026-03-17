@@ -9,7 +9,7 @@ MODEL_CONFIG = {
     "params": {
         "dyn_channels": 2,  # 动态特征通道数（传感器数量）
         "static_dim": 4,  # 静态特征维度
-        "num_classes": 4,  # 分类类别数
+        "num_classes": 3,  # 分类类别数（移除标签0，只使用1、2、3）
     },
 }
 
