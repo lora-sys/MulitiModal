@@ -53,7 +53,7 @@ class UnifiedMultimodalDataset(BaseDataset):
             item = {
                 'dynamic': processed.dynamic,
                 'static_basic': processed.static,
-                'label': processed.label,
+                'label': processed.label - 1,  # 标签映射：1, 2, 3 -> 0, 1, 2
             }
         else:
             # 直接从 NPZ 数据转换为 Tensor
@@ -64,7 +64,9 @@ class UnifiedMultimodalDataset(BaseDataset):
             static_basic = torch.from_numpy(raw_data['static_basic'].astype(np.float32))
             static_scores = torch.from_numpy(raw_data['static_scores'].astype(np.float32))
             constitution = torch.tensor(raw_data['constitution'], dtype=torch.long)
-            label = torch.tensor(raw_sample.metadata['label'], dtype=torch.long)
+            
+            # 标签映射：1, 2, 3 -> 0, 1, 2（PyTorch CrossEntropyLoss 要求标签从 0 开始）
+            label = torch.tensor(raw_sample.metadata['label'] - 1, dtype=torch.long)
 
             item = {
                 'dynamic': dynamic,
