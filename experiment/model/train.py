@@ -421,21 +421,28 @@ def main():
         )
     elif scheduler_type == "CosineAnnealingWarmup":
         # Cosine Annealing + Warmup
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=train_config["num_epochs"] - scheduler_cfg.get("warmup_epochs", 5),
-            eta_min=scheduler_cfg.get("eta_min", 1e-6),
-        )
+        warmup_epochs = scheduler_cfg.get("warmup_epochs", 5)
+        
         # 创建 warmup 调度器
         warmup_scheduler = optim.lr_scheduler.LinearLR(
             optimizer,
             start_factor=0.1,  # warmup 从 0.1x 开始
             end_factor=1.0,
-            total_iters=scheduler_cfg.get("warmup_epochs", 5)
+            total_iters=warmup_epochs
         )
+        
+        # 创建 cosine annealing 调度器
+        cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=train_config["num_epochs"] - warmup_epochs,
+            eta_min=scheduler_cfg.get("eta_min", 1e-6),
+        )
+        
+        # 组合两个调度器
         scheduler = optim.lr_scheduler.SequentialLR(
-            warmup_scheduler,
-            scheduler
+            optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[warmup_epochs]
         )
     elif scheduler_type == "StepLR":
         scheduler = optim.lr_scheduler.StepLR(
@@ -468,7 +475,8 @@ def main():
 
     for epoch in range(num_epochs):
         # 决定调度器更新策略
-        use_step_scheduler = scheduler_type in ["OneCycleLR", "CosineAnnealingWarmup"]
+        # OneCycleLR 需要按 step 更新，CosineAnnealingWarmup 按 epoch 更新
+        use_step_scheduler = scheduler_type in ["OneCycleLR"]
 
         # 训练一个 epoch（如果需要按 step 更新，传递 scheduler）
         train_loss, train_acc = train_epoch(
@@ -487,7 +495,7 @@ def main():
         if not use_step_scheduler:
             if scheduler_type in ["ReduceLROnPlateau"]:
                 scheduler.step(smoothed_val_loss)  # 使用平滑后的 val_loss
-            elif scheduler_type in ["CosineAnnealingLR", "CosineAnnealingWarmRestarts", "StepLR"]:
+            elif scheduler_type in ["CosineAnnealingLR", "CosineAnnealingWarmRestarts", "StepLR", "CosineAnnealingWarmup"]:
                 scheduler.step()
             else:
                 scheduler.step(smoothed_val_loss)
