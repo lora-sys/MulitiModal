@@ -331,15 +331,23 @@ class CrossAttentionGate(nn.Module):
 
 
 class MultiExpertFusionModel(nn.Module):
-    """多专家融合分类模型 - 输出 logits (CrossEntropyLoss 需要)"""
+    """多专家融合分类模型 - 输出 logits (CrossEntropyLoss 需要)
+    
+    改进：使用 nn.ModuleDict 组织子模块，便于：
+    1. 不同模块使用不同学习率
+    2. 模块级别的参数管理
+    3. 验证 scheduler 是否正确更新所有参数组
+    """
     def __init__(self, num_classes=3, num_constitutions=38, shared_dim=128, hidden_dim=256, dropout=0.3):
         super().__init__()
 
-        # 独立编码器
-        self.dynamic_encoder = InceptionEncoder(in_channels=2, out_channels=shared_dim, depth=3)
-        self.static_basic_encoder = StaticMLPEncoder(in_dim=4, out_dim=shared_dim)
-        self.static_scores_encoder = StaticMLPEncoder(in_dim=2, out_dim=shared_dim)
-        self.constitution_encoder = ConstitutionEmbedding(num_constitutions=num_constitutions, embed_dim=32, out_dim=shared_dim)
+        # 使用 ModuleDict 组织编码器（便于参数分组）
+        self.encoders = nn.ModuleDict({
+            'dynamic': InceptionEncoder(in_channels=2, out_channels=shared_dim, depth=3),
+            'static_basic': StaticMLPEncoder(in_dim=4, out_dim=shared_dim),
+            'static_scores': StaticMLPEncoder(in_dim=2, out_dim=shared_dim),
+            'constitution': ConstitutionEmbedding(num_constitutions=num_constitutions, embed_dim=32, out_dim=shared_dim),
+        })
 
         # Cross-Attention Gating - dynamic 输出维度是 shared_dim * 4
         self.cross_attn = CrossAttentionGate(
@@ -349,26 +357,42 @@ class MultiExpertFusionModel(nn.Module):
             num_heads=4   # 4 个注意力头
         )
 
-        # 投影到统一维度
-        self.dynamic_proj = nn.Linear(shared_dim * 4, shared_dim)
-        self.static_basic_proj = nn.Linear(shared_dim, shared_dim)
-        self.static_scores_proj = nn.Linear(shared_dim, shared_dim)
-        self.constitution_proj = nn.Linear(shared_dim, shared_dim)
-
-        # 融合层
-        self.fusion = nn.Sequential(
-            nn.Linear(shared_dim * 4, hidden_dim),
-            nn.ReLU(),
-            nn.LayerNorm(hidden_dim),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            nn.LayerNorm(hidden_dim // 2),
-            nn.Dropout(dropout),
-        )
+        # 使用 ModuleDict 组织投影层和融合层（便于参数分组）
+        self.fusion_modules = nn.ModuleDict({
+            'dynamic_proj': nn.Linear(shared_dim * 4, shared_dim),
+            'static_basic_proj': nn.Linear(shared_dim, shared_dim),
+            'static_scores_proj': nn.Linear(shared_dim, shared_dim),
+            'constitution_proj': nn.Linear(shared_dim, shared_dim),
+            'fusion': nn.Sequential(
+                nn.Linear(shared_dim * 4, hidden_dim),
+                nn.ReLU(),
+                nn.LayerNorm(hidden_dim),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                nn.LayerNorm(hidden_dim // 2),
+                nn.Dropout(dropout),
+            ),
+        })
 
         # 分类头 (输出原始 logits，不使用 softmax)
         self.classifier = nn.Linear(hidden_dim // 2, num_classes)
+        
+        # 兼容旧接口的属性访问
+        self.dynamic_encoder = self.encoders['dynamic']
+        self.static_basic_encoder = self.encoders['static_basic']
+        self.static_scores_encoder = self.encoders['static_scores']
+        self.constitution_encoder = self.encoders['constitution']
+        self.fusion = self.fusion_modules['fusion']
+        # 投影层兼容属性
+        self.dynamic_proj = self.fusion_modules['dynamic_proj']
+        self.static_basic_proj = self.fusion_modules['static_basic_proj']
+        self.static_scores_proj = self.fusion_modules['static_scores_proj']
+        self.constitution_proj = self.fusion_modules['constitution_proj']
+        
+        # 存储结构信息（用于实验记录）
+        self.fusion_type = "cross_attention"
+        self.model_name = "CrossAttentionFusion"
 
     def forward(self, dynamic, static_basic, static_scores, constitution, return_attention=False):
         """
@@ -413,9 +437,272 @@ class MultiExpertFusionModel(nn.Module):
 # =========================================================================
 # 工厂函数: 根据配置返回模型
 # =========================================================================
+# =========================================================================
+# Baseline A: Simple Concatenation
+# 描述: 每个模态独立编码后直接拼接，经 MLP 输出
+# 目的: 测试"独立编码 + 直接拼接"是否已能达到较好性能
+# =========================================================================
+class SimpleConcatModel(nn.Module):
+    """
+    Baseline A - 最简单的多模态融合基线
+    
+    架构:
+    - Waveform: 2-3 层 1D Conv + GAP → D 维向量
+    - Static Basic: 2 层 MLP → D 维向量
+    - Static Scores: 2 层 MLP → D 维向量
+    - Constitution: Embedding + Linear → D 维向量
+    - Fusion: torch.cat() → MLP → logits
+    """
+    def __init__(
+        self, 
+        num_classes=3, 
+        num_constitutions=38,
+        shared_dim=64,
+        hidden_dim=128,
+        dropout=0.3
+    ):
+        super().__init__()
+        
+        # Waveform encoder: 简单 1D Conv + GAP
+        self.waveform_encoder = nn.Sequential(
+            nn.Conv1d(2, 32, kernel_size=7, padding=3),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(64, shared_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(shared_dim),
+            nn.ReLU(),
+            # GAP: (B, shared_dim, 250) → (B, shared_dim)
+        )
+        
+        # Static basic encoder: 2 层 MLP
+        self.static_basic_encoder = nn.Sequential(
+            nn.Linear(4, 32),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(32, shared_dim),
+            nn.ReLU(),
+        )
+        
+        # Static scores encoder: 2 层 MLP
+        self.static_scores_encoder = nn.Sequential(
+            nn.Linear(2, 16),
+            nn.ReLU(),
+            nn.Linear(16, shared_dim),
+            nn.ReLU(),
+        )
+        
+        # Constitution embedding
+        self.constitution_embedding = nn.Sequential(
+            nn.Embedding(num_constitutions, 16),
+            nn.Flatten(),
+            nn.Linear(16, shared_dim),
+            nn.ReLU(),
+        )
+        
+        # Fusion MLP
+        fusion_dim = shared_dim * 4
+        self.classifier = nn.Sequential(
+            nn.Linear(fusion_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, num_classes),
+        )
+        
+        # 存储结构信息（用于实验记录）
+        self.fusion_type = "concat"
+        self.model_name = "SimpleConcat"
+        
+    def forward(self, dynamic, static_basic, static_scores, constitution):
+        """
+        Args:
+            dynamic: (B, 2, 1000) 波形数据
+            static_basic: (B, 4) 基础静态特征
+            static_scores: (B, 2) 评分静态特征
+            constitution: (B,) 体质索引
+            
+        Returns:
+            logits: (B, num_classes)
+        """
+        # 1. 独立编码
+        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim, 250)
+        z_wave = z_wave.mean(dim=-1)  # GAP → (B, shared_dim)
+        
+        z_basic = self.static_basic_encoder(static_basic)  # (B, shared_dim)
+        z_scores = self.static_scores_encoder(static_scores)  # (B, shared_dim)
+        z_const = self.constitution_embedding(constitution)  # (B, shared_dim)
+        
+        # 2. 直接拼接
+        fused = torch.cat([z_wave, z_basic, z_scores, z_const], dim=-1)
+        
+        # 3. 分类
+        logits = self.classifier(fused)
+        
+        return logits
+
+
+# =========================================================================
+# Baseline B: Late Fusion with Transformer
+# 描述: 每个专家输出视为 token，用 Transformer Encoder 融合
+# 目的: 评估自注意力融合是否优于简单拼接
+# =========================================================================
+class LateFusionTransformerModel(nn.Module):
+    """
+    Baseline B - Transformer 晚融合
+    
+    架构:
+    - 各模态编码器输出投影到 D_shared 维
+    - 加上 learnable modality positional embeddings
+    - 1-2 层 TransformerEncoder 做融合
+    - 全局池化或 class token → 分类头
+    """
+    def __init__(
+        self,
+        num_classes=3,
+        num_constitutions=38,
+        shared_dim=64,
+        hidden_dim=128,
+        num_heads=4,
+        num_layers=2,
+        dropout=0.3
+    ):
+        super().__init__()
+        
+        self.shared_dim = shared_dim
+        self.num_modalities = 4
+        
+        # Waveform encoder (使用 Inception 风格但输出 pooled)
+        self.waveform_encoder = nn.Sequential(
+            nn.Conv1d(2, 32, kernel_size=7, padding=3),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(64, shared_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(shared_dim),
+            nn.ReLU(),
+        )
+        
+        # Static encoders
+        self.static_basic_encoder = nn.Sequential(
+            nn.Linear(4, 32),
+            nn.ReLU(),
+            nn.Linear(32, shared_dim),
+        )
+        
+        self.static_scores_encoder = nn.Sequential(
+            nn.Linear(2, 16),
+            nn.ReLU(),
+            nn.Linear(16, shared_dim),
+        )
+        
+        self.constitution_embedding = nn.Sequential(
+            nn.Embedding(num_constitutions, 16),
+            nn.Flatten(),
+            nn.Linear(16, shared_dim),
+        )
+        
+        # Learnable modality positional embeddings
+        self.modality_pe = nn.Parameter(torch.randn(1, self.num_modalities, shared_dim))
+        
+        # Transformer Encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=shared_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        
+        # Classification head
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(shared_dim),
+            nn.Linear(shared_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes),
+        )
+        
+        # 存储结构信息
+        self.fusion_type = "transformer"
+        self.model_name = "LateFusionTransformer"
+        
+    def forward(self, dynamic, static_basic, static_scores, constitution):
+        """
+        Args:
+            dynamic: (B, 2, 1000)
+            static_basic: (B, 4)
+            static_scores: (B, 2)
+            constitution: (B,)
+            
+        Returns:
+            logits: (B, num_classes)
+        """
+        B = dynamic.size(0)
+        
+        # 1. 独立编码
+        z_wave = self.waveform_encoder(dynamic).mean(dim=-1)  # (B, shared_dim)
+        z_basic = self.static_basic_encoder(static_basic)
+        z_scores = self.static_scores_encoder(static_scores)
+        z_const = self.constitution_embedding(constitution)
+        
+        # 2. 组装 tokens: (B, 4, shared_dim)
+        tokens = torch.stack([z_wave, z_basic, z_scores, z_const], dim=1)
+        
+        # 3. 添加 modality positional embeddings
+        tokens = tokens + self.modality_pe
+        
+        # 4. Transformer 融合
+        fused_tokens = self.transformer(tokens)  # (B, 4, shared_dim)
+        
+        # 5. 全局平均池化
+        pooled = fused_tokens.mean(dim=1)  # (B, shared_dim)
+        
+        # 6. 分类
+        logits = self.classifier(pooled)
+        
+        return logits
+
+
+# =========================================================================
+# 工厂函数: 根据配置返回模型
+# =========================================================================
 def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=4, **kwarg):
     """工厂函数：根据配置返回模型"""
-    if model_type == "multimodal":
+    # Baseline 模型
+    if model_type == "baseline_a" or model_type == "simple_concat":
+        return SimpleConcatModel(
+            num_classes=num_classes,
+            num_constitutions=kwarg.get('num_constitutions', 38),
+            shared_dim=kwarg.get('shared_dim', 64),
+            hidden_dim=kwarg.get('hidden_dim', 128),
+            dropout=kwarg.get('dropout', 0.3),
+        )
+    
+    if model_type == "baseline_b" or model_type == "late_fusion":
+        return LateFusionTransformerModel(
+            num_classes=num_classes,
+            num_constitutions=kwarg.get('num_constitutions', 38),
+            shared_dim=kwarg.get('shared_dim', 64),
+            hidden_dim=kwarg.get('hidden_dim', 128),
+            num_heads=kwarg.get('num_heads', 4),
+            num_layers=kwarg.get('num_layers', 2),
+            dropout=kwarg.get('dropout', 0.3),
+        )
+    
+    # Baseline C (原有模型)
+    if model_type == "baseline_c" or model_type == "multimodal":
         return MultiExpertFusionModel(
             num_classes=num_classes,
             num_constitutions=kwarg.get('num_constitutions', 38),
@@ -423,6 +710,7 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
             hidden_dim=kwarg.get('hidden_dim', 256),
             dropout=kwarg.get('dropout', 0.3),
         )
+    
     return MassageFusionNet(
         model_type=model_type,
         num_classes=num_classes,
