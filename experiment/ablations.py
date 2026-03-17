@@ -21,12 +21,16 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split, Dataset
 from typing import Optional, List, Dict
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, script_dir)
+sys.path.insert(0, os.path.join(script_dir, 'dataset'))
+sys.path.insert(0, os.path.join(script_dir, 'model'))
+sys.path.insert(0, os.path.join(script_dir, 'recorder'))
 
-from experiment.recorder import ExperimentRecorder, compute_metrics
-from experiment.model.model import get_model, MultiExpertFusionModel, SimpleConcatModel
-from experiment.dataset.unified_source import UnifiedNPZDataSource
-from experiment.dataset.unified_dataset import UnifiedMultimodalDataset
+from recorder import ExperimentRecorder, compute_metrics
+from model import get_model, MultiExpertFusionModel, SimpleConcatModel
+from unified_source import UnifiedNPZDataSource
+from unified_dataset import UnifiedMultimodalDataset
 
 
 # =========================================================================

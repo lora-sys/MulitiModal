@@ -19,13 +19,19 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 
-# 添加路径
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# 添加路径 - 确保能找到所有模块
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+sys.path.insert(0, project_root)
+sys.path.insert(0, script_dir)
+sys.path.insert(0, os.path.join(script_dir, 'dataset'))
+sys.path.insert(0, os.path.join(script_dir, 'model'))
+sys.path.insert(0, os.path.join(script_dir, 'recorder'))
 
-from experiment.recorder import ExperimentRecorder, compute_metrics
-from experiment.model.model import get_model
-from experiment.dataset.unified_source import UnifiedNPZDataSource
-from experiment.dataset.unified_dataset import UnifiedMultimodalDataset
+from recorder import ExperimentRecorder, compute_metrics
+from model import get_model
+from unified_source import UnifiedNPZDataSource
+from unified_dataset import UnifiedMultimodalDataset
 
 
 # =========================================================================
@@ -316,7 +322,7 @@ def run_baseline_experiments(
 ):
     """运行多次实验取均值"""
     if npz_path is None:
-        npz_path = "experiment/dataset/unified_dataset.npz"
+        npz_path = "experiment/model/unified_dataset_realonly.npz"
     if output_dir is None:
         output_dir = "experiment/results"
     

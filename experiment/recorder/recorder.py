@@ -14,7 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 
-from .metrics import MetricsResult, compute_metrics
+from metrics import MetricsResult, compute_metrics
 
 
 @dataclass

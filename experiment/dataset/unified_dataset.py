@@ -6,6 +6,9 @@ UnifiedMultimodalDataset - 统一多模态数据集实现
 import numpy as np
 import torch
 from typing import Dict
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from interfaces import BaseDataset, IDataSource, IPreprocessor
 
 

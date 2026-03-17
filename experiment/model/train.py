@@ -1,7 +1,6 @@
 """
 训练脚本 - 模型控制中心
-通过配置文件切换不同的模型架构 (CNN / LSTM / Inception)
-支持日志记录和多种学习率调度器
+集成实验记录模块，支持日志记录和多种学习率调度器
 """
 
 import os
@@ -28,8 +27,11 @@ if torch.cuda.is_available():
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-sys.path.append("experiment/dataset")
-sys.path.append("experiment/model")
+# 添加路径
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(script_dir))  # experiment/
+sys.path.insert(0, os.path.join(os.path.dirname(script_dir), 'dataset'))
+sys.path.insert(0, os.path.join(os.path.dirname(script_dir), 'recorder'))
 
 from unified_source import UnifiedNPZDataSource
 from nk2_processor import NK2Preprocessor
@@ -37,6 +39,7 @@ from self_healing_processor import SelfHealingPreprocessor
 from unified_dataset import UnifiedMultimodalDataset
 from model import get_model
 from config import MODEL_CONFIG, MODEL_PARAMS, TRAIN_CONFIG, SCHEDULER_CONFIGS, CURRENT_SCHEDULER
+from recorder import ExperimentRecorder, compute_metrics
 
 
 def load_dataset_config():
@@ -50,8 +53,8 @@ def load_dataset_config():
 
 def create_dataset(dataset_config):
     """创建数据集 - 使用统一NPZ数据源"""
-    # 从配置文件读取数据集路径
-    npz_path = dataset_config.get('unified_npz', {}).get('path', "experiment/model/unified_dataset_100.npz")
+    # 从配置文件读取数据集路径（默认使用 4770 样本的真实数据集）
+    npz_path = dataset_config.get('unified_npz', {}).get('path', "experiment/model/unified_dataset_realonly.npz")
     
     # 创建数据源
     source = UnifiedNPZDataSource(npz_path)
@@ -60,7 +63,7 @@ def create_dataset(dataset_config):
     # 创建数据集（不使用预处理器，NPZ数据已预处理）
     dataset = UnifiedMultimodalDataset(source, preprocessor=None)
 
-    print(f"[*] Created dataset: {len(dataset)} samples")
+    print(f"[*] Created dataset: {len(dataset)} samples from {npz_path}")
     return dataset
 
 
@@ -485,6 +488,31 @@ def main():
 
     print(f"[优化] 滑动平均窗口大小: {smoothing_window}")
 
+    # ========== 创建实验记录器 ==========
+    model_type_str = model_config["type"]
+    experiment_id = f"train_{model_type_str}"
+    recorder = ExperimentRecorder(
+        output_dir="experiment/results",
+        experiment_id=experiment_id,
+        run_id="r1",
+        seed=RANDOM_SEED,
+    )
+    
+    # 保存配置
+    recorder.save_config(
+        model=model_type_str,
+        fusion_type=getattr(model, 'fusion_type', 'unknown'),
+        batch_size=train_config["batch_size"],
+        lr=train_config["learning_rate"],
+        optimizer="Adam",
+        weight_decay=train_config.get("weight_decay", 1e-4),
+        num_epochs=num_epochs,
+        num_workers=0,
+        device=str(device),
+        scheduler=scheduler_type,
+    )
+    print(f"[Recorder] 实验记录目录: {recorder.run_dir}")
+
     for epoch in range(num_epochs):
         # 决定调度器更新策略
         # OneCycleLR 需要按 step 更新，CosineAnnealingWarmup 按 epoch 更新
@@ -512,14 +540,16 @@ def main():
             else:
                 scheduler.step(smoothed_val_loss)
 
-        lr = optimizer.param_groups[0]["lr"]
+        # 打印所有 param_group 的 lr，验证 scheduler 是否同步更新
+        lr_strs = [f"G{i}:{g['lr']:.6f}" for i, g in enumerate(optimizer.param_groups)]
+        lr_display = " ".join(lr_strs) if len(lr_strs) > 1 else f"LR: {optimizer.param_groups[0]['lr']:.6f}"
 
         print(
             f"Epoch [{epoch + 1:2d}/{num_epochs}] "
             f"Train Loss: {train_loss:.4f} Acc: {train_acc:.2f}% | "
             f"Val Loss: {val_loss:.4f} Acc: {val_acc:.2f}% | "
             f"Smoothed Val: {smoothed_val_loss:.4f} {smoothed_val_acc:.2f}% | "
-            f"LR: {lr:.6f}"
+            f"{lr_display}"
         )
 
         # 记录历史
@@ -528,14 +558,24 @@ def main():
         history["train_acc"].append(train_acc)
         history["val_acc"].append(val_acc)
 
+        # 使用 Recorder 记录 epoch 结果
+        is_best = recorder.log_epoch(
+            epoch, train_loss, val_loss, val_acc, 
+            smoothed_val_acc / 100,  # F1 近似用 smoothed_acc
+            print_log=False
+        )
+
         # 使用平滑后的 val_acc 来选择最佳模型
         if smoothed_val_acc > best_val_acc:
             best_val_acc = smoothed_val_acc
             model_type = model_config["type"]
-            torch.save(
-                model.state_dict(),
-                f"experiment/model/bfoundation_model_{model_type}.pth",
-            )
+            
+            # 保存到两个位置：旧路径（兼容）+ Recorder 路径
+            legacy_path = f"experiment/model/best_model_{model_type}.pth"
+            torch.save(model.state_dict(), legacy_path)
+            
+            # 使用 Recorder 保存 checkpoint
+            recorder.save_checkpoint(model, optimizer, epoch, is_best=True)
             print(f"  💾 保存最佳模型 (Smoothed Acc: {smoothed_val_acc:.2f}%)")
 
     print("-" * 60)
@@ -553,6 +593,7 @@ def main():
     best_model_path = f"experiment/model/best_model_{model_config['type']}.pth"
     if os.path.exists(best_model_path):
         model.load_state_dict(torch.load(best_model_path))
+        print(f"[加载] 模型: {best_model_path}")
 
     # 在验证集上评估
     val_loss, val_acc, all_labels, all_preds, all_probs = evaluate(
@@ -564,12 +605,27 @@ def main():
     print(f"[调试] 预测数量: {len(all_preds)}")
     print(f"[调试] 标签分布: {np.bincount(all_labels)}")
 
+    # 使用 compute_metrics 计算详细指标
+    test_metrics = compute_metrics(
+        np.array(all_labels), 
+        np.array(all_preds),
+        class_names=['一般', '正常', '良好']
+    )
+    
     # 详细评估报告
     cm = detailed_evaluation(all_labels, all_preds, all_probs)
 
     # 绘制混淆矩阵
     cm_path = f"experiment/test/result/confusion_matrix_{model_config['type']}.png"
     plot_confusion_matrix(cm, save_path=cm_path)
+
+    # ========== 保存实验结果 ==========
+    recorder.save_result(test_metrics, training_time / 60)
+    recorder.save_confusion_matrix(np.array(all_labels), np.array(all_preds))
+    recorder.save_training_curves()
+    
+    print(f"\n[Recorder] 实验结果已保存到: {recorder.run_dir}")
+    print(recorder.get_summary())
 
     # 7. 保存实验日志
     model_type = model_config["type"]
