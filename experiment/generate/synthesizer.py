@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 import logging
 import matplotlib.pyplot as plt
+from enhanced_noise import RealWorldNoiseGenerator
 
 plt.rcParams["font.family"] = "SimHei"
 plt.rcParams["axes.unicode_minus"] = False
@@ -365,7 +366,11 @@ class MassageDataSynthesizer:
         self.wave_gen = WaveformGenerator(base_freq=0.5)
         self.jitter = TemporalJitter()
         self.boundart_gen = FuzzyBoundaryGenerator(overlap_ratio=overlap_ratio)
-        self.noise_gen = IndustalNoiseGenerator()
+        self.noise_gen = RealWorldNoiseGenerator(
+            sampling_rate=50.0,
+            duration=20.0,
+            seed=seed
+        )
         # 类别配置
         self.categories = {
             "身体表征很差": 0,
@@ -410,9 +415,9 @@ class MassageDataSynthesizer:
             phase_shift=0.1,
         )
 
-        # 5. 添加工业噪声（独立噪声）
-        noisy_s1 = self.noise_gen.add_noise(wave_s1, t)
-        noisy_s2 = self.noise_gen.add_noise(wave_s2, t)
+        # 5. 添加增强噪声（独立噪声）
+        noisy_s1, _ = self.noise_gen.apply_all_noise(wave_s1)
+        noisy_s2, _ = self.noise_gen.apply_all_noise(wave_s2)
 
         # 物理约束
         noisy_s1 = np.maximum(noisy_s1, 5.0)

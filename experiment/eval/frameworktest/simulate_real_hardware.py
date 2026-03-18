@@ -53,6 +53,13 @@ if __name__ == "__main__":
     )
     import yaml
     config_path = "experiment/dataset/config.yaml"
+    # 如果找不到配置文件，使用默认配置
+    import os
+    if not os.path.exists(config_path):
+        # 从当前目录向上查找
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(current_dir, "..", "..", "dataset", "config.yaml")
+    
     with open(config_path, "r", encoding="utf-8") as f:
         dataset_config = yaml.safe_load(f)
     
