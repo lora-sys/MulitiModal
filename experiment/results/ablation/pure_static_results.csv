@@ -1,0 +1,2 @@
+experiment_id,config,test_accuracy,test_f1,model_type,notes
+pure_static,pure_static_features,93.44,0.9232,MLP,纯静态特征独立模型

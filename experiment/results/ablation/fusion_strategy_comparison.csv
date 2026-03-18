@@ -1,0 +1,16 @@
+fusion_strategy,config,test_accuracy,val_f1,accuracy_drop,notes
+baseline_a,full,98.74,0.9915,0.00,简单拼接
+baseline_a,no_dynamic,76.82,0.7810,21.93,去掉动态波形
+baseline_a,no_static_basic,98.46,0.9771,0.28,去掉身体特征
+baseline_a,no_static_scores,98.18,0.9814,0.56,去掉舌面诊评分
+baseline_a,no_constitution,98.74,0.9828,0.00,去掉体质
+attention_fusion,full,99.16,0.9917,0.00,自注意力融合
+attention_fusion,no_dynamic,81.01,0.8305,18.16,去掉动态波形
+attention_fusion,no_static_basic,98.74,0.9799,0.42,去掉身体特征
+attention_fusion,no_static_scores,98.88,0.9802,0.28,去掉舌面诊评分
+attention_fusion,no_constitution,98.74,0.9812,0.42,去掉体质
+gated_fusion,full,98.74,0.9917,0.00,门控融合
+gated_fusion,no_dynamic,84.64,0.8707,14.11,去掉动态波形
+gated_fusion,no_static_basic,97.63,0.9772,1.12,去掉身体特征
+gated_fusion,no_static_scores,98.46,0.9813,0.28,去掉舌面诊评分
+gated_fusion,no_constitution,98.46,0.9855,0.28,去掉体质
