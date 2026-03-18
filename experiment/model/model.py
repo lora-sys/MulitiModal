@@ -169,63 +169,6 @@ class TransformerEncoder(nn.Module):
 
 
 # =========================================================================
-# 主控中心: 按摩椅双流融合网络 (MassageFusionNet)
-# =========================================================================
-class MassageFusionNet(nn.Module):
-    def __init__(
-        self, model_type="inception", num_classes=3, dyn_channels=2, static_dim=4 ,**kwarg):
-        super(MassageFusionNet, self).__init__()
-
-        self.model_type = model_type
-        print(f"🏗️ 初始化模型架构: [ {model_type.upper()} ]")
-
-        # --- 1. 左路: 动态时序流 (根据配置切换) ---
-        if model_type == "inception":
-            self.dynamic_encoder = InceptionEncoder(in_channels=dyn_channels)
-            dyn_out_dim = 128
-        elif model_type == "lstm":
-            self.dynamic_encoder = LSTMEncoder(in_channels=dyn_channels)
-            dyn_out_dim = 64
-        elif model_type == "cnn":
-            self.dynamic_encoder = SimpleCNNEncoder(in_channels=dyn_channels)
-            dyn_out_dim = 32
-        elif model_type == 'transformer':
-            self.dynamic_encoder = TransformerEncoder(
-                in_channels=dyn_channels,
-                d_model=kwarg.get("d_model",64),
-                nhead=kwarg.get("nhead",4),
-                num_layers=kwarg.get("num_layers",2),
-            )
-            dyn_out_dim = kwarg.get("d_model",64)
-        else:
-            raise ValueError(f"未知模型类型: {model_type}")
-
-        # --- 2. 右路: 静态画像流 (MLP) ---
-        self.static_encoder = nn.Sequential(
-            nn.Linear(static_dim, 16),
-            nn.BatchNorm1d(16),
-            nn.ReLU(),
-            nn.Linear(16, 16),
-            nn.ReLU(),
-        )
-
-        # --- 3. 汇合: 融合层 ---
-        fusion_input_dim = dyn_out_dim + 16
-        self.classifier = nn.Sequential(
-            nn.Linear(fusion_input_dim, 64),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(64, num_classes),
-        )
-
-    def forward(self, x_dynamic, x_static):
-        dyn_feat = self.dynamic_encoder(x_dynamic)
-        stat_feat = self.static_encoder(x_static)
-        combined = torch.cat((dyn_feat, stat_feat), dim=1)
-        return self.classifier(combined)
-
-
-# =========================================================================
 # Multi-Expert Fusion 模型 (多专家融合)
 # =========================================================================
 
@@ -987,13 +930,7 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
             dropout=kwarg.get('dropout', 0.3),
         )
     
-    return MassageFusionNet(
-        model_type=model_type,
-        num_classes=num_classes,
-        dyn_channels=dyn_channels,
-        static_dim=static_dim,
-        **kwarg
-    )
+    raise ValueError(f"Unknown model type: {model_type}")
 
 
 # =========================================================================
@@ -1001,11 +938,28 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
 # =========================================================================
 if __name__ == "__main__":
     dummy_dyn = torch.randn(8, 2, 1000)
-    dummy_stat = torch.randn(8, 4)
+    dummy_static_basic = torch.randn(8, 4)
+    dummy_static_scores = torch.randn(8, 2)
+    dummy_constitution = torch.randint(0, 38, (8,))
 
-    for m_type in ["cnn", "lstm", "inception","transformer"]:
-        print(f"\n--- Testing {m_type} ---")
-        model = MassageFusionNet(model_type=m_type)
-        output = model(dummy_dyn, dummy_stat)
-        print(f"输出形状: {output.shape}")
-        print("✅ 通过")
+    print("Testing all 5 fusion models:")
+    print("=" * 60)
+    
+    # 测试所有5个模型
+    models = [
+        ("baseline_a", "Simple Concat"),
+        ("baseline_b", "Late Fusion Transformer"),
+        ("baseline_c", "Multi-Expert Fusion"),
+        ("baseline_d", "Simple Attention"),
+        ("baseline_e", "Gated Fusion"),
+    ]
+    
+    for model_type, model_name in models:
+        print(f"\n--- Testing {model_name} ({model_type}) ---")
+        try:
+            model = get_model(model_type, num_classes=3)
+            output = model(dummy_dyn, dummy_static_basic, dummy_static_scores, dummy_constitution)
+            print(f"输出形状: {output.shape}")
+            print("✅ 通过")
+        except Exception as e:
+            print(f"❌ 失败: {e}")
