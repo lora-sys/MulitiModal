@@ -676,6 +676,262 @@ class LateFusionTransformerModel(nn.Module):
 
 
 # =========================================================================
+# Baseline D: Simple Self-Attention Fusion
+# 描述: 将所有模态特征拼接成序列，使用自注意力进行融合
+# 目的: 验证注意力机制是否能更好地平衡各模态贡献
+# =========================================================================
+class SimpleAttentionFusion(nn.Module):
+    """
+    Baseline D - 简单自注意力融合
+    
+    架构:
+    - 各模态编码器输出 → 拼接成 (B, 4, shared_dim)
+    - 使用 Multi-Head Self-Attention 进行融合
+    - 全局池化 → MLP → 分类
+    
+    优点: 
+    - 简单直接，易于理解
+    - 自注意力可以学习模态间的关联
+    """
+    def __init__(
+        self,
+        num_classes=3,
+        num_constitutions=38,
+        shared_dim=64,
+        hidden_dim=128,
+        num_heads=4,
+        dropout=0.3
+    ):
+        super().__init__()
+        
+        self.shared_dim = shared_dim
+        self.num_modalities = 4
+        
+        # 编码器（与 baseline_a 相同）
+        self.waveform_encoder = nn.Sequential(
+            nn.Conv1d(2, 32, kernel_size=7, padding=3),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(64, shared_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(shared_dim),
+            nn.ReLU(),
+        )
+        
+        self.static_basic_encoder = nn.Sequential(
+            nn.Linear(4, 32),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(32, shared_dim),
+            nn.ReLU(),
+        )
+        
+        self.static_scores_encoder = nn.Sequential(
+            nn.Linear(2, 16),
+            nn.ReLU(),
+            nn.Linear(16, shared_dim),
+            nn.ReLU(),
+        )
+        
+        self.constitution_embedding = nn.Sequential(
+            nn.Embedding(num_constitutions, 16),
+            nn.Flatten(),
+            nn.Linear(16, shared_dim),
+            nn.ReLU(),
+        )
+        
+        # Self-Attention 融合层
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=shared_dim,
+            nhead=num_heads,
+            dim_feedforward=shared_dim * 2,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.self_attention = nn.TransformerEncoder(encoder_layer, num_layers=1)
+        
+        # 分类头
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(shared_dim),
+            nn.Linear(shared_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes),
+        )
+        
+        # 存储结构信息
+        self.fusion_type = "self_attention"
+        self.model_name = "SimpleAttentionFusion"
+        
+    def forward(self, dynamic, static_basic, static_scores, constitution):
+        """
+        Args:
+            dynamic: (B, 2, 1000)
+            static_basic: (B, 4)
+            static_scores: (B, 2)
+            constitution: (B,)
+            
+        Returns:
+            logits: (B, num_classes)
+        """
+        # 1. 独立编码
+        z_wave = self.waveform_encoder(dynamic).mean(dim=-1)  # (B, shared_dim)
+        z_basic = self.static_basic_encoder(static_basic)
+        z_scores = self.static_scores_encoder(static_scores)
+        z_const = self.constitution_embedding(constitution)
+        
+        # 2. 组装 tokens: (B, 4, shared_dim)
+        tokens = torch.stack([z_wave, z_basic, z_scores, z_const], dim=1)
+        
+        # 3. Self-Attention 融合
+        fused_tokens = self.self_attention(tokens)
+        
+        # 4. 全局平均池化
+        pooled = fused_tokens.mean(dim=1)  # (B, shared_dim)
+        
+        # 5. 分类
+        logits = self.classifier(pooled)
+        
+        return logits
+
+
+# =========================================================================
+# Baseline E: Gated Fusion
+# 描述: 使用门控机制动态控制各模态的贡献权重
+# 目的: 防止模型"偷懒"，强制利用所有模态
+# =========================================================================
+class GatedFusion(nn.Module):
+    """
+    Baseline E - 门控融合
+    
+    架构:
+    - 各模态编码器输出 → 独立投影
+    - 门控网络学习每个模态的权重
+    - 加权融合 → MLP → 分类
+    
+    优点:
+    - 动态平衡各模态贡献
+    - 可以防止某个模态主导
+    """
+    def __init__(
+        self,
+        num_classes=3,
+        num_constitutions=38,
+        shared_dim=64,
+        hidden_dim=128,
+        dropout=0.3
+    ):
+        super().__init__()
+        
+        self.shared_dim = shared_dim
+        
+        # 编码器（与 baseline_a 相同）
+        self.waveform_encoder = nn.Sequential(
+            nn.Conv1d(2, 32, kernel_size=7, padding=3),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(64, shared_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(shared_dim),
+            nn.ReLU(),
+        )
+        
+        self.static_basic_encoder = nn.Sequential(
+            nn.Linear(4, 32),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(32, shared_dim),
+            nn.ReLU(),
+        )
+        
+        self.static_scores_encoder = nn.Sequential(
+            nn.Linear(2, 16),
+            nn.ReLU(),
+            nn.Linear(16, shared_dim),
+            nn.ReLU(),
+        )
+        
+        self.constitution_embedding = nn.Sequential(
+            nn.Embedding(num_constitutions, 16),
+            nn.Flatten(),
+            nn.Linear(16, shared_dim),
+            nn.ReLU(),
+        )
+        
+        # 独立投影层
+        self.dynamic_proj = nn.Linear(shared_dim, shared_dim)
+        self.static_basic_proj = nn.Linear(shared_dim, shared_dim)
+        self.static_scores_proj = nn.Linear(shared_dim, shared_dim)
+        self.constitution_proj = nn.Linear(shared_dim, shared_dim)
+        
+        # 门控网络：输入所有模态特征，输出4个门控值
+        self.gate_network = nn.Sequential(
+            nn.Linear(shared_dim * 4, 64),
+            nn.ReLU(),
+            nn.Linear(64, 4),
+            nn.Softmax(dim=-1)  # 归一化为概率分布
+        )
+        
+        # 分类头
+        self.classifier = nn.Sequential(
+            nn.LayerNorm(shared_dim),
+            nn.Linear(shared_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_classes),
+        )
+        
+        # 存储结构信息
+        self.fusion_type = "gated"
+        self.model_name = "GatedFusion"
+        
+    def forward(self, dynamic, static_basic, static_scores, constitution):
+        """
+        Args:
+            dynamic: (B, 2, 1000)
+            static_basic: (B, 4)
+            static_scores: (B, 2)
+            constitution: (B,)
+            
+        Returns:
+            logits: (B, num_classes)
+        """
+        # 1. 独立编码
+        z_wave = self.waveform_encoder(dynamic).mean(dim=-1)  # (B, shared_dim)
+        z_basic = self.static_basic_encoder(static_basic)
+        z_scores = self.static_scores_encoder(static_scores)
+        z_const = self.constitution_embedding(constitution)
+        
+        # 2. 独立投影
+        z_wave_proj = self.dynamic_proj(z_wave)
+        z_basic_proj = self.static_basic_proj(z_basic)
+        z_scores_proj = self.static_scores_proj(z_scores)
+        z_const_proj = self.constitution_proj(z_const)
+        
+        # 3. 计算门控权重
+        all_features = torch.cat([z_wave, z_basic, z_scores, z_const], dim=-1)
+        gates = self.gate_network(all_features)  # (B, 4)
+        
+        # 4. 加权融合
+        gates = gates.unsqueeze(-1)  # (B, 4, 1)
+        features = torch.stack([z_wave_proj, z_basic_proj, z_scores_proj, z_const_proj], dim=1)  # (B, 4, shared_dim)
+        fused = (features * gates).sum(dim=1)  # (B, shared_dim)
+        
+        # 5. 分类
+        logits = self.classifier(fused)
+        
+        return logits
+
+
+# =========================================================================
 # 工厂函数: 根据配置返回模型
 # =========================================================================
 def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=4, **kwarg):
@@ -708,6 +964,26 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
             num_constitutions=kwarg.get('num_constitutions', 38),
             shared_dim=kwarg.get('shared_dim', 128),
             hidden_dim=kwarg.get('hidden_dim', 256),
+            dropout=kwarg.get('dropout', 0.3),
+        )
+    
+    # 新增的融合策略
+    if model_type == "attention_fusion" or model_type == "baseline_d":
+        return SimpleAttentionFusion(
+            num_classes=num_classes,
+            num_constitutions=kwarg.get('num_constitutions', 38),
+            shared_dim=kwarg.get('shared_dim', 64),
+            hidden_dim=kwarg.get('hidden_dim', 128),
+            num_heads=kwarg.get('num_heads', 4),
+            dropout=kwarg.get('dropout', 0.3),
+        )
+    
+    if model_type == "gated_fusion" or model_type == "baseline_e":
+        return GatedFusion(
+            num_classes=num_classes,
+            num_constitutions=kwarg.get('num_constitutions', 38),
+            shared_dim=kwarg.get('shared_dim', 64),
+            hidden_dim=kwarg.get('hidden_dim', 128),
             dropout=kwarg.get('dropout', 0.3),
         )
     
