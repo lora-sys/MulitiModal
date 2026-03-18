@@ -1,0 +1,242 @@
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 19968 (\N{CJK UNIFIED IDEOGRAPH-4E00}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 33324 (\N{CJK UNIFIED IDEOGRAPH-822C}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 27491 (\N{CJK UNIFIED IDEOGRAPH-6B63}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 24120 (\N{CJK UNIFIED IDEOGRAPH-5E38}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 33391 (\N{CJK UNIFIED IDEOGRAPH-826F}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 22909 (\N{CJK UNIFIED IDEOGRAPH-597D}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 19968 (\N{CJK UNIFIED IDEOGRAPH-4E00}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 33324 (\N{CJK UNIFIED IDEOGRAPH-822C}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 27491 (\N{CJK UNIFIED IDEOGRAPH-6B63}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 24120 (\N{CJK UNIFIED IDEOGRAPH-5E38}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 33391 (\N{CJK UNIFIED IDEOGRAPH-826F}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 22909 (\N{CJK UNIFIED IDEOGRAPH-597D}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 19968 (\N{CJK UNIFIED IDEOGRAPH-4E00}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 33324 (\N{CJK UNIFIED IDEOGRAPH-822C}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 27491 (\N{CJK UNIFIED IDEOGRAPH-6B63}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 24120 (\N{CJK UNIFIED IDEOGRAPH-5E38}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 33391 (\N{CJK UNIFIED IDEOGRAPH-826F}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 22909 (\N{CJK UNIFIED IDEOGRAPH-597D}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 19968 (\N{CJK UNIFIED IDEOGRAPH-4E00}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 33324 (\N{CJK UNIFIED IDEOGRAPH-822C}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 27491 (\N{CJK UNIFIED IDEOGRAPH-6B63}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 24120 (\N{CJK UNIFIED IDEOGRAPH-5E38}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 33391 (\N{CJK UNIFIED IDEOGRAPH-826F}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 22909 (\N{CJK UNIFIED IDEOGRAPH-597D}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 19968 (\N{CJK UNIFIED IDEOGRAPH-4E00}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 33324 (\N{CJK UNIFIED IDEOGRAPH-822C}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 27491 (\N{CJK UNIFIED IDEOGRAPH-6B63}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 24120 (\N{CJK UNIFIED IDEOGRAPH-5E38}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 33391 (\N{CJK UNIFIED IDEOGRAPH-826F}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 22909 (\N{CJK UNIFIED IDEOGRAPH-597D}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 19968 (\N{CJK UNIFIED IDEOGRAPH-4E00}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 33324 (\N{CJK UNIFIED IDEOGRAPH-822C}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 27491 (\N{CJK UNIFIED IDEOGRAPH-6B63}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 24120 (\N{CJK UNIFIED IDEOGRAPH-5E38}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 33391 (\N{CJK UNIFIED IDEOGRAPH-826F}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 22909 (\N{CJK UNIFIED IDEOGRAPH-597D}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+
+============================================================
+Experiment: C_cross_attention
+Run: r1, Seed: 42
+Model: Cross-Attention Gate Fusion
+Device: cuda
+============================================================
+[Recorder] 配置已保存: experiment/results/C_cross_attention/r1/run_config.json
+📦 UnifiedNPZDataSource initialized: 4770 samples
+📦 UnifiedNPZDataSource initialized: 4770 samples
+📦 预加载数据到内存...
+✅ 预加载完成: 4770 样本
+Train: 3339, Val: 715, Test: 716
+Epoch [ 1] Train Loss: 0.3461 | Val Loss: 2.5756 Acc: 43.64% F1: 0.3560 *
+Epoch [ 2] Train Loss: 0.1706 | Val Loss: 0.1384 Acc: 93.99% F1: 0.9403 *
+Epoch [ 3] Train Loss: 0.1619 | Val Loss: 1.0614 Acc: 65.03% F1: 0.6262
+Epoch [ 4] Train Loss: 0.1258 | Val Loss: 1.7066 Acc: 53.71% F1: 0.4772
+Epoch [ 5] Train Loss: 0.0886 | Val Loss: 0.0508 Acc: 98.46% F1: 0.9847 *
+Epoch [ 6] Train Loss: 0.1143 | Val Loss: 0.2370 Acc: 90.21% F1: 0.9018
+Epoch [ 7] Train Loss: 0.0876 | Val Loss: 0.0797 Acc: 97.06% F1: 0.9714
+Epoch [ 8] Train Loss: 0.0831 | Val Loss: 0.8057 Acc: 77.90% F1: 0.7774
+Epoch [ 9] Train Loss: 0.0838 | Val Loss: 0.1800 Acc: 94.27% F1: 0.9436
+Epoch [10] Train Loss: 0.0792 | Val Loss: 0.8427 Acc: 72.17% F1: 0.7161
+Epoch [11] Train Loss: 0.0804 | Val Loss: 0.0293 Acc: 99.02% F1: 0.9901 *
+Epoch [12] Train Loss: 0.0663 | Val Loss: 0.0932 Acc: 96.50% F1: 0.9653
+Epoch [13] Train Loss: 0.0518 | Val Loss: 0.0553 Acc: 97.90% F1: 0.9793
+Epoch [14] Train Loss: 0.0546 | Val Loss: 0.0315 Acc: 98.88% F1: 0.9886
+Epoch [15] Train Loss: 0.0519 | Val Loss: 0.0219 Acc: 99.30% F1: 0.9929 *
+Epoch [16] Train Loss: 0.0342 | Val Loss: 0.0281 Acc: 98.74% F1: 0.9873
+Epoch [17] Train Loss: 0.0433 | Val Loss: 0.0178 Acc: 99.16% F1: 0.9913
+Epoch [18] Train Loss: 0.0444 | Val Loss: 0.0178 Acc: 99.30% F1: 0.9928
+Epoch [19] Train Loss: 0.0367 | Val Loss: 0.0164 Acc: 99.44% F1: 0.9942 *
+Epoch [20] Train Loss: 0.0341 | Val Loss: 0.0151 Acc: 99.58% F1: 0.9956 *
+[Recorder] 结果已保存到: experiment/results/experiments_log.csv
+[Recorder] 混淆矩阵已保存: experiment/results/C_cross_attention/r1/figures/confusion_matrix.png
+[Recorder] 训练曲线已保存: experiment/results/C_cross_attention/r1/figures/training_curves.png
+
+==================================================
+Experiment: C_cross_attention / r1
+Seed: 42
+==================================================
+Model: Cross-Attention Gate Fusion
+Fusion: cross_attention
+LR: 0.001, Batch: 32
+
+Best Val: Epoch 20
+  Loss: 0.0151
+  Acc:  99.58%
+  F1:   0.9956
+
+Test Results:
+  Acc: 98.88%
+  F1:  0.9889
+  Time: 3.7 min
+
+============================================================
+Experiment: C_cross_attention
+Run: r2, Seed: 1042
+Model: Cross-Attention Gate Fusion
+Device: cuda
+============================================================
+[Recorder] 配置已保存: experiment/results/C_cross_attention/r2/run_config.json
+📦 UnifiedNPZDataSource initialized: 4770 samples
+📦 UnifiedNPZDataSource initialized: 4770 samples
+📦 预加载数据到内存...
+✅ 预加载完成: 4770 样本
+Train: 3339, Val: 715, Test: 716
+Epoch [ 1] Train Loss: 0.3661 | Val Loss: 3.7763 Acc: 34.13% F1: 0.1696 *
+Epoch [ 2] Train Loss: 0.1923 | Val Loss: 0.8475 Acc: 67.69% F1: 0.6185 *
+Epoch [ 3] Train Loss: 0.1291 | Val Loss: 0.5391 Acc: 80.56% F1: 0.7986 *
+Epoch [ 4] Train Loss: 0.1219 | Val Loss: 0.7487 Acc: 74.97% F1: 0.7391
+Epoch [ 5] Train Loss: 0.1170 | Val Loss: 0.2047 Acc: 91.47% F1: 0.9134 *
+Epoch [ 6] Train Loss: 0.0889 | Val Loss: 0.0529 Acc: 98.04% F1: 0.9801 *
+Epoch [ 7] Train Loss: 0.0891 | Val Loss: 0.2207 Acc: 91.61% F1: 0.9148
+Epoch [ 8] Train Loss: 0.0804 | Val Loss: 0.1816 Acc: 93.01% F1: 0.9289
+Epoch [ 9] Train Loss: 0.0693 | Val Loss: 0.2709 Acc: 89.93% F1: 0.8974
+Epoch [10] Train Loss: 0.0661 | Val Loss: 1.8278 Acc: 55.52% F1: 0.4749
+Epoch [11] Train Loss: 0.0678 | Val Loss: 0.1172 Acc: 96.36% F1: 0.9631
+Epoch [12] Train Loss: 0.0558 | Val Loss: 0.0687 Acc: 97.34% F1: 0.9729
+Epoch [13] Train Loss: 0.0535 | Val Loss: 0.0460 Acc: 98.32% F1: 0.9829 *
+Epoch [14] Train Loss: 0.0449 | Val Loss: 0.1462 Acc: 94.97% F1: 0.9485
+Epoch [15] Train Loss: 0.0439 | Val Loss: 0.0433 Acc: 97.76% F1: 0.9774
+Epoch [16] Train Loss: 0.0426 | Val Loss: 0.0467 Acc: 98.18% F1: 0.9815
+Epoch [17] Train Loss: 0.0425 | Val Loss: 0.0337 Acc: 98.60% F1: 0.9858 *
+Epoch [18] Train Loss: 0.0358 | Val Loss: 0.0325 Acc: 98.46% F1: 0.9843
+Epoch [19] Train Loss: 0.0320 | Val Loss: 0.0247 Acc: 99.16% F1: 0.9915 *
+Epoch [20] Train Loss: 0.0420 | Val Loss: 0.0272 Acc: 99.16% F1: 0.9915
+[Recorder] 结果已保存到: experiment/results/experiments_log.csv
+[Recorder] 混淆矩阵已保存: experiment/results/C_cross_attention/r2/figures/confusion_matrix.png
+[Recorder] 训练曲线已保存: experiment/results/C_cross_attention/r2/figures/training_curves.png
+
+==================================================
+Experiment: C_cross_attention / r2
+Seed: 1042
+==================================================
+Model: Cross-Attention Gate Fusion
+Fusion: cross_attention
+LR: 0.001, Batch: 32
+
+Best Val: Epoch 19
+  Loss: 0.0247
+  Acc:  99.16%
+  F1:   0.9915
+
+Test Results:
+  Acc: 99.02%
+  F1:  0.9903
+  Time: 5.1 min
+
+============================================================
+Experiment: C_cross_attention
+Run: r3, Seed: 2042
+Model: Cross-Attention Gate Fusion
+Device: cuda
+============================================================
+[Recorder] 配置已保存: experiment/results/C_cross_attention/r3/run_config.json
+📦 UnifiedNPZDataSource initialized: 4770 samples
+📦 UnifiedNPZDataSource initialized: 4770 samples
+📦 预加载数据到内存...
+✅ 预加载完成: 4770 样本
+Train: 3339, Val: 715, Test: 716
+Epoch [ 1] Train Loss: 0.3604 | Val Loss: 0.1863 Acc: 92.31% F1: 0.9232 *
+Epoch [ 2] Train Loss: 0.1778 | Val Loss: 1.7643 Acc: 58.32% F1: 0.5529
+Epoch [ 3] Train Loss: 0.1649 | Val Loss: 2.5485 Acc: 40.00% F1: 0.3222
+Epoch [ 4] Train Loss: 0.1259 | Val Loss: 0.0874 Acc: 96.50% F1: 0.9652 *
+Epoch [ 5] Train Loss: 0.1088 | Val Loss: 0.1425 Acc: 94.83% F1: 0.9490
+Epoch [ 6] Train Loss: 0.1247 | Val Loss: 0.0697 Acc: 97.20% F1: 0.9722 *
+Epoch [ 7] Train Loss: 0.0762 | Val Loss: 0.0517 Acc: 98.18% F1: 0.9820 *
+Epoch [ 8] Train Loss: 0.0904 | Val Loss: 0.1454 Acc: 95.38% F1: 0.9543
+Epoch [ 9] Train Loss: 0.0910 | Val Loss: 0.1156 Acc: 95.38% F1: 0.9542
+Epoch [10] Train Loss: 0.0569 | Val Loss: 0.0641 Acc: 97.76% F1: 0.9779
+Epoch [11] Train Loss: 0.0522 | Val Loss: 0.3876 Acc: 88.53% F1: 0.8848
+Epoch [12] Train Loss: 0.0682 | Val Loss: 0.4375 Acc: 85.73% F1: 0.8573
+Epoch [13] Train Loss: 0.0586 | Val Loss: 0.0343 Acc: 98.88% F1: 0.9889 *
+Epoch [14] Train Loss: 0.0604 | Val Loss: 0.0276 Acc: 99.16% F1: 0.9917 *
+Epoch [15] Train Loss: 0.0553 | Val Loss: 0.0523 Acc: 98.04% F1: 0.9807
+Epoch [16] Train Loss: 0.0435 | Val Loss: 0.0359 Acc: 98.88% F1: 0.9889
+Epoch [17] Train Loss: 0.0405 | Val Loss: 0.0293 Acc: 99.02% F1: 0.9903
+Epoch [18] Train Loss: 0.0412 | Val Loss: 0.0261 Acc: 99.02% F1: 0.9903
+Epoch [19] Train Loss: 0.0382 | Val Loss: 0.0242 Acc: 99.44% F1: 0.9944 *
+Epoch [20] Train Loss: 0.0325 | Val Loss: 0.0259 Acc: 99.02% F1: 0.9903
+[Recorder] 结果已保存到: experiment/results/experiments_log.csv
+[Recorder] 混淆矩阵已保存: experiment/results/C_cross_attention/r3/figures/confusion_matrix.png
+[Recorder] 训练曲线已保存: experiment/results/C_cross_attention/r3/figures/training_curves.png
+
+==================================================
+Experiment: C_cross_attention / r3
+Seed: 2042
+==================================================
+Model: Cross-Attention Gate Fusion
+Fusion: cross_attention
+LR: 0.001, Batch: 32
+
+Best Val: Epoch 19
+  Loss: 0.0242
+  Acc:  99.44%
+  F1:   0.9944
+
+Test Results:
+  Acc: 98.88%
+  F1:  0.9889
+  Time: 7.4 min
+
+============================================================
+Baseline C Summary (3 runs)
+============================================================
+Val Acc:  99.39 ± 0.17
+Test Acc: 98.93 ± 0.07
+Test F1:  0.9894 ± 0.0007
+Time:     5.4 min
