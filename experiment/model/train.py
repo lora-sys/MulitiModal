@@ -94,7 +94,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, model_type, sch
         optimizer.zero_grad()
 
         # 根据模型类型调用不同的 forward
-        if model_type == "multimodal":
+        if model_type in ["multimodal", "simple_concat", "late_fusion", "baseline_a", "baseline_b", "baseline_c"]:
             static_scores = batch['static_scores'].to(device)
             constitution = batch['constitution'].to(device)
             outputs = model(dynamic, static_basic, static_scores, constitution)
@@ -135,7 +135,7 @@ def evaluate(model, dataloader, criterion, device, model_type):
             labels = batch['label'].to(device)
 
             # 根据模型类型调用不同的 forward
-            if model_type == "multimodal":
+            if model_type in ["multimodal", "simple_concat", "late_fusion", "baseline_a", "baseline_b", "baseline_c"]:
                 static_scores = batch['static_scores'].to(device)
                 constitution = batch['constitution'].to(device)
                 outputs = model(dynamic, static_basic, static_scores, constitution)
@@ -294,7 +294,7 @@ def get_parameter_groups(model, model_type, encoder_lr_ratio=0.1):
     """
     if model_type != "multimodal":
         # 非多模态模型，所有参数使用相同学习率
-        return [{"params": model.parameters(), "lr": None}]
+        return [{"params": model.parameters(), "lr": 1.0, "lr_ratio": 1.0}]
 
     # 多模态模型：分割参数组
     encoder_params = []
