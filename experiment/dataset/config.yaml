@@ -17,9 +17,9 @@ source:
       身体表征正常: 2
       身体表征良好: 3
 
-# 统一 NPZ 数据集配置（增强版，包含9种噪声类型）
+# 统一 NPZ 数据集配置（扩展版，最大化利用静态数据）
 unified_npz:
-  path: "experiment/model/unified_dataset_enhanced_final.npz"  # 5840 样本，3分类，增强版噪声
+  path: "experiment/model/unified_dataset_expanded.npz"  # 7862 样本，训练集6684样本，3分类
 
 # 预处理器配置
 preprocessor:
