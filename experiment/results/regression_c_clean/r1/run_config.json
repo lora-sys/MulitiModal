@@ -1,0 +1,16 @@
+{
+  "model_type": "baseline_c",
+  "noise_augmentation": false,
+  "batch_size": 32,
+  "num_epochs": 50,
+  "learning_rate": 0.001,
+  "device": "cuda",
+  "best_val_mae": 3.3228047566143006,
+  "best_epoch": 48,
+  "test_metrics": {
+    "mae": 3.437955730366257,
+    "rmse": 4.588508086113508,
+    "r2": 0.9236212354524851,
+    "pearson": 0.9615221619606018
+  }
+}
