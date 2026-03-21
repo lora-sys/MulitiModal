@@ -1,0 +1,189 @@
+==========================================
+开始训练所有回归模型
+==========================================
+[1/6] 训练 baseline_a (干净)...
+/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/torch/optim/lr_scheduler.py:1427: UserWarning: To get the last learning rate computed by the scheduler, please use `get_last_lr()`.
+  _warn_get_lr_called_within_step(self)
+[*] 使用设备: cuda
+
+============================================================
+📊 加载数据
+============================================================
+[*] 加载数据集: 9406 样本 from experiment/model/unified_dataset_regression.npz
+[*] 数据集划分: 训练=7519, 验证=933, 测试=954
+
+============================================================
+🧠 创建模型
+============================================================
+[*] 模型类型: baseline_a
+[*] 损失函数: MSE
+
+============================================================
+🚀 开始训练
+============================================================
+[*] 噪声增强: 否
+Epoch [1/50] - Train Loss: 4109.6250, Train MAE: 61.9442 | Val Loss: 4081.7045, Val MAE: 61.9133, Val RMSE: 64.0607, Val R²: -14.1717, Val Pearson: -0.0959
+Epoch [2/50] - Train Loss: 1312.2236, Train MAE: 27.3615 | Val Loss: 112.1414, Val MAE: 8.8898, Val RMSE: 10.5679, Val R²: 0.5871, Val Pearson: 0.7882
+Epoch [3/50] - Train Loss: 150.5287, Train MAE: 9.7594 | Val Loss: 55.8665, Val MAE: 6.1536, Val RMSE: 7.4381, Val R²: 0.7955, Val Pearson: 0.9000
+Epoch [4/50] - Train Loss: 131.5183, Train MAE: 9.1005 | Val Loss: 46.8709, Val MAE: 5.5278, Val RMSE: 6.8022, Val R²: 0.8289, Val Pearson: 0.9116
+Epoch [5/50] - Train Loss: 124.3465, Train MAE: 8.8506 | Val Loss: 43.3211, Val MAE: 5.3040, Val RMSE: 6.5669, Val R²: 0.8406, Val Pearson: 0.9184
+Epoch [6/50] - Train Loss: 116.7616, Train MAE: 8.5538 | Val Loss: 40.7041, Val MAE: 5.1211, Val RMSE: 6.3829, Val R²: 0.8494, Val Pearson: 0.9232
+Epoch [7/50] - Train Loss: 114.6425, Train MAE: 8.4576 | Val Loss: 38.3352, Val MAE: 5.0080, Val RMSE: 6.1980, Val R²: 0.8580, Val Pearson: 0.9272
+Epoch [8/50] - Train Loss: 114.2004, Train MAE: 8.4708 | Val Loss: 38.1948, Val MAE: 4.7957, Val RMSE: 6.1512, Val R²: 0.8601, Val Pearson: 0.9290
+Epoch [9/50] - Train Loss: 111.0401, Train MAE: 8.3206 | Val Loss: 36.6700, Val MAE: 4.9007, Val RMSE: 6.0620, Val R²: 0.8641, Val Pearson: 0.9323
+Epoch [10/50] - Train Loss: 111.4303, Train MAE: 8.3398 | Val Loss: 35.3929, Val MAE: 4.8187, Val RMSE: 5.9645, Val R²: 0.8685, Val Pearson: 0.9338
+Epoch [11/50] - Train Loss: 111.1120, Train MAE: 8.3307 | Val Loss: 36.4746, Val MAE: 4.9122, Val RMSE: 6.0423, Val R²: 0.8650, Val Pearson: 0.9338
+Epoch [12/50] - Train Loss: 109.3752, Train MAE: 8.2454 | Val Loss: 45.2717, Val MAE: 5.7084, Val RMSE: 6.7529, Val R²: 0.8314, Val Pearson: 0.9340
+Epoch [13/50] - Train Loss: 109.3235, Train MAE: 8.1950 | Val Loss: 34.9301, Val MAE: 4.7086, Val RMSE: 5.8898, Val R²: 0.8717, Val Pearson: 0.9347
+Epoch [14/50] - Train Loss: 106.9738, Train MAE: 8.1873 | Val Loss: 62.9549, Val MAE: 6.7827, Val RMSE: 8.0115, Val R²: 0.7627, Val Pearson: 0.9367
+Epoch [15/50] - Train Loss: 110.5242, Train MAE: 8.2669 | Val Loss: 36.6426, Val MAE: 4.8714, Val RMSE: 6.0569, Val R²: 0.8644, Val Pearson: 0.9366
+Epoch [16/50] - Train Loss: 105.0699, Train MAE: 8.0686 | Val Loss: 35.4323, Val MAE: 4.8476, Val RMSE: 5.9570, Val R²: 0.8688, Val Pearson: 0.9346
+Epoch [17/50] - Train Loss: 107.5304, Train MAE: 8.1386 | Val Loss: 37.8016, Val MAE: 4.7925, Val RMSE: 6.0968, Val R²: 0.8626, Val Pearson: 0.9321
+Epoch [18/50] - Train Loss: 105.8425, Train MAE: 8.1148 | Val Loss: 69.3576, Val MAE: 7.1699, Val RMSE: 8.4043, Val R²: 0.7389, Val Pearson: 0.9395
+[*] 早停于 epoch 18
+
+============================================================
+✅ 训练完成
+============================================================
+[*] 最佳验证MAE: 4.7086 (Epoch 13)
+
+============================================================
+📊 测试集评估
+============================================================
+Test Loss: 36.0776
+Test MAE: 4.7838
+Test RMSE: 6.0046
+Test R²: 0.8692
+Test Pearson: 0.9337
+
+[*] 结果已保存到: experiment/results/regression_a_clean/r1
+[2/6] 训练 baseline_a (噪声增强)...
+[*] 使用设备: cuda
+
+============================================================
+📊 加载数据
+============================================================
+[*] 加载数据集: 9406 样本 from experiment/model/unified_dataset_regression.npz
+[*] 数据集划分: 训练=7519, 验证=933, 测试=954
+
+============================================================
+🧠 创建模型
+============================================================
+[*] 模型类型: baseline_a
+[*] 损失函数: MSE
+
+============================================================
+🚀 开始训练
+============================================================
+[*] 噪声增强: 是
+Traceback (most recent call last):
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 437, in <module>
+    main()
+    ~~~~^^
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 328, in main
+    train_loss, train_mae = train_epoch(model, train_loader, criterion, optimizer, device, args.model_type, args.noise_augmentation)
+                            ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 180, in train_epoch
+    dynamic = apply_noise_augmentation(dynamic, noise_types, probability, intensity)
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 77, in apply_noise_augmentation
+    return add_drift_noise(waveform, noise_intensity * 0.5)
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 55, in add_drift_noise
+    return waveform + drift
+           ~~~~~~~~~^~~~~~~
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!
+[3/6] 训练 baseline_b (干净)...
+/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/torch/optim/lr_scheduler.py:1427: UserWarning: To get the last learning rate computed by the scheduler, please use `get_last_lr()`.
+  _warn_get_lr_called_within_step(self)
+[*] 使用设备: cuda
+
+============================================================
+📊 加载数据
+============================================================
+[*] 加载数据集: 9406 样本 from experiment/model/unified_dataset_regression.npz
+[*] 数据集划分: 训练=7519, 验证=933, 测试=954
+
+============================================================
+🧠 创建模型
+============================================================
+[*] 模型类型: baseline_b
+[*] 损失函数: MSE
+
+============================================================
+🚀 开始训练
+============================================================
+[*] 噪声增强: 否
+Epoch [1/50] - Train Loss: 4076.8250, Train MAE: 61.6839 | Val Loss: 4046.1339, Val MAE: 61.6284, Val RMSE: 63.7817, Val R²: -14.0398, Val Pearson: 0.2073
+Epoch [2/50] - Train Loss: 2136.0564, Train MAE: 40.8855 | Val Loss: 415.7232, Val MAE: 16.3979, Val RMSE: 20.4523, Val R²: -0.5465, Val Pearson: 0.3898
+Epoch [3/50] - Train Loss: 216.2081, Train MAE: 11.5334 | Val Loss: 57.6643, Val MAE: 6.0922, Val RMSE: 7.5867, Val R²: 0.7872, Val Pearson: 0.8978
+Epoch [4/50] - Train Loss: 80.4952, Train MAE: 7.1716 | Val Loss: 47.0856, Val MAE: 5.4111, Val RMSE: 6.8758, Val R²: 0.8252, Val Pearson: 0.9189
+Epoch [5/50] - Train Loss: 72.6564, Train MAE: 6.7679 | Val Loss: 39.8557, Val MAE: 4.9085, Val RMSE: 6.3043, Val R²: 0.8531, Val Pearson: 0.9277
+Epoch [6/50] - Train Loss: 69.0538, Train MAE: 6.6665 | Val Loss: 41.1465, Val MAE: 4.9950, Val RMSE: 6.4261, Val R²: 0.8473, Val Pearson: 0.9302
+Epoch [7/50] - Train Loss: 67.7558, Train MAE: 6.5174 | Val Loss: 34.9241, Val MAE: 4.6454, Val RMSE: 5.9097, Val R²: 0.8709, Val Pearson: 0.9346
+Epoch [8/50] - Train Loss: 64.0883, Train MAE: 6.3280 | Val Loss: 34.9054, Val MAE: 4.5704, Val RMSE: 5.9528, Val R²: 0.8690, Val Pearson: 0.9327
+Epoch [9/50] - Train Loss: 63.5824, Train MAE: 6.3255 | Val Loss: 32.9929, Val MAE: 4.5215, Val RMSE: 5.7548, Val R²: 0.8776, Val Pearson: 0.9372
+Epoch [10/50] - Train Loss: 61.8043, Train MAE: 6.1932 | Val Loss: 42.5916, Val MAE: 4.9710, Val RMSE: 6.5212, Val R²: 0.8428, Val Pearson: 0.9334
+Epoch [11/50] - Train Loss: 61.1417, Train MAE: 6.1896 | Val Loss: 32.6016, Val MAE: 4.4573, Val RMSE: 5.7438, Val R²: 0.8780, Val Pearson: 0.9403
+Epoch [12/50] - Train Loss: 62.0345, Train MAE: 6.2014 | Val Loss: 37.5986, Val MAE: 4.8730, Val RMSE: 6.1286, Val R²: 0.8611, Val Pearson: 0.9426
+Epoch [13/50] - Train Loss: 59.2101, Train MAE: 6.0422 | Val Loss: 34.6661, Val MAE: 4.5872, Val RMSE: 5.9015, Val R²: 0.8712, Val Pearson: 0.9378
+Epoch [14/50] - Train Loss: 56.5604, Train MAE: 5.9179 | Val Loss: 35.8635, Val MAE: 4.4759, Val RMSE: 6.0375, Val R²: 0.8652, Val Pearson: 0.9430
+Epoch [15/50] - Train Loss: 55.4966, Train MAE: 5.8331 | Val Loss: 42.1320, Val MAE: 4.8218, Val RMSE: 6.5312, Val R²: 0.8423, Val Pearson: 0.9406
+Epoch [16/50] - Train Loss: 54.4946, Train MAE: 5.7997 | Val Loss: 29.4486, Val MAE: 4.2000, Val RMSE: 5.4545, Val R²: 0.8900, Val Pearson: 0.9460
+Epoch [17/50] - Train Loss: 49.7004, Train MAE: 5.4979 | Val Loss: 343.4570, Val MAE: 16.9017, Val RMSE: 18.6905, Val R²: -0.2915, Val Pearson: 0.8743
+Epoch [18/50] - Train Loss: 44.6296, Train MAE: 5.2089 | Val Loss: 841.2228, Val MAE: 25.1120, Val RMSE: 28.7532, Val R²: -2.0565, Val Pearson: 0.4649
+Epoch [19/50] - Train Loss: 47.0803, Train MAE: 5.3458 | Val Loss: 574.6804, Val MAE: 22.1800, Val RMSE: 24.1685, Val R²: -1.1595, Val Pearson: 0.8124
+Epoch [20/50] - Train Loss: 42.7497, Train MAE: 5.1128 | Val Loss: 483.8936, Val MAE: 20.7868, Val RMSE: 22.1524, Val R²: -0.8142, Val Pearson: 0.8900
+Epoch [21/50] - Train Loss: 42.6608, Train MAE: 5.0999 | Val Loss: 860.0273, Val MAE: 25.7358, Val RMSE: 29.0922, Val R²: -2.1290, Val Pearson: 0.5355
+[*] 早停于 epoch 21
+
+============================================================
+✅ 训练完成
+============================================================
+[*] 最佳验证MAE: 4.2000 (Epoch 16)
+
+============================================================
+📊 测试集评估
+============================================================
+Test Loss: 28.2062
+Test MAE: 4.0153
+Test RMSE: 5.3123
+Test R²: 0.8976
+Test Pearson: 0.9491
+
+[*] 结果已保存到: experiment/results/regression_b_clean/r1
+[4/6] 训练 baseline_b (噪声增强)...
+[*] 使用设备: cuda
+
+============================================================
+📊 加载数据
+============================================================
+[*] 加载数据集: 9406 样本 from experiment/model/unified_dataset_regression.npz
+[*] 数据集划分: 训练=7519, 验证=933, 测试=954
+
+============================================================
+🧠 创建模型
+============================================================
+[*] 模型类型: baseline_b
+[*] 损失函数: MSE
+
+============================================================
+🚀 开始训练
+============================================================
+[*] 噪声增强: 是
+Traceback (most recent call last):
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 437, in <module>
+    main()
+    ~~~~^^
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 328, in main
+    train_loss, train_mae = train_epoch(model, train_loader, criterion, optimizer, device, args.model_type, args.noise_augmentation)
+                            ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 180, in train_epoch
+    dynamic = apply_noise_augmentation(dynamic, noise_types, probability, intensity)
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 77, in apply_noise_augmentation
+    return add_drift_noise(waveform, noise_intensity * 0.5)
+  File "/home/lora/repos/MulitiModal/experiment/model/train_regression.py", line 55, in add_drift_noise
+    return waveform + drift
+           ~~~~~~~~~^~~~~~~
+RuntimeError: Expected all tensors to be on the same device, but found at least two devices, cuda:0 and cpu!
+[5/6] 训练 baseline_c (干净)...
+/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/torch/optim/lr_scheduler.py:1427: UserWarning: To get the last learning rate computed by the scheduler, please use `get_last_lr()`.
+  _warn_get_lr_called_within_step(self)
