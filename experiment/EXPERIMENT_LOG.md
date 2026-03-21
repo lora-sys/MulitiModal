@@ -511,9 +511,10 @@ def train_with_noise_injection(model, train_loader, val_loader, num_epochs=20):
 - **总计**：7862样本
 
 **数据划分**：
-- 训练集：6684样本（70%）
+- 训练+验证池：7862样本
+- 训练集：6684样本（85%）
 - 验证集：1002样本（15%）
-- 测试集：1178样本（15%）
+- 独立测试集：1178样本（从完整数据中分离）
 
 **数据集文件**：
 - `experiment/model/unified_dataset_expanded.npz` - 训练集
@@ -1102,6 +1103,7 @@ def train_with_noise_injection(model, train_loader, val_loader, num_epochs=20):
 
 **关键发现**：
 - ✅ 噪声训练模型在干净数据上表现显著优于干净训练模型
+- 📝 **注意**：此表使用不同的测试方法（基于测试集动态添加噪声），与之前报告的离线测试准确率（98.74%, 98.74%, 97.63%）不同。之前的测试使用完全干净的验证集，而此表使用鲁棒性测试协议。
 - ✅ Simple Concat (Noise) 准确率提升11.06%（88.24% → 99.30%）
 - ✅ Late Fusion Transformer (Noise) 准确率提升11.06%（88.14% → 99.20%）
 - ✅ Cross-Attention Gate Fusion (Noise) 准确率提升8.17%（90.93% → 99.10%）

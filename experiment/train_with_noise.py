@@ -49,6 +49,7 @@ class NoisyDataset:
         n = len(base_dataset)
         n_noisy = int(n * noise_prob)
         self.noisy_indices = np.random.choice(n, n_noisy, replace=False)
+        self.noisy_indices_set = set(self.noisy_indices)  # 转换为set以提高查找效率
         
         # 为每个噪声样本分配噪声类型
         self.noise_type_map = {}
@@ -62,7 +63,7 @@ class NoisyDataset:
         item = self.base_dataset[idx]
         
         # 如果是噪声样本，添加噪声
-        if idx in self.noisy_indices:
+        if idx in self.noisy_indices_set:  # 使用set进行O(1)查找
             noise_type = self.noise_type_map[idx]
             item['dynamic'] = self._add_noise(item['dynamic'], noise_type)
         
@@ -116,10 +117,12 @@ def train_with_noise(
     output_dir,
     epochs=20,
     noise_prob=0.5,
-    noise_types=['baseline', 'gaussian', 'amplitude', 'motion', 'channel_dropout'],
+    noise_types=None,
     verbose=True
 ):
     """噪声注入训练"""
+    if noise_types is None:
+        noise_types = ['baseline', 'gaussian', 'amplitude', 'motion', 'channel_dropout']
     # 设置随机种子
     random.seed(seed)
     np.random.seed(seed)

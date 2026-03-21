@@ -19,8 +19,9 @@ plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 sns.set_style("whitegrid")
 sns.set_palette("husl")
 
-# 输出目录
-OUTPUT_DIR = 'experiment/results/visualization'
+# 输出目录（锚定到脚本文件所在目录）
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, 'results', 'visualization')
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
@@ -88,7 +89,11 @@ def plot_robustness_comparison():
     noise_types = ['干净数据', 'Baseline\nOffset', 'Gaussian\n噪声', 
                   'Amplitude\n缩放', 'Motion\n伪影', 'Channel\nDropout']
     
-    clean_models = [88.24, 88.24, 88.33, 88.24, 88.04, 84.05]
+    # 为每个架构使用对应的clean baseline
+    clean_concat = [88.24, 88.24, 88.33, 88.24, 88.04, 84.05]
+    clean_transformer = [88.14, 88.04, 88.24, 88.14, 87.54, 85.14]
+    clean_cross_attn = [90.93, 91.23, 91.13, 90.43, 90.83, 79.76]
+    
     noise_concat = [99.30, 99.30, 99.20, 99.10, 99.30, 99.30]
     noise_transformer = [99.20, 99.30, 99.20, 99.10, 99.10, 99.20]
     noise_cross_attn = [99.10, 99.20, 99.20, 99.10, 99.10, 98.80]
@@ -96,12 +101,14 @@ def plot_robustness_comparison():
     fig, ax = plt.subplots(figsize=(14, 8))
     
     x = np.arange(len(noise_types))
-    width = 0.2
+    width = 0.15
     
-    bars1 = ax.bar(x - 1.5*width, clean_models, width, label='干净训练', color='#FF6B6B')
-    bars2 = ax.bar(x - 0.5*width, noise_concat, width, label='噪声训练\n(Simple Concat)', color='#4ECDC4')
-    bars3 = ax.bar(x + 0.5*width, noise_transformer, width, label='噪声训练\n(Late Fusion)', color='#45B7D1')
-    bars4 = ax.bar(x + 1.5*width, noise_cross_attn, width, label='噪声训练\n(Cross-Attention)', color='#96CEB4')
+    bars1 = ax.bar(x - 2.25*width, clean_concat, width, label='Simple Concat\n(干净训练)', color='#FF6B6B', alpha=0.7)
+    bars2 = ax.bar(x - 1.5*width, clean_transformer, width, label='Late Fusion\n(干净训练)', color='#FF8E8E', alpha=0.7)
+    bars3 = ax.bar(x - 0.75*width, clean_cross_attn, width, label='Cross-Attention\n(干净训练)', color='#FFB1B1', alpha=0.7)
+    bars4 = ax.bar(x + 0.75*width, noise_concat, width, label='Simple Concat\n(噪声训练)', color='#4ECDC4')
+    bars5 = ax.bar(x + 1.5*width, noise_transformer, width, label='Late Fusion\n(噪声训练)', color='#45B7D1')
+    bars6 = ax.bar(x + 2.25*width, noise_cross_attn, width, label='Cross-Attention\n(噪声训练)', color='#96CEB4')
     
     ax.set_title('鲁棒性详细对比：干净训练 vs 噪声训练', fontsize=16, fontweight='bold', pad=20)
     ax.set_ylabel('准确率 (%)', fontsize=12)
@@ -455,8 +462,19 @@ def plot_best_models_summary():
     
     # 3. 模型大小对比
     ax3 = fig.add_subplot(gs[1, 1])
-    bars4 = ax3.bar(models, [float(size.replace('K', '').replace('M', '')) * (1000 if 'K' in size else 1) 
-                           for size in model_size], color=colors)
+    
+    # 解析模型大小（支持K和M单位）
+    def parse_size(size_str):
+        size_str = size_str.strip().upper()
+        if 'M' in size_str:
+            return float(size_str.replace('M', '')) * 1_000_000
+        elif 'K' in size_str:
+            return float(size_str.replace('K', '')) * 1_000
+        else:
+            return float(size_str)
+    
+    model_size_values = [parse_size(size) for size in model_size]
+    bars4 = ax3.bar(models, model_size_values, color=colors)
     
     ax3.set_title('模型大小对比', fontsize=12, fontweight='bold')
     ax3.set_ylabel('参数量', fontsize=10)

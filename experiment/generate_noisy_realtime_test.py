@@ -9,12 +9,25 @@ import pandas as pd
 
 def generate_noisy_realtime_test(
     output_path='experiment/streamdata/noisy_realtime_test.csv',
-    noise_types=['baseline', 'gaussian', 'amplitude', 'motion', 'channel_dropout'],
+    noise_types=None,
     noise_prob=0.5,
     duration=180,  # 3分钟
     sample_rate=50,
     seed=42
 ):
+    """
+    生成带噪声的实时测试数据
+    
+    Args:
+        output_path: 输出文件路径
+        noise_types: 噪声类型列表，默认为['baseline', 'gaussian', 'amplitude', 'motion', 'channel_dropout']
+        noise_prob: 噪声概率
+        duration: 持续时间（秒）
+        sample_rate: 采样率
+        seed: 随机种子
+    """
+    if noise_types is None:
+        noise_types = ['baseline', 'gaussian', 'amplitude', 'motion', 'channel_dropout']
     """
     生成带噪声的实时测试数据
     

@@ -79,14 +79,15 @@ def generate_expanded_dataset(
         print(f"      标签 {label}: {len(indices)} 条波形")
 
     # [4/5] 确定每标签采样数量
-    print(f"\n[4/5] 计算采样策略...")
+    print("\n[4/5] 计算采样策略...")
+
+    # 无条件计算各标签的可用数量
+    label_1_available = len(profiles[profiles['身体状态'] == 1])
+    label_2_available = len(profiles[profiles['身体状态'] == 2])
+    label_3_available = len(profiles[profiles['身体状态'] == 3])
 
     if samples_per_label is None:
         # 最大化采样策略
-        label_1_available = len(profiles[profiles['身体状态'] == 1])
-        label_2_available = len(profiles[profiles['身体状态'] == 2])
-        label_3_available = len(profiles[profiles['身体状态'] == 3])
-
         # 标签1和2采样相同数量（保持平衡），受限于较小的标签1
         samples_per_label = {
             1: min(label_1_available, label_2_available),  # 2996
@@ -97,9 +98,9 @@ def generate_expanded_dataset(
         # 使用指定的采样数量
         if isinstance(samples_per_label, int):
             samples_per_label = {
-                1: min(samples_per_label, len(profiles[profiles['身体状态'] == 1])),
-                2: min(samples_per_label, len(profiles[profiles['身体状态'] == 2])),
-                3: min(samples_per_label, len(profiles[profiles['身体状态'] == 3]))
+                1: min(samples_per_label, label_1_available),
+                2: min(samples_per_label, label_2_available),
+                3: min(samples_per_label, label_3_available)
             }
 
     total_samples = sum(samples_per_label.values())
