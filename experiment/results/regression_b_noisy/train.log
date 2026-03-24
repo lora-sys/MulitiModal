@@ -1,0 +1,77 @@
+/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/torch/optim/lr_scheduler.py:1427: UserWarning: To get the last learning rate computed by the scheduler, please use `get_last_lr()`.
+  _warn_get_lr_called_within_step(self)
+[*] 使用设备: cuda
+
+============================================================
+📊 加载数据
+============================================================
+[*] 加载数据集: 9406 样本 from experiment/model/unified_dataset_regression.npz
+[*] 数据集划分: 训练=7519, 验证=933, 测试=954
+
+============================================================
+🧠 创建模型
+============================================================
+[*] 模型类型: baseline_b
+[*] 损失函数: MSE
+
+============================================================
+🚀 开始训练
+============================================================
+[*] 噪声增强: 是
+Epoch [1/50] - Train Loss: 4104.0579, Train MAE: 61.9021 | Val Loss: 4077.8966, Val MAE: 61.8838, Val RMSE: 64.0302, Val R²: -14.1573, Val Pearson: 0.0958
+Epoch [2/50] - Train Loss: 2056.6688, Train MAE: 39.5855 | Val Loss: 341.6348, Val MAE: 15.0272, Val RMSE: 18.5140, Val R²: -0.2672, Val Pearson: 0.3979
+Epoch [3/50] - Train Loss: 202.4819, Train MAE: 11.1874 | Val Loss: 55.3081, Val MAE: 5.8885, Val RMSE: 7.4498, Val R²: 0.7948, Val Pearson: 0.8961
+Epoch [4/50] - Train Loss: 78.6282, Train MAE: 7.0662 | Val Loss: 40.7946, Val MAE: 5.0511, Val RMSE: 6.4194, Val R²: 0.8477, Val Pearson: 0.9223
+Epoch [5/50] - Train Loss: 70.1358, Train MAE: 6.6584 | Val Loss: 41.1922, Val MAE: 5.0615, Val RMSE: 6.3844, Val R²: 0.8493, Val Pearson: 0.9233
+Epoch [6/50] - Train Loss: 66.6560, Train MAE: 6.4467 | Val Loss: 46.1851, Val MAE: 5.6653, Val RMSE: 6.8580, Val R²: 0.8261, Val Pearson: 0.9315
+Epoch [7/50] - Train Loss: 62.8027, Train MAE: 6.3305 | Val Loss: 40.8482, Val MAE: 5.0588, Val RMSE: 6.4064, Val R²: 0.8483, Val Pearson: 0.9292
+Epoch [8/50] - Train Loss: 62.0400, Train MAE: 6.2215 | Val Loss: 33.9073, Val MAE: 4.5132, Val RMSE: 5.8509, Val R²: 0.8734, Val Pearson: 0.9356
+Epoch [9/50] - Train Loss: 61.0809, Train MAE: 6.1710 | Val Loss: 33.8303, Val MAE: 4.5083, Val RMSE: 5.8246, Val R²: 0.8746, Val Pearson: 0.9375
+Epoch [10/50] - Train Loss: 55.4179, Train MAE: 5.9105 | Val Loss: 32.3561, Val MAE: 4.4104, Val RMSE: 5.7001, Val R²: 0.8799, Val Pearson: 0.9388
+Epoch [11/50] - Train Loss: 58.9361, Train MAE: 6.0479 | Val Loss: 32.3593, Val MAE: 4.2875, Val RMSE: 5.6932, Val R²: 0.8802, Val Pearson: 0.9390
+Epoch [12/50] - Train Loss: 58.0233, Train MAE: 5.9974 | Val Loss: 32.1491, Val MAE: 4.2845, Val RMSE: 5.6802, Val R²: 0.8807, Val Pearson: 0.9426
+Epoch [13/50] - Train Loss: 56.1122, Train MAE: 5.9270 | Val Loss: 30.3128, Val MAE: 4.1868, Val RMSE: 5.5434, Val R²: 0.8864, Val Pearson: 0.9420
+Epoch [14/50] - Train Loss: 54.4097, Train MAE: 5.8070 | Val Loss: 38.3063, Val MAE: 4.6772, Val RMSE: 6.1820, Val R²: 0.8587, Val Pearson: 0.9405
+Epoch [15/50] - Train Loss: 54.9428, Train MAE: 5.8607 | Val Loss: 31.6354, Val MAE: 4.1862, Val RMSE: 5.6586, Val R²: 0.8816, Val Pearson: 0.9444
+Epoch [16/50] - Train Loss: 54.3897, Train MAE: 5.8105 | Val Loss: 28.7393, Val MAE: 4.0765, Val RMSE: 5.3834, Val R²: 0.8929, Val Pearson: 0.9466
+Epoch [17/50] - Train Loss: 52.2653, Train MAE: 5.7119 | Val Loss: 27.6576, Val MAE: 4.0473, Val RMSE: 5.2683, Val R²: 0.8974, Val Pearson: 0.9474
+Epoch [18/50] - Train Loss: 53.9200, Train MAE: 5.7892 | Val Loss: 30.7793, Val MAE: 4.3048, Val RMSE: 5.6009, Val R²: 0.8840, Val Pearson: 0.9464
+Epoch [19/50] - Train Loss: 52.8717, Train MAE: 5.7264 | Val Loss: 27.8066, Val MAE: 3.9864, Val RMSE: 5.3151, Val R²: 0.8956, Val Pearson: 0.9483
+Epoch [20/50] - Train Loss: 50.9978, Train MAE: 5.6276 | Val Loss: 29.2198, Val MAE: 4.1630, Val RMSE: 5.4335, Val R²: 0.8909, Val Pearson: 0.9479
+Epoch [21/50] - Train Loss: 51.0987, Train MAE: 5.6113 | Val Loss: 31.7136, Val MAE: 4.3013, Val RMSE: 5.6769, Val R²: 0.8809, Val Pearson: 0.9490
+Epoch [22/50] - Train Loss: 51.6412, Train MAE: 5.6283 | Val Loss: 26.7005, Val MAE: 3.9015, Val RMSE: 5.1992, Val R²: 0.9001, Val Pearson: 0.9513
+Epoch [23/50] - Train Loss: 51.4787, Train MAE: 5.6320 | Val Loss: 27.7290, Val MAE: 3.9652, Val RMSE: 5.2881, Val R²: 0.8966, Val Pearson: 0.9500
+Epoch [24/50] - Train Loss: 50.1709, Train MAE: 5.5126 | Val Loss: 24.4935, Val MAE: 3.7759, Val RMSE: 4.9750, Val R²: 0.9085, Val Pearson: 0.9538
+Epoch [25/50] - Train Loss: 48.7806, Train MAE: 5.4905 | Val Loss: 26.5760, Val MAE: 3.8768, Val RMSE: 5.1834, Val R²: 0.9007, Val Pearson: 0.9522
+Epoch [26/50] - Train Loss: 49.6753, Train MAE: 5.5493 | Val Loss: 23.7119, Val MAE: 3.6876, Val RMSE: 4.9068, Val R²: 0.9110, Val Pearson: 0.9546
+Epoch [27/50] - Train Loss: 49.4176, Train MAE: 5.4769 | Val Loss: 24.8315, Val MAE: 3.7653, Val RMSE: 4.9998, Val R²: 0.9076, Val Pearson: 0.9550
+Epoch [28/50] - Train Loss: 47.7569, Train MAE: 5.4007 | Val Loss: 25.0703, Val MAE: 3.7961, Val RMSE: 5.0386, Val R²: 0.9061, Val Pearson: 0.9557
+Epoch [29/50] - Train Loss: 48.0369, Train MAE: 5.4190 | Val Loss: 29.6002, Val MAE: 4.1911, Val RMSE: 5.4734, Val R²: 0.8892, Val Pearson: 0.9547
+Epoch [30/50] - Train Loss: 46.6790, Train MAE: 5.3327 | Val Loss: 25.3782, Val MAE: 3.7758, Val RMSE: 5.0590, Val R²: 0.9054, Val Pearson: 0.9548
+Epoch [31/50] - Train Loss: 46.0547, Train MAE: 5.3081 | Val Loss: 22.7134, Val MAE: 3.6030, Val RMSE: 4.7875, Val R²: 0.9153, Val Pearson: 0.9577
+Epoch [32/50] - Train Loss: 45.5793, Train MAE: 5.2634 | Val Loss: 23.2082, Val MAE: 3.6603, Val RMSE: 4.8419, Val R²: 0.9133, Val Pearson: 0.9571
+Epoch [33/50] - Train Loss: 45.1612, Train MAE: 5.2588 | Val Loss: 29.1205, Val MAE: 4.1161, Val RMSE: 5.4197, Val R²: 0.8914, Val Pearson: 0.9567
+Epoch [34/50] - Train Loss: 45.3174, Train MAE: 5.2555 | Val Loss: 24.0558, Val MAE: 3.6561, Val RMSE: 4.9211, Val R²: 0.9105, Val Pearson: 0.9582
+Epoch [35/50] - Train Loss: 44.2329, Train MAE: 5.1760 | Val Loss: 22.1274, Val MAE: 3.5251, Val RMSE: 4.7300, Val R²: 0.9173, Val Pearson: 0.9586
+Epoch [36/50] - Train Loss: 44.8309, Train MAE: 5.2071 | Val Loss: 47.0306, Val MAE: 5.5277, Val RMSE: 6.8647, Val R²: 0.8258, Val Pearson: 0.9516
+Epoch [37/50] - Train Loss: 44.2636, Train MAE: 5.1756 | Val Loss: 22.8601, Val MAE: 3.5616, Val RMSE: 4.7947, Val R²: 0.9150, Val Pearson: 0.9586
+Epoch [38/50] - Train Loss: 44.3218, Train MAE: 5.2044 | Val Loss: 23.6326, Val MAE: 3.6359, Val RMSE: 4.8953, Val R²: 0.9114, Val Pearson: 0.9583
+Epoch [39/50] - Train Loss: 43.2521, Train MAE: 5.1317 | Val Loss: 44.5577, Val MAE: 5.3108, Val RMSE: 6.6461, Val R²: 0.8367, Val Pearson: 0.9556
+Epoch [40/50] - Train Loss: 43.7080, Train MAE: 5.1348 | Val Loss: 22.4982, Val MAE: 3.6093, Val RMSE: 4.7574, Val R²: 0.9163, Val Pearson: 0.9590
+[*] 早停于 epoch 40
+
+============================================================
+✅ 训练完成
+============================================================
+[*] 最佳验证MAE: 3.5251 (Epoch 35)
+
+============================================================
+📊 测试集评估
+============================================================
+Test Loss: 23.6229
+Test MAE: 3.6100
+Test RMSE: 4.8615
+Test R²: 0.9143
+Test Pearson: 0.9568
+
+[*] 结果已保存到: experiment/results/regression_b_noisy

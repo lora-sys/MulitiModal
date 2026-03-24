@@ -1,0 +1,113 @@
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 19968 (\N{CJK UNIFIED IDEOGRAPH-4E00}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 33324 (\N{CJK UNIFIED IDEOGRAPH-822C}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 27491 (\N{CJK UNIFIED IDEOGRAPH-6B63}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 24120 (\N{CJK UNIFIED IDEOGRAPH-5E38}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 33391 (\N{CJK UNIFIED IDEOGRAPH-826F}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:422: UserWarning: Glyph 22909 (\N{CJK UNIFIED IDEOGRAPH-597D}) missing from font(s) DejaVu Sans.
+  plt.tight_layout()
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 19968 (\N{CJK UNIFIED IDEOGRAPH-4E00}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 33324 (\N{CJK UNIFIED IDEOGRAPH-822C}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 27491 (\N{CJK UNIFIED IDEOGRAPH-6B63}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 24120 (\N{CJK UNIFIED IDEOGRAPH-5E38}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 33391 (\N{CJK UNIFIED IDEOGRAPH-826F}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+/home/lora/repos/MulitiModal/experiment/recorder/recorder.py:425: UserWarning: Glyph 22909 (\N{CJK UNIFIED IDEOGRAPH-597D}) missing from font(s) DejaVu Sans.
+  plt.savefig(path, dpi=150, bbox_inches='tight')
+
+============================================================
+Experiment: baseline_a_noise
+Run: r1, Seed: 42
+Model: Simple Concatenation
+Device: cuda
+Noise Prob: 0.5
+============================================================
+[Recorder] 配置已保存: experiment/results/baseline_a_noisy/baseline_a_noise/r1/run_config.json
+📦 UnifiedNPZDataSource initialized: 6684 samples
+📦 UnifiedNPZDataSource initialized: 6684 samples
+📦 预加载数据到内存...
+✅ 预加载完成: 6684 样本
+Train: 4678, Val: 1002, Test: 1004
+Epoch [ 1] Train Loss: 55.0815 | Val Loss: 3.6770 Acc: 96.31% F1: 0.9621 *
+Epoch [ 2] Train Loss: 25.8488 | Val Loss: 6.0533 Acc: 92.22% F1: 0.9184
+Epoch [ 3] Train Loss: 20.1599 | Val Loss: 3.5889 Acc: 96.51% F1: 0.9679 *
+Epoch [ 4] Train Loss: 18.5602 | Val Loss: 2.3446 Acc: 97.41% F1: 0.9753 *
+Epoch [ 5] Train Loss: 15.9956 | Val Loss: 7.2767 Acc: 90.72% F1: 0.9030
+Epoch [ 6] Train Loss: 15.5125 | Val Loss: 1.8210 Acc: 98.00% F1: 0.9804 *
+Epoch [ 7] Train Loss: 15.0581 | Val Loss: 3.6055 Acc: 96.81% F1: 0.9673
+Epoch [ 8] Train Loss: 13.3715 | Val Loss: 46.9849 Acc: 69.26% F1: 0.6757
+Epoch [ 9] Train Loss: 11.9669 | Val Loss: 1.3415 Acc: 98.60% F1: 0.9867 *
+Epoch [10] Train Loss: 11.6209 | Val Loss: 1.8649 Acc: 98.10% F1: 0.9816
+Epoch [11] Train Loss: 11.7999 | Val Loss: 1.3419 Acc: 98.70% F1: 0.9873 *
+Epoch [12] Train Loss: 10.8127 | Val Loss: 2.4033 Acc: 97.60% F1: 0.9762
+Epoch [13] Train Loss: 11.1622 | Val Loss: 4.0174 Acc: 95.01% F1: 0.9441
+Epoch [14] Train Loss: 10.0127 | Val Loss: 1.1756 Acc: 98.70% F1: 0.9876 *
+Epoch [15] Train Loss: 10.1483 | Val Loss: 1.1919 Acc: 98.80% F1: 0.9885 *
+Epoch [16] Train Loss: 8.9185 | Val Loss: 1.4334 Acc: 98.40% F1: 0.9845
+Epoch [17] Train Loss: 9.7422 | Val Loss: 1.5112 Acc: 98.50% F1: 0.9853
+Epoch [18] Train Loss: 8.4340 | Val Loss: 1.2868 Acc: 98.50% F1: 0.9851
+Epoch [19] Train Loss: 9.6209 | Val Loss: 1.5645 Acc: 98.40% F1: 0.9845
+Epoch [20] Train Loss: 9.1787 | Val Loss: 1.7362 Acc: 98.10% F1: 0.9811
+Epoch [21] Train Loss: 8.7218 | Val Loss: 1.5719 Acc: 98.50% F1: 0.9853
+Epoch [22] Train Loss: 9.0501 | Val Loss: 1.6582 Acc: 98.40% F1: 0.9842
+Epoch [23] Train Loss: 9.0921 | Val Loss: 1.2053 Acc: 98.80% F1: 0.9879
+Epoch [24] Train Loss: 9.7278 | Val Loss: 1.5287 Acc: 98.60% F1: 0.9859
+Epoch [25] Train Loss: 9.7874 | Val Loss: 1.4660 Acc: 98.30% F1: 0.9836
+Epoch [26] Train Loss: 9.7927 | Val Loss: 1.3407 Acc: 98.70% F1: 0.9871
+Epoch [27] Train Loss: 10.8786 | Val Loss: 1.3316 Acc: 98.60% F1: 0.9862
+Epoch [28] Train Loss: 11.2158 | Val Loss: 1.3328 Acc: 98.70% F1: 0.9871
+Epoch [29] Train Loss: 12.8295 | Val Loss: 2.0462 Acc: 97.70% F1: 0.9771
+Epoch [30] Train Loss: 13.9321 | Val Loss: 2.8486 Acc: 97.11% F1: 0.9694
+Epoch [31] Train Loss: 13.1888 | Val Loss: 1.2982 Acc: 98.70% F1: 0.9871
+Epoch [32] Train Loss: 13.3401 | Val Loss: 1.7143 Acc: 98.20% F1: 0.9822
+Epoch [33] Train Loss: 13.9831 | Val Loss: 1.7617 Acc: 98.10% F1: 0.9824
+Epoch [34] Train Loss: 13.8162 | Val Loss: 1.3042 Acc: 98.50% F1: 0.9856
+Epoch [35] Train Loss: 12.8081 | Val Loss: 1.2163 Acc: 98.80% F1: 0.9887 *
+Epoch [36] Train Loss: 13.0707 | Val Loss: 1.3827 Acc: 98.70% F1: 0.9873
+Epoch [37] Train Loss: 13.0170 | Val Loss: 1.4221 Acc: 98.60% F1: 0.9867
+Epoch [38] Train Loss: 13.2514 | Val Loss: 1.6252 Acc: 98.40% F1: 0.9845
+Epoch [39] Train Loss: 11.9820 | Val Loss: 2.0725 Acc: 97.70% F1: 0.9778
+Epoch [40] Train Loss: 12.9100 | Val Loss: 1.1952 Acc: 98.80% F1: 0.9885
+Epoch [41] Train Loss: 12.3228 | Val Loss: 1.6549 Acc: 98.80% F1: 0.9877
+Epoch [42] Train Loss: 10.9941 | Val Loss: 1.5763 Acc: 98.60% F1: 0.9859
+Epoch [43] Train Loss: 9.9140 | Val Loss: 2.3203 Acc: 97.60% F1: 0.9775
+Epoch [44] Train Loss: 9.9756 | Val Loss: 1.4429 Acc: 98.50% F1: 0.9858
+Epoch [45] Train Loss: 11.5702 | Val Loss: 1.7911 Acc: 97.70% F1: 0.9761
+Epoch [46] Train Loss: 10.7269 | Val Loss: 2.0039 Acc: 98.10% F1: 0.9813
+Epoch [47] Train Loss: 11.5530 | Val Loss: 1.5090 Acc: 98.70% F1: 0.9871
+Epoch [48] Train Loss: 9.9109 | Val Loss: 1.7965 Acc: 98.60% F1: 0.9867
+Epoch [49] Train Loss: 8.6821 | Val Loss: 1.2745 Acc: 98.90% F1: 0.9896 *
+Epoch [50] Train Loss: 9.1026 | Val Loss: 2.5996 Acc: 97.60% F1: 0.9760
+[Recorder] 结果已保存到: experiment/results/baseline_a_noisy/experiments_log.csv
+[Recorder] 混淆矩阵已保存: experiment/results/baseline_a_noisy/baseline_a_noise/r1/figures/confusion_matrix.png
+[Recorder] 训练曲线已保存: experiment/results/baseline_a_noisy/baseline_a_noise/r1/figures/training_curves.png
+
+==================================================
+Experiment: baseline_a_noise / r1
+Seed: 42
+==================================================
+Model: Simple Concatenation
+Fusion: baseline_a
+LR: 0.001, Batch: 32
+
+Best Val: Epoch 49
+  Loss: 1.2745
+  Acc:  98.90%
+  F1:   0.9896
+
+Test Results:
+  Acc: 98.01%
+  F1:  0.9806
+  Time: 2.5 min
+
+✅ A 噪声注入训练完成!
+测试准确率: 98.01%
+测试F1分数: 0.9806
