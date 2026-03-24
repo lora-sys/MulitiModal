@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 from scipy.signal import butter, lfilter
-from model import MassageFusionNet
+from model import get_model
 
 
 # ==========================================
@@ -126,7 +126,7 @@ def run_streaming_engine():
     total_predictions = 0
     print("⚙️ 正在初始化流式推理引擎...")
     device = torch.device("cpu")
-    model = MassageFusionNet(model_type=MODEL_TYPE, num_classes=4).to(device)
+    model = get_model(model_type=MODEL_TYPE, num_classes=4, dyn_channels=2, static_dim=4).to(device)
     model.load_state_dict(torch.load(WEIGHT_PATH, map_location=device))
     model.eval()
 
