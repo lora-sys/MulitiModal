@@ -422,7 +422,7 @@ class SimpleConcatModel(nn.Module):
         # Waveform encoder: 使用 InceptionEncoder (统一编码器)
         self.waveform_encoder = InceptionEncoder(
             in_channels=2,
-            out_channels=32,
+            out_channels=shared_dim // 4,  # 64//4=16, 输出16*4=64维，匹配shared_dim
             depth=3
         )
         
@@ -479,8 +479,7 @@ class SimpleConcatModel(nn.Module):
             logits: (B, num_classes)
         """
         # 1. 独立编码
-        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim, 250)
-        z_wave = z_wave.mean(dim=-1)  # GAP → (B, shared_dim)
+        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim)
         
         z_basic = self.static_basic_encoder(static_basic)  # (B, shared_dim)
         z_scores = self.static_scores_encoder(static_scores)  # (B, shared_dim)
@@ -528,7 +527,7 @@ class LateFusionTransformerModel(nn.Module):
         # Waveform encoder: 使用 InceptionEncoder (统一编码器)
         self.waveform_encoder = InceptionEncoder(
             in_channels=2,
-            out_channels=32,
+            out_channels=shared_dim // 4,  # 64//4=16, 输出16*4=64维，匹配shared_dim
             depth=3
         )
         
@@ -591,7 +590,7 @@ class LateFusionTransformerModel(nn.Module):
         B = dynamic.size(0)
         
         # 1. 独立编码
-        z_wave = self.waveform_encoder(dynamic).mean(dim=-1)  # (B, shared_dim)
+        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim)
         z_basic = self.static_basic_encoder(static_basic)
         z_scores = self.static_scores_encoder(static_scores)
         z_const = self.constitution_embedding(constitution)
@@ -718,7 +717,7 @@ class SimpleAttentionFusion(nn.Module):
             logits: (B, num_classes)
         """
         # 1. 独立编码
-        z_wave = self.waveform_encoder(dynamic).mean(dim=-1)  # (B, shared_dim)
+        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim)
         z_basic = self.static_basic_encoder(static_basic)
         z_scores = self.static_scores_encoder(static_scores)
         z_const = self.constitution_embedding(constitution)
@@ -844,7 +843,7 @@ class GatedFusion(nn.Module):
             logits: (B, num_classes)
         """
         # 1. 独立编码
-        z_wave = self.waveform_encoder(dynamic).mean(dim=-1)  # (B, shared_dim)
+        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim)
         z_basic = self.static_basic_encoder(static_basic)
         z_scores = self.static_scores_encoder(static_scores)
         z_const = self.constitution_embedding(constitution)
