@@ -707,6 +707,14 @@ def k_fold_train(n_folds=5, num_epochs=30):
             model_type=model_config["type"],
             encoder_lr_ratio=train_config.get("encoder_lr_ratio", 0.1)
         )
+        
+        # 为每个参数组设置实际的学习率
+        base_lr = train_config["learning_rate"]
+        for group in param_groups:
+            if "lr_ratio" in group:
+                group["lr"] = base_lr * group["lr_ratio"]
+                del group["lr_ratio"]
+        
         optimizer = optim.Adam(param_groups)
         
         # 调度器
