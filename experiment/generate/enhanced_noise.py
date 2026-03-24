@@ -252,7 +252,6 @@ class RealWorldNoiseGenerator:
             # 标记为丢失
             mask[start:end] = 0
             # 丢失的值设为NaN（或者可以用插值）
-            noisy[start:end] = np.nan
 
         return noisy, mask
 

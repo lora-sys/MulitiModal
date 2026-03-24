@@ -10,7 +10,7 @@ sys.path.append("experiment/model")
 from csv_source import NPZDataSource
 from nk2_processor import NK2Preprocessor
 from massage_dataset import MassageDataset
-from model import MassageFusionNet
+from model import get_model
 import yaml
 
 # 配置
@@ -34,7 +34,7 @@ def evaluate_in_detail():
     loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
 
     # 加载模型
-    model = MassageFusionNet(model_type=MODEL_TYPE).to(DEVICE)
+    model = get_model(model_type=MODEL_TYPE, num_classes=3, dyn_channels=2, static_dim=4).to(DEVICE)
     model.load_state_dict(torch.load(MODEL_PATH))
     model.eval()
 
