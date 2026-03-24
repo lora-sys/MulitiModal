@@ -407,7 +407,7 @@ def main():
     scheduler_type = scheduler_cfg.get("type")
 
     if scheduler_type == "ReduceLROnPlateau":
-        scheduler = optim.lr_scheduler.ReduceLoroPlateau(
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode=scheduler_cfg.get("mode", "min"),
             patience=scheduler_cfg.get("patience", 5),
@@ -702,7 +702,11 @@ def k_fold_train(n_folds=5, num_epochs=30):
         criterion = nn.CrossEntropyLoss()
         
         # Parameter Groups
-        param_groups = get_parameter_groups(model, train_config)
+        param_groups = get_parameter_groups(
+            model,
+            model_type=model_config["type"],
+            encoder_lr_ratio=train_config.get("encoder_lr_ratio", 0.1)
+        )
         optimizer = optim.Adam(param_groups)
         
         # 调度器
