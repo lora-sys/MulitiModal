@@ -9,7 +9,7 @@ import neurokit2 as nk
 import re
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
-from model import MassageFusionNet # 导入你的模型
+from model import get_model
 
 
 # ==========================================
@@ -101,7 +101,7 @@ def predict_and_explain(csv_path):
     print(f"🔍 正在诊断文件: {csv_path}")
     
     # 加载模型
-    model = MassageFusionNet(model_type=MODEL_TYPE, num_classes=4)
+    model = get_model(model_type=MODEL_TYPE, num_classes=4, dyn_channels=2, static_dim=4)
     model.load_state_dict(torch.load(WEIGHT_PATH, map_location="cpu"))
     model.eval() # 开启评估模式
     
