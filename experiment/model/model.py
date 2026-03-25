@@ -267,8 +267,8 @@ class CrossAttentionGate(nn.Module):
         # 4. 计算 Gate
         gate = torch.sigmoid(self.gate_proj(gated))
 
-        # 5. 残差连接
-        gated_dynamic = dynamic * gate + dynamic
+        # 5. 门控应用（可以抑制特征）
+        gated_dynamic = dynamic * gate
 
         return gated_dynamic, attn_weights
 
