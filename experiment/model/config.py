@@ -80,12 +80,6 @@ SCHEDULER_CONFIGS = {
         "pct_start": 0.3,
         "anneal_strategy": "cos",
     },
-    "CosineAnnealingWarmup": {  # 推荐：Cosine Annealing + Warmup
-        "type": "CosineAnnealingWarmup",
-        "warmup_epochs": 10,  # 增加到 10，让模型更充分地预热
-        "max_epochs": 50,
-        "eta_min": 1e-6,
-    },
 }
 
 # 当前使用的调度器

@@ -1,0 +1,42 @@
+{
+  "model_type": "baseline_c",
+  "task_type": "regression_ablation",
+  "ablations": [
+    {
+      "config": "full",
+      "best_mae": 0.21675653755664825,
+      "best_epoch": 1,
+      "total_time": 4.8640241622924805
+    },
+    {
+      "config": "full",
+      "best_mae": 0.23871970176696777,
+      "best_epoch": 2,
+      "total_time": 76.06343221664429
+    },
+    {
+      "config": "no_dynamic",
+      "best_mae": 0.22480380535125732,
+      "best_epoch": 2,
+      "total_time": 75.86603116989136
+    },
+    {
+      "config": "no_static_basic",
+      "best_mae": 0.2879619598388672,
+      "best_epoch": 2,
+      "total_time": 76.28247714042664
+    },
+    {
+      "config": "no_static_scores",
+      "best_mae": 0.22234386205673218,
+      "best_epoch": 2,
+      "total_time": 76.29289674758911
+    },
+    {
+      "config": "no_constitution",
+      "best_mae": 0.21006794273853302,
+      "best_epoch": 2,
+      "total_time": 76.30125784873962
+    }
+  ]
+}
