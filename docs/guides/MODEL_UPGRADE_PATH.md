@@ -106,7 +106,7 @@
 #### 推荐方案：Late Fusion Transformer (增强版)
 
 **架构调整**：
-```
+```text
 原来：
 4个模态 → 4个token → Transformer(2层，4头) → MLP → 3类输出
 
@@ -148,7 +148,7 @@
 #### 推荐方案：Cross-Attention Gate Fusion（或分层融合）
 
 **方案A：Cross-Attention Gate Fusion**
-```
+```text
 10+个模态 → 各自编码 → Cross-Attention Gate → 融合 → 分类
 ```
 
@@ -163,7 +163,7 @@
 - 需要大量数据
 
 **方案B：分层融合（推荐）**
-```
+```text
 生理信号组（5个） → Simple Concat → 128维
 环境信号组（3个） → Simple Concat → 64维
 行为信号组（3个） → Simple Concat → 64维
@@ -185,9 +185,13 @@
 
 ## 📊 升级路径对比
 
+**⚠️ 前提条件**：以下升级路径对比假设所有基线模型使用统一的编码器主干。需要注意的是，当前baseline_c的动态分支使用完整的InceptionEncoder（多尺度卷积网络），而baseline_a和baseline_b使用较简单的1D CNN编码器。因此，融合策略与编码器能力的影响是混淆的。建议在统一编码器主干（例如所有模型都使用InceptionEncoder或都使用简单CNN）后重新运行比较，或包含一个统一编码器的归一化子部分来验证路径结论。
+
+---
+
 ### 路径A：Simple Concat → Late Fusion Transformer → Cross-Attention Gate
 
-```
+```text
 阶段1（MVP）：
   模态：4个
   模型：Simple Concat (70K)
@@ -219,7 +223,7 @@
 
 ### 路径B：Simple Concat → Cross-Attention Gate Fusion
 
-```
+```text
 阶段1（MVP）：
   模态：4个
   模型：Simple Concat (70K)
@@ -245,7 +249,7 @@
 
 ### 路径C：Simple Concat → Late Fusion Transformer（增强版）
 
-```
+```text
 阶段1（MVP）：
   模态：4个
   模型：Simple Concat (70K)

@@ -7,7 +7,7 @@
 
 ## 数据集分布
 
-### 训练集（5,840样本）
+### 训练集（5,840个样本）
 
 | 标签 | 含义 | 数量 | 占比 |
 |------|------|------|------|
@@ -15,7 +15,7 @@
 | 2 | 身体表征正常 | 2,125 | 36.4% |
 | 3 | 身体表征良好 | 1,590 | 27.2% |
 
-### 测试集（1,030样本）
+### 测试集（1,030个样本）
 
 | 标签 | 含义 | 数量 | 占比 |
 |------|------|------|------|
@@ -57,10 +57,10 @@
 
 ## 文件位置
 
-- **训练集**: `/home/lora/repos/MulitiModal/experiment/model/unified_dataset_enhanced_final.npz` (41MB)
-- **测试集**: `/home/lora/repos/MulitiModal/experiment/model/test_dataset_enhanced_final.npz` (7.1MB)
-- **原始波形**: `/home/lora/repos/MulitiModal/experiment/model/pretrain_10k_enhanced.npz` (69MB)
-- **用户画像**: `/home/lora/repos/MulitiModal/experiment/rawdata/train_data/train_data.csv`
+- **训练集**: `experiment/model/unified_dataset_enhanced_final.npz` (41MB)
+- **测试集**: `experiment/model/test_dataset_enhanced_final.npz` (7.1MB)
+- **原始波形**: `experiment/model/pretrain_10k_enhanced.npz` (69MB)
+- **用户画像**: `experiment/rawdata/train_data/train_data.csv`
 
 ## 数据格式
 
@@ -69,7 +69,7 @@
 ```python
 {
     'dynamic': (N, 2, 1000),       # 双通道压力波形
-    'static_basic': (N, 4),        # 年龄, BMI, 血氧, 心率
+    'static_basic': (N, 4),        # 年龄, BMI, 心率, 血氧
     'static_scores': (N, 2),       # 健康指数, 诊断得分
     'constitution': (N,),          # 体质ID (0-37)
     'labels': (N,)                 # 分类标签 (1-3)

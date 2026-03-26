@@ -44,10 +44,17 @@ def prepare_data(config: HyperoptConfig) -> tuple:
     logger = get_logger(__name__)
 
     # 选择数据集
-    if config.task_type == "classification":
+    # 优先使用配置中的dataset_path，否则根据task_type选择默认路径
+    if hasattr(config, 'dataset_path') and config.dataset_path:
+        dataset_path = config.dataset_path
+    elif config.task_type == "classification":
         dataset_path = "experiment/model/unified_dataset_expanded.npz"
     else:
         dataset_path = "experiment/model/unified_dataset_regression.npz"
+
+    # 解析为绝对路径
+    if not os.path.isabs(dataset_path):
+        dataset_path = os.path.join(project_root, dataset_path)
 
     logger.info(f"加载数据集: {dataset_path}")
 
@@ -56,7 +63,31 @@ def prepare_data(config: HyperoptConfig) -> tuple:
     if not source.initialize():
         raise RuntimeError("数据源初始化失败")
 
-    dataset = UnifiedMultimodalDataset(source)
+    # 根据任务类型选择数据集
+    if config.task_type == "classification":
+        dataset = UnifiedMultimodalDataset(source)
+    else:
+        # 回归任务使用简单包装器，保持float目标值
+        class RegressionDataset:
+            def __init__(self, source):
+                self.source = source
+                self._data = source._data
+                self._sample_list = source._sample_list
+
+            def __len__(self):
+                return len(self._sample_list)
+
+            def __getitem__(self, idx):
+                sample = self.source.load_sample(idx)
+                return {
+                    'dynamic': torch.tensor(sample.dynamic, dtype=torch.float32),
+                    'static_basic': torch.tensor(sample.static_basic, dtype=torch.float32),
+                    'static_scores': torch.tensor(sample.static_scores, dtype=torch.float32),
+                    'constitution': torch.tensor(sample.constitution, dtype=torch.long),
+                    'scores': torch.tensor(sample.scores, dtype=torch.float32),  # 保持float，不-1
+                }
+
+        dataset = RegressionDataset(source)
 
     # 划分数据集
     total_size = len(dataset)
@@ -213,6 +244,12 @@ def run_hyperopt(
     logger.info(f"总耗时: {elapsed_time:.2f}秒")
     logger.info(f"完成试验数: {len(study.trials)}")
     logger.info(f"剪枝试验数: {len([t for t in study.trials if t.state == optuna.trial.TrialState.PRUNED])}")
+
+    # 检查是否有成功的试验
+    complete_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    if not complete_trials:
+        logger.warning("没有成功的试验，无法输出最佳参数")
+        return None
     logger.info(f"失败试验数: {len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL])}")
 
     best_trial = study.best_trial

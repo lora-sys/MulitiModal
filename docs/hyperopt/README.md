@@ -187,9 +187,18 @@ from experiment.config.base_config import ExperimentConfig
 from experiment.model.train_improved import main as train_main
 
 # 加载最优超参数
-with open("experiment/results/hyperopt/study_*/best_params.json", 'r') as f:
-    results = json.load(f)
-    best_params = results["best_params"]
+from pathlib import Path
+import glob
+
+# 查找最佳参数文件
+study_dirs = glob.glob("experiment/results/hyperopt/study_*/")
+if study_dirs:
+    best_params_path = Path(study_dirs[0]) / "best_params.json"
+    with open(best_params_path, 'r') as f:
+        results = json.load(f)
+        best_params = results["best_params"]
+else:
+    raise FileNotFoundError("未找到超参数优化结果文件")
 
 # 更新配置
 config = ExperimentConfig()

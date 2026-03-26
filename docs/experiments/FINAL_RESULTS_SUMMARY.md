@@ -21,6 +21,8 @@
 - ✅ 最佳模型：baseline_b（Late Fusion Transformer）
 - ✅ 分类任务无需重新训练（数据集不包含值38）
 
+**⚠️ 重要说明**：上述模型比较假设所有基线模型使用相同的编码器主干。实际baseline_c的动态分支使用完整的InceptionEncoder，而baseline_a和baseline_b使用较简单的CNN。因此观察到的性能差异可能反映编码器主干能力的差异，而非纯粹的融合策略改进。在得出跨策略结论前，建议统一编码器主干（例如所有模型都使用InceptionEncoder或都使用简单CNN）后重新比较。
+
 ### 🎯 回归任务结果
 
 | 模型 | 架构 | 测试MAE | 测试R² | 测试Pearson | 最佳状态 |
@@ -33,6 +35,8 @@
 - ✅ 回归任务性能优异（MAE 3.57，预测误差±3.57分）
 - ✅ 最佳模型：baseline_c（Cross-Attention Gate Fusion）
 - ✅ 修复后模型性能显著提升
+
+**⚠️ 重要说明**：上述模型比较假设所有基线模型使用相同的编码器主干。实际baseline_c的动态分支使用完整的InceptionEncoder，而baseline_a和baseline_b使用较简单的CNN。因此观察到的性能差异（尤其是baseline_c的优异表现）可能反映编码器主干能力的差异，而非纯粹的融合策略改进。在得出跨策略结论前，建议统一编码器主干（例如所有模型都使用InceptionEncoder或都使用简单CNN）后重新比较。
 
 ---
 
@@ -153,6 +157,8 @@
 **回归任务**：
 - **推荐**：baseline_c（Cross-Attention Gate Fusion）
 - **理由**：MAE最低（3.57），R²最高（0.92）
+
+**⚠️ 重要说明**：上述推荐基于当前实验结果，但需要注意baseline_c的动态分支使用完整的InceptionEncoder，而baseline_a和baseline_b使用较简单的CNN。因此，baseline_c的性能优势可能部分源于更强大的编码器主干，而非纯粹的融合策略改进。在生产部署前，建议统一编码器主干后重新评估各模型的相对性能。
 
 ### 部署准备
 

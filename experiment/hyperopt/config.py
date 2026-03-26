@@ -29,12 +29,6 @@ class SearchSpaceConfig:
         "name": "weight_decay"
     })
 
-    batch_size: Dict[str, Any] = field(default_factory=lambda: {
-        "type": "categorical",
-        "choices": [16, 32, 64, 128],
-        "name": "batch_size"
-    })
-
     dropout: Dict[str, Any] = field(default_factory=lambda: {
         "type": "uniform",
         "low": 0.1,
@@ -60,13 +54,6 @@ class SearchSpaceConfig:
         "type": "categorical",
         "choices": [64, 128, 256, 512],
         "name": "hidden_dim"
-    })
-
-    encoder_lr_ratio: Dict[str, Any] = field(default_factory=lambda: {
-        "type": "uniform",
-        "low": 0.05,
-        "high": 0.2,
-        "name": "encoder_lr_ratio"
     })
 
     # Inception 编码器特定超参数
@@ -140,18 +127,6 @@ class SearchSpaceConfig:
         "type": "categorical",
         "choices": ["adam", "adamw", "sgd"],
         "name": "optimizer"
-    })
-
-    scheduler: Dict[str, Any] = field(default_factory=lambda: {
-        "type": "categorical",
-        "choices": ["cosine_annealing", "reduce_on_plateau", "one_cycle"],
-        "name": "scheduler"
-    })
-
-    warmup_epochs: Dict[str, Any] = field(default_factory=lambda: {
-        "type": "categorical",
-        "choices": [5, 10, 15],
-        "name": "warmup_epochs"
     })
 
     patience: Dict[str, Any] = field(default_factory=lambda: {

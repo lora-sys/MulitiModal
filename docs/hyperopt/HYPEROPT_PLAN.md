@@ -193,11 +193,12 @@ pip install optuna optuna-dashboard
 # experiment/config/hyperopt_config.yaml
 # 超参数优化配置
 
-# 优化设置
-optimization:
-  n_trials: 100              # 总试验次数
-  timeout: 7200             # 总超时时间（秒）
-  n_jobs: 1                 # 并行任务数
+# 优化设置（顶层配置）
+n_trials: 100              # 总试验次数
+timeout: 7200             # 总超时时间（秒）
+n_jobs: 1                 # 并行任务数
+model_type: "baseline_c"   # 模型类型
+task_type: "classification"  # 任务类型
 
 # 剪枝设置
 pruning:
@@ -212,11 +213,6 @@ objective:
   metric: "val_loss"        # 优化指标：val_loss, val_acc, mae
   direction: "minimize"     # 最小化/最大化
 
-# 模型配置
-model:
-  type: "baseline_c"        # 模型类型
-  task: "classification"    # 任务类型
-
 # 搜索空间
 search_space:
   # 通用超参数
@@ -224,16 +220,12 @@ search_space:
     type: "log_uniform"
     low: 1e-5
     high: 1e-2
-  
+
   weight_decay:
     type: "log_uniform"
     low: 1e-6
     high: 1e-3
-  
-  batch_size:
-    type: "categorical"
-    choices: [16, 32, 64, 128]
-  
+
   dropout:
     type: "uniform"
     low: 0.1
@@ -357,6 +349,9 @@ print(f"最优验证 MAE: {best_value}")
 ```python
 from experiment.hyperopt.study_manager import StudyManager
 
+**⚠️ 重要说明**：以下示例假设所有基线模型使用统一的编码器主干。需要注意的是，当前baseline_c的动态分支使用完整的InceptionEncoder（多尺度卷积网络），而baseline_a和baseline_b使用较简单的1D CNN编码器。因此，不同模型之间的性能比较结果受到编码器能力差异的混淆。建议在统一编码器主干（例如所有模型都使用InceptionEncoder或都使用简单CNN）后重新比较，以准确评估融合策略本身的优劣。
+
+```python
 models = ["baseline_a", "baseline_b", "baseline_c"]
 results = {}
 
