@@ -107,8 +107,8 @@ def train_fold(model, train_loader, val_loader, device, fold_num):
                 labels = batch['label'].to(device)
                 
                 outputs = model(dynamic, static_basic, static_scores, constitution)
-                predictions.extend(outputs.squeeze().cpu().numpy())
-                targets.extend(labels.cpu().numpy())
+                predictions.extend(outputs.detach().cpu().numpy().ravel())
+                targets.extend(labels.detach().cpu().numpy().ravel())
         
         # 计算 MAE
         predictions = np.array(predictions)

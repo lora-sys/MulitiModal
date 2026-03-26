@@ -5,7 +5,10 @@
 
 set -o pipefail  # 确保管道中任何命令失败时，整个管道失败
 
-cd /home/lora/repos/MulitiModal
+cd /home/lora/repos/MulitiModal || {
+    echo "错误：无法切换到项目目录 /home/lora/repos/MulitiModal" >&2
+    exit 1
+}
 source venv/bin/activate
 
 RESULTS_DIR="experiment/results/ablation_regression_all"
@@ -32,12 +35,15 @@ for model in "${models[@]}"; do
         echo ">>> 配置: $config"
         python -u experiment/model/ablation_regression.py --model $model --config $config 2>&1 | tee -a $RESULTS_DIR/${model}_${config}.log
 
+        # 立即捕获退出代码
+        rc=${PIPESTATUS[0]}
+
         # 检查 Python 脚本的退出代码
-        if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        if [ $rc -ne 0 ]; then
             echo ""
             echo ">>> 错误：模型 $model 配置 $config 运行失败！"
-            echo ">>> 退出代码: ${PIPESTATUS[0]}"
-            exit ${PIPESTATUS[0]}
+            echo ">>> 退出代码: $rc"
+            exit $rc
         fi
     done
 

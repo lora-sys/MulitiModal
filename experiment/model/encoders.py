@@ -10,6 +10,9 @@ import torch.nn.functional as F
 import math
 
 
+from typing import Optional, List
+
+
 class InceptionModule(nn.Module):
     """Inception模块：通过多尺度卷积核并行提取特征"""
 
@@ -17,10 +20,14 @@ class InceptionModule(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        kernel_sizes: list = [9, 19, 39],
+        kernel_sizes: Optional[List[int]] = None,
         bottleneck_channels: int = 32,
     ):
         super(InceptionModule, self).__init__()
+
+        # 设置默认值
+        if kernel_sizes is None:
+            kernel_sizes = [9, 19, 39]
 
         # 1. 瓶颈层：降低计算量
         if in_channels > 1:
@@ -161,7 +168,17 @@ class TransformerEncoder(nn.Module):
         x = F.relu(x)
 
         x = x.permute(0, 2, 1)
-        pos_enc = self.pos_alpha * self.fixed_pos + (1 - self.pos_alpha) * self.learnable_pos
+        seq_len = x.size(1)
+
+        # 动态生成位置编码以匹配输入序列长度
+        if seq_len <= 1000:
+            # 如果序列长度<=1000，切片预计算的位置编码
+            pos_enc = self.pos_alpha * self.fixed_pos[:, :seq_len, :] + (1 - self.pos_alpha) * self.learnable_pos[:, :seq_len, :]
+        else:
+            # 如果序列长度>1000，重新生成位置编码
+            fixed_pos = self._sinusoidal_pos_enc(seq_len, self.input_proj.out_channels)
+            pos_enc = self.pos_alpha * fixed_pos + (1 - self.pos_alpha) * self.learnable_pos.expand(1, seq_len, -1)
+
         x = x + pos_enc
 
         x = self.transformer(x)

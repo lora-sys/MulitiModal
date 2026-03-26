@@ -4,7 +4,6 @@
 """
 
 import numpy as np
-import torch
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
@@ -19,9 +18,6 @@ plt.rcParams["axes.unicode_minus"] = False
 
 # 添加路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.model import get_model
-
-
 def load_test_results(results_dir):
     """加载测试结果"""
     test_results = {}

@@ -20,8 +20,9 @@ plt.rcParams["axes.unicode_minus"] = False
 try:
     plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
     plt.rcParams['axes.unicode_minus'] = False
-except:
-    pass
+except Exception as e:
+    import logging
+    logging.getLogger(__name__).error(f"配置中文字体失败: {e}")
 
 
 def load_classification_results(results_dir):
@@ -61,10 +62,6 @@ def load_classification_results(results_dir):
                         accuracy = float(acc_match.group(1))
 
                     # F1分数格式
-                    f1 = float(f1_match.group(1))
-
-                if acc_match and f1_match:
-                    accuracy = float(acc_match.group(1)) / 100  # 转换为小数
                     f1 = float(f1_match.group(1))
 
                     test_metrics = {

@@ -41,11 +41,17 @@ TASK_TYPE = "classification"  # 可以改为 classification 或 regression
 
 def load_dataset():
     """加载数据集"""
-    npz_path = "experiment/model/unified_dataset_expanded.npz"
+    if TASK_TYPE == "classification":
+        npz_path = "experiment/model/unified_dataset_expanded.npz"
+    elif TASK_TYPE == "regression":
+        npz_path = "experiment/model/unified_dataset_regression.npz"
+    else:
+        raise ValueError(f"不支持的TASK_TYPE: {TASK_TYPE}")
+
     source = UnifiedNPZDataSource(npz_path)
     source.initialize()
     dataset = UnifiedMultimodalDataset(source, preprocessor=None)
-    print(f"[*] 加载数据集: {len(dataset)} 样本")
+    print(f"[*] 加载数据集: {len(dataset)} 样本 (任务类型: {TASK_TYPE})")
     return dataset
 
 
@@ -87,6 +93,11 @@ def train_fold(model, train_loader, val_loader, device, fold_num, task_type="cla
             else:
                 outputs = model(dynamic, static_basic)
             
+            # 形状处理：确保回归任务的张量形状正确
+            if task_type == "regression":
+                outputs = outputs.squeeze(-1).view(-1)
+                labels = labels.view(-1)
+
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()

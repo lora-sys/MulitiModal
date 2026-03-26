@@ -172,11 +172,15 @@ def test_error_handling():
     try:
         from experiment.dataset.unified_source import UnifiedNPZDataSource
         source = UnifiedNPZDataSource('experiment/dataset/unified_dataset_expanded.npz')
-        source.initialize()
+        if not source.initialize():
+            print("  ❌ 数据源初始化失败")
+            raise RuntimeError("数据源初始化失败")
         source.load_sample(999999)  # 不存在的样本ID
         print("  ❌ 未能正确处理不存在的样本ID")
     except IndexError as e:
         print(f"  ✅ 正确处理了不存在的样本ID: {e}")
+    except RuntimeError as e:
+        print(f"  ⚠️  数据源初始化失败: {e}")
 
 
 def main():
