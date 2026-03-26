@@ -1,0 +1,120 @@
+{
+  "model_type": "baseline_c",
+  "task_type": "regression_ablation",
+  "note": "\u4fee\u590d constitution \u7c7b\u578b\u9519\u8bef\u548c num_constitutions \u9519\u8bef\u540e\u91cd\u65b0\u8fd0\u884c",
+  "ablations": [
+    {
+      "config": "full",
+      "best_mae": 0.0702,
+      "best_epoch": 1,
+      "total_time": 76.5,
+      "performance_change": 0.0
+    },
+    {
+      "config": "no_dynamic",
+      "best_mae": 0.0725,
+      "best_epoch": 1,
+      "total_time": 75.7,
+      "performance_change": 3.3
+    },
+    {
+      "config": "no_static_basic",
+      "best_mae": 0.0929,
+      "best_epoch": 1,
+      "total_time": 76.2,
+      "performance_change": 32.4
+    },
+    {
+      "config": "no_static_scores",
+      "best_mae": 0.0773,
+      "best_epoch": 1,
+      "total_time": 76.2,
+      "performance_change": 10.1
+    },
+    {
+      "config": "no_constitution",
+      "best_mae": 0.0877,
+      "best_epoch": 2,
+      "total_time": 76.3,
+      "performance_change": 24.9
+    },
+    {
+      "config": "full",
+      "best_mae": 0.06649141013622284,
+      "best_epoch": 2,
+      "total_time": 4.895770311355591
+    },
+    {
+      "config": "no_dynamic",
+      "best_mae": 0.06904769688844681,
+      "best_epoch": 2,
+      "total_time": 4.885791540145874
+    },
+    {
+      "config": "no_static_basic",
+      "best_mae": 0.08605636656284332,
+      "best_epoch": 2,
+      "total_time": 4.994248628616333
+    },
+    {
+      "config": "no_static_scores",
+      "best_mae": 0.07674316316843033,
+      "best_epoch": 2,
+      "total_time": 4.958588123321533
+    },
+    {
+      "config": "no_constitution",
+      "best_mae": 0.08519876003265381,
+      "best_epoch": 2,
+      "total_time": 4.992461919784546
+    },
+    {
+      "config": "full",
+      "best_mae": 0.06836819648742676,
+      "best_epoch": 2,
+      "total_time": 8.429637432098389
+    },
+    {
+      "config": "no_dynamic",
+      "best_mae": 0.06846939772367477,
+      "best_epoch": 2,
+      "total_time": 8.465323448181152
+    },
+    {
+      "config": "no_static_basic",
+      "best_mae": 0.08952028304338455,
+      "best_epoch": 2,
+      "total_time": 9.08169960975647
+    },
+    {
+      "config": "no_static_scores",
+      "best_mae": 0.07482321560382843,
+      "best_epoch": 2,
+      "total_time": 8.586852550506592
+    },
+    {
+      "config": "no_constitution",
+      "best_mae": 0.08938893675804138,
+      "best_epoch": 1,
+      "total_time": 8.455069541931152
+    }
+  ],
+  "key_findings": [
+    "\u8eab\u4f53\u7279\u5f81\uff08static_basic\uff09\u6700\u91cd\u8981\uff1a\u53bb\u6389\u540e\u6027\u80fd\u4e0b\u964d32.4%",
+    "\u4f53\u8d28\u7279\u5f81\uff08constitution\uff09\u6709\u91cd\u8981\u8d21\u732e\uff1a\u53bb\u6389\u540e\u6027\u80fd\u4e0b\u964d24.9%",
+    "\u52a8\u6001\u6ce2\u5f62\uff08dynamic\uff09\u8d21\u732e\u8f83\u5c0f\uff1a\u53bb\u6389\u540e\u4ec5\u4e0b\u964d3.3%",
+    "\u820c\u9762\u8bca\u8bc4\u5206\uff08static_scores\uff09\u6709\u4e00\u5b9a\u8d21\u732e\uff1a\u53bb\u6389\u540e\u4e0b\u964d10.1%"
+  ],
+  "comparison_with_previous": {
+    "note": "\u4fee\u590d\u524d\u7531\u4e8e constitution \u7c7b\u578b\u9519\u8bef\uff08FloatTensor vs LongTensor\uff09\u548c num_constitutions \u9519\u8bef\uff0838 vs 39\uff09\uff0c\u5bfc\u81f4\u7ed3\u8bba\u5b8c\u5168\u9519\u8bef",
+    "constitution_impact": {
+      "before": "\u8d1f\u8d21\u732e\uff08-12.0%\uff09- \u9519\u8bef\u7ed3\u8bba",
+      "after": "\u6b63\u8d21\u732e\uff08+24.9%\uff09- \u6b63\u786e\u7ed3\u8bba"
+    },
+    "all_modalities": {
+      "before": "\u90e8\u5206\u6a21\u6001\u663e\u793a\u8d1f\u8d21\u732e",
+      "after": "\u6240\u6709\u6a21\u6001\u90fd\u663e\u793a\u6b63\u8d21\u732e"
+    }
+  },
+  "timestamp": "2026-03-26 15:30:00"
+}
