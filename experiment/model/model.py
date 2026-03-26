@@ -877,13 +877,13 @@ class GatedFusion(nn.Module):
 # =========================================================================
 # 工厂函数: 根据配置返回模型
 # =========================================================================
-def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=4, **kwarg):
+def get_model(model_type="baseline_c", num_classes=3, dyn_channels=2, static_dim=4, **kwarg):
     """工厂函数：根据配置返回模型"""
     # Baseline 模型
     if model_type == "baseline_a" or model_type == "simple_concat":
         return SimpleConcatModel(
             num_classes=num_classes,
-            num_constitutions=kwarg.get('num_constitutions', 38),
+            num_constitutions=kwarg.get('num_constitutions', 39),
             shared_dim=kwarg.get('shared_dim', 64),
             hidden_dim=kwarg.get('hidden_dim', 128),
             dropout=kwarg.get('dropout', 0.3),
@@ -892,7 +892,7 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
     if model_type == "baseline_b" or model_type == "late_fusion":
         return LateFusionTransformerModel(
             num_classes=num_classes,
-            num_constitutions=kwarg.get('num_constitutions', 38),
+            num_constitutions=kwarg.get('num_constitutions', 39),
             shared_dim=kwarg.get('shared_dim', 64),
             hidden_dim=kwarg.get('hidden_dim', 128),
             num_heads=kwarg.get('num_heads', 4),
@@ -904,7 +904,7 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
     if model_type == "baseline_c" or model_type == "multimodal":
         return MultiExpertFusionModel(
             num_classes=num_classes,
-            num_constitutions=kwarg.get('num_constitutions', 38),
+            num_constitutions=kwarg.get('num_constitutions', 39),
             shared_dim=kwarg.get('shared_dim', 128),
             hidden_dim=kwarg.get('hidden_dim', 256),
             dropout=kwarg.get('dropout', 0.3),
@@ -914,7 +914,7 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
     if model_type == "attention_fusion" or model_type == "baseline_d":
         return SimpleAttentionFusion(
             num_classes=num_classes,
-            num_constitutions=kwarg.get('num_constitutions', 38),
+            num_constitutions=kwarg.get('num_constitutions', 39),
             shared_dim=kwarg.get('shared_dim', 64),
             hidden_dim=kwarg.get('hidden_dim', 128),
             num_heads=kwarg.get('num_heads', 4),
@@ -924,7 +924,7 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
     if model_type == "gated_fusion" or model_type == "baseline_e":
         return GatedFusion(
             num_classes=num_classes,
-            num_constitutions=kwarg.get('num_constitutions', 38),
+            num_constitutions=kwarg.get('num_constitutions', 39),
             shared_dim=kwarg.get('shared_dim', 64),
             hidden_dim=kwarg.get('hidden_dim', 128),
             dropout=kwarg.get('dropout', 0.3),

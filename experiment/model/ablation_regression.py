@@ -82,13 +82,19 @@ def run_ablation(ablation_config):
     print(f"[*] 加载数据集: {len(dataset)} 样本")
     print(f"[*] 消融配置: {ablation_config}")
 
-    # 数据划分：80%训练，20%验证
+    # 数据划分：80%训练，20%验证（使用shuffle确保分布一致）
     n_samples = len(dataset)
     train_size = int(0.8 * n_samples)
     val_size = n_samples - train_size
 
-    train_dataset = Subset(dataset, np.arange(0, train_size))
-    val_dataset = Subset(dataset, np.arange(train_size, n_samples))
+    # 生成随机排列的索引
+    np.random.seed(RANDOM_SEED)
+    perm = np.random.permutation(n_samples)
+    train_indices = perm[:train_size]
+    val_indices = perm[train_size:]
+
+    train_dataset = Subset(dataset, train_indices)
+    val_dataset = Subset(dataset, val_indices)
 
     print(f"  训练集: {train_size} 样本")
     print(f"  验证集: {val_size} 样本")
@@ -195,7 +201,8 @@ def save_results(result, results_file):
         try:
             with open(results_file, 'r') as f:
                 results = json.load(f)
-        except:
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            print(f"[警告] 无法读取结果文件: {e}")
             results = {
                 "model_type": "baseline_c",
                 "task_type": "regression_ablation",

@@ -45,17 +45,15 @@ class RegressionDataset(torch.utils.data.Dataset):
         return self.n_samples
     
     def __getitem__(self, idx):
-        # 将constitution从一维(39,)转换为one-hot编码(39,)
         # Constitution值范围: 0-38 (共39个值)
-        constitution_onehot = np.zeros(39, dtype=np.float32)
+        # ConstitutionEmbedding 期望整数索引（LongTensor），形状为 (B,)
         constitution_idx = int(self.data['constitution'][idx])
-        constitution_onehot[constitution_idx] = 1.0
-        
+
         return {
             'dynamic': torch.FloatTensor(self.data['dynamic'][idx]),
             'static_basic': torch.FloatTensor(self.data['static_basic'][idx]),
             'static_scores': torch.FloatTensor(self.data['static_scores'][idx]),
-            'constitution': torch.FloatTensor(constitution_onehot),
+            'constitution': torch.LongTensor([constitution_idx]),
             'label': torch.FloatTensor([self.data['label'][idx, 0]])
         }
 

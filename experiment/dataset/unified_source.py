@@ -44,14 +44,51 @@ class UnifiedNPZDataSource(IDataSource):
 
     def initialize(self) -> bool:
         """初始化数据源，加载 NPZ 文件"""
-        self._data = np.load(self.npz_path)
+        try:
+            # 检查文件是否存在
+            if not os.path.exists(self.npz_path):
+                raise FileNotFoundError(f"NPZ文件不存在: {self.npz_path}")
 
-        # 样本ID列表
-        n_samples = self._data['dynamic'].shape[0]
-        self._sample_list = list(range(n_samples))
+            # 加载NPZ文件
+            self._data = np.load(self.npz_path)
 
-        print(f"📦 UnifiedNPZDataSource initialized: {len(self._sample_list)} samples")
-        return True
+            # 验证必需的字段
+            required_keys = ['dynamic', 'static_basic', 'static_scores', 'constitution', 'labels']
+            for key in required_keys:
+                if key not in self._data:
+                    raise KeyError(f"NPZ文件缺少必需字段: {key}")
+
+            # 验证数据形状
+            n_samples = self._data['dynamic'].shape[0]
+
+            # 验证各字段形状一致
+            if self._data['static_basic'].shape[0] != n_samples:
+                raise ValueError(f"static_basic样本数不一致: {self._data['static_basic'].shape[0]} != {n_samples}")
+            if self._data['static_scores'].shape[0] != n_samples:
+                raise ValueError(f"static_scores样本数不一致: {self._data['static_scores'].shape[0]} != {n_samples}")
+            if self._data['constitution'].shape[0] != n_samples:
+                raise ValueError(f"constitution样本数不一致: {self._data['constitution'].shape[0]} != {n_samples}")
+            if self._data['labels'].shape[0] != n_samples:
+                raise ValueError(f"labels样本数不一致: {self._data['labels'].shape[0]} != {n_samples}")
+
+            # 样本ID列表
+            self._sample_list = list(range(n_samples))
+
+            print(f"📦 UnifiedNPZDataSource initialized: {len(self._sample_list)} samples")
+            return True
+
+        except FileNotFoundError as e:
+            print(f"❌ 错误: {e}")
+            return False
+        except KeyError as e:
+            print(f"❌ 错误: {e}")
+            return False
+        except ValueError as e:
+            print(f"❌ 错误: {e}")
+            return False
+        except Exception as e:
+            print(f"❌ 未知错误: {e}")
+            return False
 
     def get_sample_list(self) -> List:
         """获取样本ID列表"""
@@ -59,39 +96,68 @@ class UnifiedNPZDataSource(IDataSource):
 
     def load_sample(self, sample_id: int) -> Sample:
         """根据ID加载单个样本"""
-        dynamic = self._data['dynamic'][sample_id]          # (2, 1000)
-        static_basic = self._data['static_basic'][sample_id]  # (4,)
-        static_scores = self._data['static_scores'][sample_id] # (2,)
-        constitution = self._data['constitution'][sample_id]   # scalar
-        label = self._data['labels'][sample_id]               # scalar
+        try:
+            # 验证样本ID
+            if sample_id < 0 or sample_id >= len(self._sample_list):
+                raise IndexError(f"样本ID超出范围: {sample_id} (0-{len(self._sample_list)-1})")
 
-        return Sample(
-            sample_id=str(sample_id),
-            raw_data={
-                'dynamic': dynamic,
-                'static_basic': static_basic,
-                'static_scores': static_scores,
-                'constitution': constitution,
-            },
-            metadata={'label': int(label)},
-        )
+            if self._data is None:
+                raise RuntimeError("数据源未初始化，请先调用initialize()")
+
+            dynamic = self._data['dynamic'][sample_id]          # (2, 1000)
+            static_basic = self._data['static_basic'][sample_id]  # (4,)
+            static_scores = self._data['static_scores'][sample_id] # (2,)
+            constitution = self._data['constitution'][sample_id]   # scalar
+            label = self._data['labels'][sample_id]               # scalar
+
+            return Sample(
+                sample_id=str(sample_id),
+                raw_data={
+                    'dynamic': dynamic,
+                    'static_basic': static_basic,
+                    'static_scores': static_scores,
+                    'constitution': constitution,
+                },
+                metadata={'label': int(label)},
+            )
+
+        except IndexError as e:
+            print(f"❌ 加载样本错误: {e}")
+            raise
+        except RuntimeError as e:
+            print(f"❌ 加载样本错误: {e}")
+            raise
+        except Exception as e:
+            print(f"❌ 未知错误: {e}")
+            raise
 
     def get_statistics(self) -> Dict:
         """获取数据统计信息（用于归一化）"""
-        if not self._statistics and self._data is not None:
-            static_basic = self._data['static_basic']
-            static_scores = self._data['static_scores']
+        try:
+            if self._data is None:
+                raise RuntimeError("数据源未初始化，请先调用initialize()")
 
-            self._statistics = {
-                'static_basic': {
-                    'age': {'mean': float(static_basic[:, 0].mean()), 'std': float(static_basic[:, 0].std())},
-                    'bmi': {'mean': float(static_basic[:, 1].mean()), 'std': float(static_basic[:, 1].std())},
-                    'spo2': {'mean': float(static_basic[:, 2].mean()), 'std': float(static_basic[:, 2].std())},
-                    'hr': {'mean': float(static_basic[:, 3].mean()), 'std': float(static_basic[:, 3].std())},
-                },
-                'static_scores': {
-                    'health': {'mean': float(static_scores[:, 0].mean()), 'std': float(static_scores[:, 0].std())},
-                    'diagnosis': {'mean': float(static_scores[:, 1].mean()), 'std': float(static_scores[:, 1].std())},
-                },
-            }
-        return self._statistics
+            if not self._statistics:
+                static_basic = self._data['static_basic']
+                static_scores = self._data['static_scores']
+
+                self._statistics = {
+                    'static_basic': {
+                        'age': {'mean': float(static_basic[:, 0].mean()), 'std': float(static_basic[:, 0].std())},
+                        'bmi': {'mean': float(static_basic[:, 1].mean()), 'std': float(static_basic[:, 1].std())},
+                        'spo2': {'mean': float(static_basic[:, 2].mean()), 'std': float(static_basic[:, 2].std())},
+                        'hr': {'mean': float(static_basic[:, 3].mean()), 'std': float(static_basic[:, 3].std())},
+                    },
+                    'static_scores': {
+                        'health': {'mean': float(static_scores[:, 0].mean()), 'std': float(static_scores[:, 0].std())},
+                        'diagnosis': {'mean': float(static_scores[:, 1].mean()), 'std': float(static_scores[:, 1].std())},
+                    },
+                }
+            return self._statistics
+
+        except RuntimeError as e:
+            print(f"❌ 获取统计信息错误: {e}")
+            raise
+        except Exception as e:
+            print(f"❌ 未知错误: {e}")
+            raise

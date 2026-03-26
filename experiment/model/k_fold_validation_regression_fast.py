@@ -49,7 +49,7 @@ class RegressionDataset(torch.utils.data.Dataset):
             'dynamic': torch.FloatTensor(self.data['dynamic'][idx]),
             'static_basic': torch.FloatTensor(self.data['static_basic'][idx]),
             'static_scores': torch.FloatTensor(self.data['static_scores'][idx]),
-            'constitution': torch.FloatTensor(self.data['constitution'][idx]),
+            'constitution': torch.LongTensor([self.data['constitution'][idx]]),
             'label': torch.FloatTensor(self.data['label'][idx])
         }
 
@@ -161,7 +161,7 @@ def main():
         val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)
         
         # 创建模型
-        model = get_model(model_type=MODEL_TYPE, num_classes=1, num_constitutions=38).to(device)
+        model = get_model(model_type=MODEL_TYPE, num_classes=1, num_constitutions=39).to(device)
         
         # 训练
         fold_start_time = time.time()

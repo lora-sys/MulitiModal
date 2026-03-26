@@ -31,6 +31,9 @@ declare -A configs=(
 # 初始化结果JSON
 echo '{"model_type": "baseline_c", "task_type": "regression_ablation", "ablations": []}' > $RESULTS_FILE
 
+# 设置失败标志
+ANY_FAILURE=0
+
 for config in "${!configs[@]}"; do
     echo "" | tee -a $LOG_FILE
     echo "========================================" | tee -a $LOG_FILE
@@ -47,6 +50,8 @@ for config in "${!configs[@]}"; do
         echo "配置 $config 完成 ✓" | tee -a $LOG_FILE
     else
         echo "配置 $config 失败 ✗ (退出码: $EXIT_CODE)" | tee -a $LOG_FILE
+        ANY_FAILURE=1
+        exit $EXIT_CODE  # 失败时立即退出
     fi
 
     # 清理内存
@@ -58,11 +63,14 @@ for config in "${!configs[@]}"; do
     echo "配置 $config 完成时间: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a $LOG_FILE
 done
 
-echo "" | tee -a $LOG_FILE
-echo "========================================" | tee -a $LOG_FILE
-echo "所有消融实验完成！" | tee -a $LOG_FILE
-echo "完成时间: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a $LOG_FILE
-echo "========================================" | tee -a $LOG_FILE
+# 只有当没有失败时才打印成功横幅
+if [ $ANY_FAILURE -eq 0 ]; then
+    echo "" | tee -a $LOG_FILE
+    echo "========================================" | tee -a $LOG_FILE
+    echo "所有消融实验完成！" | tee -a $LOG_FILE
+    echo "完成时间: $(date '+%Y-%m-%d %H:%M:%S')" | tee -a $LOG_FILE
+    echo "========================================" | tee -a $LOG_FILE
+fi
 
 # 显示最终结果
 if [ -f "$RESULTS_FILE" ]; then
