@@ -66,6 +66,8 @@ class RegressionDataset(torch.utils.data.Dataset):
             result['static_scores'] = torch.zeros_like(result['static_scores'])
         elif self.ablation_config == "no_constitution":
             # 去掉体质：设为0（第一个体质）
+            # 注意：这种方法使用索引0的embedding，不是完全消除
+            # 更好的方法是修改ConstitutionEmbedding来返回零向量
             result['constitution'] = torch.zeros_like(result['constitution'], dtype=torch.long)
 
         return result
@@ -154,8 +156,8 @@ def run_ablation(ablation_config):
                 labels = batch['label'].to(device)
 
                 outputs = model(dynamic, static_basic, static_scores, constitution)
-                predictions.extend(outputs.squeeze().cpu().numpy())
-                targets.extend(labels.squeeze().cpu().numpy())
+                predictions.extend(outputs.detach().cpu().numpy().ravel())
+                targets.extend(labels.detach().cpu().numpy().ravel())
 
         # 计算 MAE
         predictions = np.array(predictions)

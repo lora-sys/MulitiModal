@@ -90,7 +90,7 @@ def main():
 
         logger.info(f"数据集划分 - 训练集: {train_size}, 验证集: {val_size}, 测试集: {test_size}")
 
-        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
+        train_dataset, val_dataset, _test_dataset = torch.utils.data.random_split(
             dataset, [train_size, val_size, test_size]
         )
 
@@ -291,12 +291,17 @@ def main():
                     patience_counter = 0
 
                     # 保存最佳模型
+                    checkpoint_path = 'experiment/checkpoints/best_model.pth'
+                    # 确保目录存在
+                    import os
+                    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+
                     torch.save({
                         'epoch': epoch,
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
                         'val_loss': avg_val_loss,
-                    }, 'experiment/checkpoints/best_model.pth')
+                    }, checkpoint_path)
                     logger.info(f"保存最佳模型 (Val Loss: {avg_val_loss:.4f})")
                 else:
                     patience_counter += 1

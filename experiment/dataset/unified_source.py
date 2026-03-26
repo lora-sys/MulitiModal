@@ -97,12 +97,13 @@ class UnifiedNPZDataSource(IDataSource):
     def load_sample(self, sample_id: int) -> Sample:
         """根据ID加载单个样本"""
         try:
+            # 先检查初始化状态
+            if self._data is None:
+                raise RuntimeError("数据源未初始化，请先调用initialize()")
+
             # 验证样本ID
             if sample_id < 0 or sample_id >= len(self._sample_list):
                 raise IndexError(f"样本ID超出范围: {sample_id} (0-{len(self._sample_list)-1})")
-
-            if self._data is None:
-                raise RuntimeError("数据源未初始化，请先调用initialize()")
 
             dynamic = self._data['dynamic'][sample_id]          # (2, 1000)
             static_basic = self._data['static_basic'][sample_id]  # (4,)

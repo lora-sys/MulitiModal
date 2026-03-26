@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """训练单个fold的回归任务"""
 
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -171,42 +172,25 @@ def train_single_fold(fold_num):
     del model, train_loader, val_loader, train_dataset, val_dataset
     gc.collect()
 
-    # 保存结果到JSON
-    results_file = "experiment/results/k_fold_baseline_c_regression/results.json"
+    # 保存结果到per-fold JSON文件
+    results_dir = "experiment/results/k_fold_baseline_c_regression"
+    results_file = os.path.join(results_dir, f"fold_{fold_num+1}_results.json")
 
-    # 读取现有结果
-    if os.path.exists(results_file):
-        with open(results_file, 'r') as f:
-            results = json.load(f)
-    else:
-        results = {
-            "model_type": "baseline_c",
-            "task_type": "regression",
-            "n_folds": 5,
-            "num_epochs": NUM_EPOCHS,
-            "random_seed": 42,
-            "fold_results": []
-        }
+    # 确保目录存在
+    os.makedirs(results_dir, exist_ok=True)
 
-    # 添加当前fold结果
-    results["fold_results"].append({
+    # 保存当前fold结果
+    fold_result = {
         "fold": fold_num + 1,
         "best_mae": float(best_mae),
         "best_epoch": best_epoch,
-        "training_time": fold_time
-    })
-
-    # 如果所有fold都完成了，计算统计结果
-    if len(results["fold_results"]) == 5:
-        fold_maes = [r["best_mae"] for r in results["fold_results"]]
-        results["mean_mae"] = float(np.mean(fold_maes))
-        results["std_mae"] = float(np.std(fold_maes))
-        results["total_time"] = float(sum(r["training_time"] for r in results["fold_results"]))
-        results["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        "training_time": fold_time,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
 
     # 保存结果
     with open(results_file, 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(fold_result, f, indent=2)
 
     return best_mae
 

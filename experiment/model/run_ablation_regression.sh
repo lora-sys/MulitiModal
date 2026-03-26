@@ -2,7 +2,7 @@
 
 # 回归任务消融实验脚本
 
-cd /home/lora/repos/MulitiModal
+cd /home/lora/repos/MulitiModal || exit 1
 source venv/bin/activate
 
 RESULTS_DIR="experiment/results/k_fold_baseline_c_regression_ablation"
@@ -42,7 +42,7 @@ for config in "${!configs[@]}"; do
     echo "========================================" | tee -a $LOG_FILE
 
     # 运行消融实验
-    python -u experiment/model/ablation_regression.py --config $config >> $LOG_FILE 2>&1
+    python -u experiment/model/ablation_regression.py --config $config --results_file $RESULTS_FILE >> $LOG_FILE 2>&1
 
     EXIT_CODE=$?
 

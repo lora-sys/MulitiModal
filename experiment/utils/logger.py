@@ -35,11 +35,21 @@ class ColoredFormatter(logging.Formatter):
     }
 
     def format(self, record):
-        # 添加颜色
+        # 保存原始levelname
+        original_levelname = record.levelname
+
+        # 添加颜色（仅用于控制台输出）
         levelname = record.levelname
         if levelname in self.COLORS:
             record.levelname = f"{self.COLORS[levelname]}{levelname}{self.COLORS['RESET']}"
-        return super().format(record)
+
+        # 格式化记录
+        formatted = super().format(record)
+
+        # 恢复原始levelname（供其他handlers使用）
+        record.levelname = original_levelname
+
+        return formatted
 
 
 def setup_logging(
@@ -127,6 +137,8 @@ def get_logger(name: str, level: Optional[str] = None) -> logging.Logger:
     return logger
 
 
-# 默认初始化日志系统（向后兼容）
-if not logging.getLogger().handlers:
-    setup_logging(log_dir='experiment/logs', level='INFO')
+# 注意：不再自动初始化日志系统
+# 使用者需要显式调用 setup_logging() 来配置日志系统
+# 例如：
+#   from experiment.utils.logger import setup_logging
+#   setup_logging(log_dir='experiment/logs', level='INFO')

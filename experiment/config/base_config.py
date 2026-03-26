@@ -239,6 +239,3 @@ def load_config_from_yaml(path: str) -> ExperimentConfig:
     set_config(config)
     return config
 
-
-# 导入dataclasses（用于类型检查）
-import dataclasses

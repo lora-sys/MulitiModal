@@ -6,7 +6,13 @@
 # 计算项目根目录（脚本所在目录的父目录的父目录）
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-cd "$PROJECT_ROOT"
+
+# 检查是否能成功切换到项目目录
+if ! cd "$PROJECT_ROOT"; then
+    echo "错误：无法切换到项目目录 $PROJECT_ROOT" >&2
+    exit 1
+fi
+
 source venv/bin/activate
 
 RESULTS_DIR="experiment/results/k_fold_baseline_c_regression"
@@ -17,7 +23,7 @@ RESULTS_FILE="$RESULTS_DIR/results.json"
 mkdir -p $RESULTS_DIR
 
 # 清空日志
-> $LOG_FILE
+: > $LOG_FILE
 
 echo "开始5-Fold交叉验证（逐个fold运行）" | tee -a $LOG_FILE
 echo "每个fold独立运行，避免内存累积" | tee -a $LOG_FILE
