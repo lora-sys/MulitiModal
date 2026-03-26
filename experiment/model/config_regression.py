@@ -14,7 +14,7 @@ REGRESSION_CONFIG = {
 
 # 回归模型配置
 REGRESSION_MODEL_CONFIG = {
-    "type": "baseline_a",  # 可选: baseline_a / baseline_b / baseline_c
+    "type": "baseline_c",  # 可选: baseline_a / baseline_b / baseline_c
     "params": {
         "dyn_channels": 2,  # 动态特征通道数
         "static_dim": 4,  # 静态特征维度
@@ -43,13 +43,12 @@ REGRESSION_TRAIN_CONFIG = {
 
 # 调度器配置（与分类任务相同）
 SCHEDULER_CONFIGS = {
-    "CosineAnnealingWarmup": {
-        "type": "CosineAnnealingWarmup",
-        "warmup_epochs": 5,
-        "max_epochs": 50,
+    "CosineAnnealingLR": {
+        "type": "CosineAnnealingLR",
+        "T_max": 50,
         "eta_min": 1e-6,
     },
 }
 
 # 当前使用的调度器
-CURRENT_SCHEDULER = "CosineAnnealingWarmup"
+CURRENT_SCHEDULER = "CosineAnnealingLR"

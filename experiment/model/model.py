@@ -205,28 +205,19 @@ class ConstitutionEmbedding(nn.Module):
 
 class CrossAttentionGate(nn.Module):
     """改进的交叉注意力门控: 用静态特征调制动态特征
-    - 使用分段卷积产生时间上有意义的 token
+    - 先将动态特征降采样成多个 token
     - 使用 Multi-Head Attention
     - 静态特征生成 Query
     """
-    def __init__(self, dim=128, static_dim=None, num_tokens=4, num_heads=4, seq_len=1000):
+    def __init__(self, dim=128, static_dim=None, num_tokens=4, num_heads=4):
         super().__init__()
         static_dim = static_dim or dim
         self.num_tokens = num_tokens
-        self.seq_len = seq_len
 
         # 静态特征投影为 Query
         self.q_proj = nn.Linear(static_dim, dim)
 
-        # 分段卷积：将原始序列分段投影为 token
-        self.segment_proj = nn.Conv1d(
-            in_channels=2,  # 输入是原始的2通道波形
-            out_channels=dim,
-            kernel_size=seq_len // num_tokens,  # 每段250点 = 5秒
-            stride=seq_len // num_tokens
-        )
-
-        # 动态特征投影为 Key/Value（可选，如果需要额外处理）
+        # 动态特征投影为 Key/Value
         self.k_proj = nn.Linear(dim, dim)
         self.v_proj = nn.Linear(dim, dim)
 
@@ -239,27 +230,24 @@ class CrossAttentionGate(nn.Module):
         # 注册位置编码为 buffer（自动移动到正确的设备）
         self.register_buffer('pos_encoding', torch.randn(1, num_tokens, dim) * 0.1)
 
-    def forward(self, dynamic_raw, static):
+    def forward(self, dynamic, static):
         """
         Args:
-            dynamic_raw: (B, 2, seq_len) - 原始动态波形（未编码）
+            dynamic: (B, D) - 动态特征编码
             static: (B, D) - 静态特征编码
         Returns:
             gated_dynamic: (B, D) - 门控后的动态特征
             attn_weights: (B, num_tokens) - 注意力权重
         """
-        B = dynamic_raw.shape[0]
+        B, D = dynamic.shape
 
-        # 1. 使用分段卷积产生时间上有意义的 token
-        # dynamic_raw: (B, 2, seq_len) -> (B, 2, seq_len) -> (B, dim, num_tokens) -> (B, num_tokens, dim)
-        dynamic_tokens = self.segment_proj(dynamic_raw)  # (B, dim, num_tokens)
-        dynamic_tokens = dynamic_tokens.permute(0, 2, 1)  # (B, num_tokens, dim)
-        
-        # 可选：通过投影层进一步处理
-        dynamic_tokens = self.k_proj(dynamic_tokens)  # (B, num_tokens, dim)
-        
+        # 1. 将动态特征降采样成多个 token
+        # 方法：使用线性层 + reshape 创建多个 token
+        dynamic_tokens = self.k_proj(dynamic).unsqueeze(1)  # (B, 1, D)
+        # 复制多次并添加位置编码
+        dynamic_tokens = dynamic_tokens.repeat(1, self.num_tokens, 1)  # (B, num_tokens, D)
         # 添加位置编码
-        dynamic_tokens = dynamic_tokens + self.pos_encoding  # (B, num_tokens, dim)
+        dynamic_tokens = dynamic_tokens + self.pos_encoding  # (B, num_tokens, D)
 
         # 2. 静态特征生成 Query
         q = self.q_proj(static).unsqueeze(1)  # (B, 1, D)
@@ -279,8 +267,8 @@ class CrossAttentionGate(nn.Module):
         # 4. 计算 Gate
         gate = torch.sigmoid(self.gate_proj(gated))
 
-        # 5. 残差连接
-        gated_dynamic = dynamic * gate + dynamic
+        # 5. 门控应用（可以抑制特征）
+        gated_dynamic = dynamic * gate
 
         return gated_dynamic, attn_weights
 
@@ -309,8 +297,7 @@ class MultiExpertFusionModel(nn.Module):
             dim=shared_dim * 4,
             static_dim=shared_dim,
             num_tokens=4,  # 降采样成 4 个 token
-            num_heads=4,  # 4 个注意力头
-            seq_len=1000   # 原始序列长度
+            num_heads=4   # 4 个注意力头
         )
 
         # 使用 ModuleDict 组织投影层和融合层（便于参数分组）
@@ -370,7 +357,7 @@ class MultiExpertFusionModel(nn.Module):
         z_c = self.constitution_encoder(constitution)
 
         # 2. Cross-Attention Gating
-        z_d_gated, attn_weights = self.cross_attn(dynamic, z_b)
+        z_d_gated, attn_weights = self.cross_attn(z_d, z_b)
 
         # 3. 投影到统一维度
         z_d_proj = self.dynamic_proj(z_d_gated)
@@ -419,11 +406,20 @@ class SimpleConcatModel(nn.Module):
     ):
         super().__init__()
         
-        # Waveform encoder: 使用 InceptionEncoder (统一编码器)
-        self.waveform_encoder = InceptionEncoder(
-            in_channels=2,
-            out_channels=shared_dim // 4,  # 64//4=16, 输出16*4=64维，匹配shared_dim
-            depth=3
+        # Waveform encoder: 简单 1D Conv + GAP
+        self.waveform_encoder = nn.Sequential(
+            nn.Conv1d(2, 32, kernel_size=7, padding=3),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(64, shared_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(shared_dim),
+            nn.ReLU(),
+            # GAP: (B, shared_dim, 250) → (B, shared_dim)
         )
         
         # Static basic encoder: 2 层 MLP
@@ -479,7 +475,8 @@ class SimpleConcatModel(nn.Module):
             logits: (B, num_classes)
         """
         # 1. 独立编码
-        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim)
+        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim, 250)
+        z_wave = z_wave.mean(dim=-1)  # GAP → (B, shared_dim)
         
         z_basic = self.static_basic_encoder(static_basic)  # (B, shared_dim)
         z_scores = self.static_scores_encoder(static_scores)  # (B, shared_dim)
@@ -524,11 +521,19 @@ class LateFusionTransformerModel(nn.Module):
         self.shared_dim = shared_dim
         self.num_modalities = 4
         
-        # Waveform encoder: 使用 InceptionEncoder (统一编码器)
-        self.waveform_encoder = InceptionEncoder(
-            in_channels=2,
-            out_channels=shared_dim // 4,  # 64//4=16, 输出16*4=64维，匹配shared_dim
-            depth=3
+        # Waveform encoder (使用 Inception 风格但输出 pooled)
+        self.waveform_encoder = nn.Sequential(
+            nn.Conv1d(2, 32, kernel_size=7, padding=3),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.MaxPool1d(2),
+            nn.Conv1d(64, shared_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(shared_dim),
+            nn.ReLU(),
         )
         
         # Static encoders
@@ -590,7 +595,7 @@ class LateFusionTransformerModel(nn.Module):
         B = dynamic.size(0)
         
         # 1. 独立编码
-        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim)
+        z_wave = self.waveform_encoder(dynamic).mean(dim=-1)  # (B, shared_dim)
         z_basic = self.static_basic_encoder(static_basic)
         z_scores = self.static_scores_encoder(static_scores)
         z_const = self.constitution_embedding(constitution)
@@ -717,7 +722,7 @@ class SimpleAttentionFusion(nn.Module):
             logits: (B, num_classes)
         """
         # 1. 独立编码
-        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim)
+        z_wave = self.waveform_encoder(dynamic).mean(dim=-1)  # (B, shared_dim)
         z_basic = self.static_basic_encoder(static_basic)
         z_scores = self.static_scores_encoder(static_scores)
         z_const = self.constitution_embedding(constitution)
@@ -843,7 +848,7 @@ class GatedFusion(nn.Module):
             logits: (B, num_classes)
         """
         # 1. 独立编码
-        z_wave = self.waveform_encoder(dynamic)  # (B, shared_dim)
+        z_wave = self.waveform_encoder(dynamic).mean(dim=-1)  # (B, shared_dim)
         z_basic = self.static_basic_encoder(static_basic)
         z_scores = self.static_scores_encoder(static_scores)
         z_const = self.constitution_embedding(constitution)
@@ -872,7 +877,7 @@ class GatedFusion(nn.Module):
 # =========================================================================
 # 工厂函数: 根据配置返回模型
 # =========================================================================
-def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=4, **kwarg):
+def get_model(model_type="baseline_c", num_classes=3, dyn_channels=2, static_dim=4, **kwarg):
     """工厂函数：根据配置返回模型"""
     # Baseline 模型
     if model_type == "baseline_a" or model_type == "simple_concat":
@@ -883,7 +888,7 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
             hidden_dim=kwarg.get('hidden_dim', 128),
             dropout=kwarg.get('dropout', 0.3),
         )
-    
+
     if model_type == "baseline_b" or model_type == "late_fusion":
         return LateFusionTransformerModel(
             num_classes=num_classes,
@@ -904,7 +909,7 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
             hidden_dim=kwarg.get('hidden_dim', 256),
             dropout=kwarg.get('dropout', 0.3),
         )
-    
+
     # 新增的融合策略
     if model_type == "attention_fusion" or model_type == "baseline_d":
         return SimpleAttentionFusion(
@@ -915,7 +920,7 @@ def get_model(model_type="inception", num_classes=3, dyn_channels=2, static_dim=
             num_heads=kwarg.get('num_heads', 4),
             dropout=kwarg.get('dropout', 0.3),
         )
-    
+
     if model_type == "gated_fusion" or model_type == "baseline_e":
         return GatedFusion(
             num_classes=num_classes,

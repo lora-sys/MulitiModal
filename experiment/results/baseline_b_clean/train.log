@@ -1,0 +1,175 @@
+============================================================
+🧠 按摩椅舒适度分类 - 训练
+============================================================
+📊 模型类型: late_fusion
+📦 批次大小: 32
+🔢 类别数: 3
+
+📂 加载数据集...
+📦 UnifiedNPZDataSource initialized: 6684 samples
+📦 UnifiedNPZDataSource initialized: 6684 samples
+📦 预加载数据到内存...
+✅ 预加载完成: 6684 样本
+[*] Created dataset: 6684 samples from experiment/model/unified_dataset_expanded.npz
+训练集: 5347 样本
+验证集: 1337 样本
+
+🏗️ 创建模型...
+设备: cuda
+[优化] 基础学习率: 0.001
+[优化] 参数组 0: lr=0.001000, 参数数量=64
+
+🚀 开始训练...
+------------------------------------------------------------
+[优化] 滑动平均窗口大小: 5
+[Recorder] 配置已保存: experiment/results/train_late_fusion/r1/run_config.json
+[Recorder] 实验记录目录: experiment/results/train_late_fusion/r1
+Epoch [ 1/50] Train Loss: 0.6411 Acc: 78.87% | Val Loss: 0.2550 Acc: 96.04% | Smoothed Val: 0.2550 96.04% | LR: 0.000280
+  💾 保存最佳模型 (Smoothed Acc: 96.04%)
+Epoch [ 2/50] Train Loss: 0.2058 Acc: 93.77% | Val Loss: 0.1218 Acc: 96.56% | Smoothed Val: 0.1884 96.30% | LR: 0.000460
+  💾 保存最佳模型 (Smoothed Acc: 96.30%)
+Epoch [ 3/50] Train Loss: 0.1773 Acc: 94.37% | Val Loss: 1.4318 Acc: 68.89% | Smoothed Val: 0.6029 87.16% | LR: 0.000640
+Epoch [ 4/50] Train Loss: 0.1432 Acc: 94.93% | Val Loss: 0.3301 Acc: 85.56% | Smoothed Val: 0.5347 86.76% | LR: 0.000820
+Epoch [ 5/50] Train Loss: 0.1157 Acc: 96.11% | Val Loss: 0.0849 Acc: 97.23% | Smoothed Val: 0.4447 88.86% | LR: 0.001000
+Epoch [ 6/50] Train Loss: 0.1025 Acc: 96.33% | Val Loss: 1.6377 Acc: 64.17% | Smoothed Val: 0.7213 82.48% | LR: 0.000999
+Epoch [ 7/50] Train Loss: 0.0987 Acc: 96.54% | Val Loss: 1.8443 Acc: 63.05% | Smoothed Val: 1.0658 75.78% | LR: 0.000995
+Epoch [ 8/50] Train Loss: 0.1035 Acc: 96.22% | Val Loss: 0.0656 Acc: 97.08% | Smoothed Val: 0.7925 81.42% | LR: 0.000989
+Epoch [ 9/50] Train Loss: 0.1097 Acc: 96.32% | Val Loss: 0.1645 Acc: 93.49% | Smoothed Val: 0.7594 83.01% | LR: 0.000981
+Epoch [10/50] Train Loss: 0.0913 Acc: 97.06% | Val Loss: 0.0582 Acc: 98.06% | Smoothed Val: 0.7541 83.17% | LR: 0.000970
+Epoch [11/50] Train Loss: 0.0764 Acc: 97.46% | Val Loss: 0.0515 Acc: 98.73% | Smoothed Val: 0.4368 90.08% | LR: 0.000957
+Epoch [12/50] Train Loss: 0.1150 Acc: 96.73% | Val Loss: 0.0562 Acc: 97.83% | Smoothed Val: 0.0792 97.04% | LR: 0.000942
+  💾 保存最佳模型 (Smoothed Acc: 97.04%)
+Epoch [13/50] Train Loss: 0.1102 Acc: 96.65% | Val Loss: 0.0664 Acc: 97.68% | Smoothed Val: 0.0794 97.16% | LR: 0.000924
+  💾 保存最佳模型 (Smoothed Acc: 97.16%)
+Epoch [14/50] Train Loss: 0.0790 Acc: 97.51% | Val Loss: 0.0442 Acc: 98.65% | Smoothed Val: 0.0553 98.19% | LR: 0.000905
+  💾 保存最佳模型 (Smoothed Acc: 98.19%)
+Epoch [15/50] Train Loss: 0.0729 Acc: 97.51% | Val Loss: 0.0573 Acc: 98.13% | Smoothed Val: 0.0551 98.20% | LR: 0.000883
+  💾 保存最佳模型 (Smoothed Acc: 98.20%)
+Epoch [16/50] Train Loss: 0.0806 Acc: 97.61% | Val Loss: 0.0570 Acc: 98.13% | Smoothed Val: 0.0562 98.09% | LR: 0.000860
+Epoch [17/50] Train Loss: 0.0716 Acc: 97.62% | Val Loss: 0.0499 Acc: 98.58% | Smoothed Val: 0.0550 98.23% | LR: 0.000835
+  💾 保存最佳模型 (Smoothed Acc: 98.23%)
+Epoch [18/50] Train Loss: 0.0531 Acc: 98.17% | Val Loss: 0.0425 Acc: 98.58% | Smoothed Val: 0.0502 98.41% | LR: 0.000808
+  💾 保存最佳模型 (Smoothed Acc: 98.41%)
+Epoch [19/50] Train Loss: 0.0534 Acc: 98.52% | Val Loss: 0.0558 Acc: 98.28% | Smoothed Val: 0.0525 98.34% | LR: 0.000780
+Epoch [20/50] Train Loss: 0.0512 Acc: 98.13% | Val Loss: 0.0417 Acc: 98.73% | Smoothed Val: 0.0494 98.46% | LR: 0.000750
+  💾 保存最佳模型 (Smoothed Acc: 98.46%)
+Epoch [21/50] Train Loss: 0.0549 Acc: 98.22% | Val Loss: 0.0874 Acc: 96.63% | Smoothed Val: 0.0555 98.16% | LR: 0.000719
+Epoch [22/50] Train Loss: 0.0556 Acc: 98.24% | Val Loss: 0.0780 Acc: 97.16% | Smoothed Val: 0.0611 97.88% | LR: 0.000688
+Epoch [23/50] Train Loss: 0.0597 Acc: 97.85% | Val Loss: 0.0528 Acc: 98.35% | Smoothed Val: 0.0631 97.83% | LR: 0.000655
+Epoch [24/50] Train Loss: 0.0525 Acc: 98.47% | Val Loss: 0.1086 Acc: 96.26% | Smoothed Val: 0.0737 97.43% | LR: 0.000621
+Epoch [25/50] Train Loss: 0.0409 Acc: 98.75% | Val Loss: 0.0467 Acc: 98.65% | Smoothed Val: 0.0747 97.41% | LR: 0.000587
+Epoch [26/50] Train Loss: 0.0504 Acc: 98.17% | Val Loss: 0.0815 Acc: 96.93% | Smoothed Val: 0.0735 97.47% | LR: 0.000553
+Epoch [27/50] Train Loss: 0.0541 Acc: 98.34% | Val Loss: 0.0876 Acc: 97.53% | Smoothed Val: 0.0754 97.55% | LR: 0.000518
+Epoch [28/50] Train Loss: 0.0370 Acc: 98.78% | Val Loss: 0.0392 Acc: 98.88% | Smoothed Val: 0.0727 97.65% | LR: 0.000483
+Epoch [29/50] Train Loss: 0.0408 Acc: 98.65% | Val Loss: 0.0317 Acc: 99.03% | Smoothed Val: 0.0573 98.20% | LR: 0.000448
+Epoch [30/50] Train Loss: 0.0335 Acc: 98.86% | Val Loss: 0.0331 Acc: 99.03% | Smoothed Val: 0.0546 98.28% | LR: 0.000414
+Epoch [31/50] Train Loss: 0.0389 Acc: 98.63% | Val Loss: 0.0329 Acc: 99.18% | Smoothed Val: 0.0449 98.73% | LR: 0.000380
+  💾 保存最佳模型 (Smoothed Acc: 98.73%)
+Epoch [32/50] Train Loss: 0.0450 Acc: 98.62% | Val Loss: 0.0332 Acc: 98.88% | Smoothed Val: 0.0340 99.00% | LR: 0.000346
+  💾 保存最佳模型 (Smoothed Acc: 99.00%)
+Epoch [33/50] Train Loss: 0.0416 Acc: 98.73% | Val Loss: 0.0349 Acc: 98.95% | Smoothed Val: 0.0332 99.01% | LR: 0.000313
+  💾 保存最佳模型 (Smoothed Acc: 99.01%)
+Epoch [34/50] Train Loss: 0.0327 Acc: 98.77% | Val Loss: 0.0305 Acc: 99.18% | Smoothed Val: 0.0329 99.04% | LR: 0.000282
+  💾 保存最佳模型 (Smoothed Acc: 99.04%)
+Epoch [35/50] Train Loss: 0.0317 Acc: 98.93% | Val Loss: 0.0333 Acc: 99.10% | Smoothed Val: 0.0330 99.06% | LR: 0.000251
+  💾 保存最佳模型 (Smoothed Acc: 99.06%)
+Epoch [36/50] Train Loss: 0.0488 Acc: 99.01% | Val Loss: 0.0541 Acc: 98.50% | Smoothed Val: 0.0372 98.92% | LR: 0.000221
+Epoch [37/50] Train Loss: 0.0350 Acc: 98.77% | Val Loss: 0.0512 Acc: 98.35% | Smoothed Val: 0.0408 98.82% | LR: 0.000193
+Epoch [38/50] Train Loss: 0.0290 Acc: 98.95% | Val Loss: 0.0569 Acc: 98.58% | Smoothed Val: 0.0452 98.74% | LR: 0.000166
+Epoch [39/50] Train Loss: 0.0276 Acc: 99.05% | Val Loss: 0.0290 Acc: 99.18% | Smoothed Val: 0.0449 98.74% | LR: 0.000141
+Epoch [40/50] Train Loss: 0.0505 Acc: 98.86% | Val Loss: 0.0400 Acc: 98.95% | Smoothed Val: 0.0462 98.71% | LR: 0.000118
+Epoch [41/50] Train Loss: 0.0307 Acc: 98.86% | Val Loss: 0.0353 Acc: 99.25% | Smoothed Val: 0.0425 98.86% | LR: 0.000096
+Epoch [42/50] Train Loss: 0.0255 Acc: 99.23% | Val Loss: 0.0332 Acc: 99.10% | Smoothed Val: 0.0389 99.01% | LR: 0.000077
+Epoch [43/50] Train Loss: 0.0238 Acc: 99.12% | Val Loss: 0.0397 Acc: 98.88% | Smoothed Val: 0.0355 99.07% | LR: 0.000059
+  💾 保存最佳模型 (Smoothed Acc: 99.07%)
+Epoch [44/50] Train Loss: 0.0258 Acc: 99.10% | Val Loss: 0.0549 Acc: 98.35% | Smoothed Val: 0.0406 98.91% | LR: 0.000044
+Epoch [45/50] Train Loss: 0.0214 Acc: 99.29% | Val Loss: 0.0360 Acc: 98.95% | Smoothed Val: 0.0399 98.91% | LR: 0.000031
+Epoch [46/50] Train Loss: 0.0251 Acc: 99.14% | Val Loss: 0.0387 Acc: 99.03% | Smoothed Val: 0.0405 98.86% | LR: 0.000020
+Epoch [47/50] Train Loss: 0.0222 Acc: 99.29% | Val Loss: 0.0403 Acc: 98.88% | Smoothed Val: 0.0420 98.82% | LR: 0.000012
+Epoch [48/50] Train Loss: 0.0259 Acc: 99.12% | Val Loss: 0.0408 Acc: 98.88% | Smoothed Val: 0.0422 98.82% | LR: 0.000006
+Epoch [49/50] Train Loss: 0.0238 Acc: 99.12% | Val Loss: 0.0351 Acc: 99.10% | Smoothed Val: 0.0382 98.97% | LR: 0.000002
+Epoch [50/50] Train Loss: 0.0303 Acc: 99.18% | Val Loss: 0.0319 Acc: 99.10% | Smoothed Val: 0.0374 99.00% | LR: 0.000001
+------------------------------------------------------------
+✅ 训练完成! 最佳验证准确率: 99.07% | 耗时: 175.4秒
+
+============================================================
+🔍 加载最佳模型进行详细评估...
+============================================================
+[加载] 模型: experiment/model/best_model_late_fusion.pth
+
+[调试] 验证集大小: 1337
+[调试] 预测数量: 1337
+[调试] 标签分布: [511 514 312]
+
+============================================================
+📊 详细评估报告
+============================================================
+
+📋 分类报告:
+              precision    recall  f1-score   support
+
+       一般(0)     0.9960    0.9843    0.9902       511
+       正常(1)     0.9845    0.9864    0.9854       514
+       良好(2)     0.9842    1.0000    0.9921       312
+
+    accuracy                         0.9888      1337
+   macro avg     0.9882    0.9902    0.9892      1337
+weighted avg     0.9888    0.9888    0.9888      1337
+
+
+📊 混淆矩阵:
+[[503   8   0]
+ [  2 507   5]
+ [  0   0 312]]
+
+📈 每类详细指标:
+  一般(0):
+    Precision: 0.9960
+    Recall:    0.9843
+    F1-Score:  0.9902
+    Support:   511
+  正常(1):
+    Precision: 0.9845
+    Recall:    0.9864
+    F1-Score:  0.9854
+    Support:   514
+  良好(2):
+    Precision: 0.9842
+    Recall:    1.0000
+    F1-Score:  0.9921
+    Support:   312
+
+📊 总体指标:
+  Accuracy:         0.9888
+  Macro Precision:  0.9882
+  Macro Recall:     0.9902
+  Macro F1-Score:   0.9892
+  Weighted F1-Score:0.9888
+
+📈 混淆矩阵已保存: experiment/test/result/confusion_matrix_late_fusion.png
+[Recorder] 结果已保存到: experiment/results/experiments_log.csv
+[Recorder] 混淆矩阵已保存: experiment/results/train_late_fusion/r1/figures/confusion_matrix.png
+[Recorder] 训练曲线已保存: experiment/results/train_late_fusion/r1/figures/training_curves.png
+
+[Recorder] 实验结果已保存到: experiment/results/train_late_fusion/r1
+==================================================
+Experiment: train_late_fusion / r1
+Seed: 42
+==================================================
+Model: late_fusion
+Fusion: transformer
+LR: 0.001, Batch: 32
+
+Best Val: Epoch 43
+  Loss: 0.0397
+  Acc:  98.88%
+  F1:   0.9907
+
+Test Results:
+  Acc: 98.88%
+  F1:  0.9892
+  Time: 2.9 min
+📝 实验日志已保存: experiment/model/log.txt
+
+📈 生成训练曲线...
+📈 训练曲线已保存: experiment/test/result/test_result_late_fusion.png

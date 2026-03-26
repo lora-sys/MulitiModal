@@ -4,7 +4,6 @@
 """
 
 import numpy as np
-import torch
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
@@ -19,22 +18,37 @@ plt.rcParams["axes.unicode_minus"] = False
 
 # 添加路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from model.model import get_model
-
-
 def load_test_results(results_dir):
     """加载测试结果"""
     test_results = {}
-    
-    for exp_name in ['regression_a_clean', 'regression_a_noisy', 
-                      'regression_b_clean', 'regression_b_noisy',
-                      'regression_c_clean', 'regression_c_noisy']:
-        config_path = Path(results_dir) / exp_name / 'r1' / 'run_config.json'
-        if config_path.exists():
+
+    # 支持的实验名称
+    exp_names = ['regression_a_clean', 'regression_a_noisy',
+                 'regression_b_clean', 'regression_b_noisy',
+                 'regression_c_clean', 'regression_c_noisy',
+                 'regression_baseline_c_clean', 'regression_baseline_c_noisy']
+
+    for exp_name in exp_names:
+        # 尝试多个可能的路径
+        possible_paths = [
+            Path(results_dir) / exp_name / 'r1' / 'run_config.json',
+            Path(results_dir) / exp_name / 'run_config.json',
+        ]
+
+        config_path = None
+        for path in possible_paths:
+            if path.exists():
+                config_path = path
+                break
+
+        if config_path:
             with open(config_path, 'r') as f:
                 config = json.load(f)
                 test_results[exp_name] = config.get('test_metrics', {})
-    
+                print(f"    ✅ 加载: {exp_name}")
+        else:
+            print(f"    ⚠️  未找到: {exp_name}")
+
     return test_results
 
 
@@ -100,49 +114,57 @@ def plot_model_comparison(test_results, output_dir):
 def plot_noise_impact(test_results, output_dir):
     """绘制噪声影响对比图"""
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    
+
     # 提取干净和噪声数据
     metrics = ['mae', 'rmse', 'r2', 'pearson']
     metric_names = ['MAE', 'RMSE', 'R²', 'Pearson']
-    
+
     for idx, (metric, name) in enumerate(zip(metrics, metric_names)):
         ax = axes[idx // 2, idx % 2]
-        
+
         models_clean = []
         models_noisy = []
         clean_values = []
         noisy_values = []
-        
+
         for model in ['a', 'b', 'c']:
             clean_key = f'regression_{model}_clean'
             noisy_key = f'regression_{model}_noisy'
-            
+
             if clean_key in test_results and noisy_key in test_results:
                 models_clean.append(f'baseline_{model}')
                 models_noisy.append(f'baseline_{model}')
                 clean_values.append(test_results[clean_key][metric])
                 noisy_values.append(test_results[noisy_key][metric])
-        
+
+        # 如果没有数据，显示提示信息
+        if len(models_clean) == 0:
+            ax.text(0.5, 0.5, 'No data available', ha='center', va='center',
+                   fontsize=14, transform=ax.transAxes)
+            ax.set_ylabel(name, fontsize=12)
+            ax.set_title(f'{name} - Noise Impact Analysis', fontsize=14, fontweight='bold')
+            continue
+
         x = np.arange(len(models_clean))
         width = 0.35
-        
+
         bars1 = ax.bar(x - width/2, clean_values, width, label='Clean Data', color='#4ecdc4')
         bars2 = ax.bar(x + width/2, noisy_values, width, label='Noise Augmentation', color='#ff6b6b')
-        
+
         ax.set_ylabel(name, fontsize=12)
         ax.set_title(f'{name} - Noise Impact Analysis', fontsize=14, fontweight='bold')
         ax.set_xticks(x)
-        ax.set_xticklabels([f'baseline_{m}' for m in ['a', 'b', 'c']])
+        ax.set_xticklabels(models_clean)
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
-        
+
         # 添加数值标签
         for bars in [bars1, bars2]:
             for bar in bars:
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height,
                        f'{height:.3f}', ha='center', va='bottom', fontsize=9)
-    
+
     plt.tight_layout()
     output_path = Path(output_dir) / 'noise_impact_analysis.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -153,38 +175,40 @@ def plot_noise_impact(test_results, output_dir):
 def plot_radar_chart(test_results, output_dir):
     """绘制雷达图对比"""
     fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
-    
+
     # 选择最佳模型
     models = ['regression_c_clean', 'regression_b_noisy', 'regression_a_clean']
     model_labels = ['baseline_c_clean', 'baseline_b_noisy', 'baseline_a_clean']
-    
+
     # 归一化指标到0-1范围
     categories = ['MAE(Reversed)', 'RMSE(Reversed)', 'R²', 'Pearson']
     N = len(categories)
-    
+
     angles = [n / float(N) * 2 * np.pi for n in range(N)]
     angles += angles[:1]
-    
+
     colors = ['#ff6b6b', '#4ecdc4', '#45b7d1']
-    
+
+    plotted_models = []
     for model, label, color in zip(models, model_labels, colors):
         if model not in test_results:
             continue
-            
+
         metrics = test_results[model]
-        
+
         # 归一化：MAE和RMSE越小越好，R²和Pearson越大越好
         mae_norm = 1 - (metrics['mae'] / 5.0)  # 假设最大MAE为5
         rmse_norm = 1 - (metrics['rmse'] / 7.0)  # 假设最大RMSE为7
         r2_norm = metrics['r2']
         pearson_norm = metrics['pearson']
-        
+
         values = [mae_norm, rmse_norm, r2_norm, pearson_norm]
         values += values[:1]
-        
+
         ax.plot(angles, values, 'o-', linewidth=2, label=label, color=color)
         ax.fill(angles, values, alpha=0.25, color=color)
-    
+        plotted_models.append(label)
+
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(categories, fontsize=12)
     ax.set_ylim(0, 1)
@@ -192,8 +216,14 @@ def plot_radar_chart(test_results, output_dir):
     ax.set_yticklabels(['0.2', '0.4', '0.6', '0.8', '1.0'], fontsize=10)
     ax.grid(True)
     ax.set_title('Model Performance Radar Chart', fontsize=16, fontweight='bold', pad=20)
-    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
-    
+
+    # 只在有数据时显示图例
+    if len(plotted_models) > 0:
+        ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
+    else:
+        ax.text(0.5, 0.5, 'No data available', ha='center', va='center',
+               fontsize=14, transform=ax.transAxes)
+
     plt.tight_layout()
     output_path = Path(output_dir) / 'model_performance_radar_chart.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -206,7 +236,7 @@ def create_summary_table(test_results, output_dir):
     fig, ax = plt.subplots(figsize=(12, 6))
     ax.axis('tight')
     ax.axis('off')
-    
+
     # 准备数据
     data = []
     for exp_name in sorted(test_results.keys()):
@@ -221,33 +251,44 @@ def create_summary_table(test_results, output_dir):
             f"{metrics['r2']:.4f}",
             f"{metrics['pearson']:.4f}"
         ])
-    
+
+    # 如果没有数据，显示提示信息
+    if len(data) == 0:
+        ax.text(0.5, 0.5, 'No data available', ha='center', va='center',
+               fontsize=14, transform=ax.transAxes)
+        ax.set_title('Regression Experiment Results Summary', fontsize=16, fontweight='bold', pad=20)
+        output_path = Path(output_dir) / 'regression_results_summary_table.png'
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"✅ Saved: {output_path}")
+        plt.close()
+        return
+
     # 按MAE排序
     data.sort(key=lambda x: float(x[2]))
-    
+
     # 创建表格
     table = ax.table(cellText=data,
                     colLabels=['Model', 'Training', 'Test MAE', 'Test RMSE', 'Test R²', 'Test Pearson'],
                     cellLoc='center',
                     loc='center')
-    
+
     table.auto_set_font_size(False)
     table.set_fontsize(11)
     table.scale(1.2, 1.5)
-    
+
     # 设置表头样式
     for i in range(6):
         table[(0, i)].set_facecolor('#4a90e2')
         table[(0, i)].set_text_props(weight='bold', color='white')
-    
+
     # 突出显示最佳模型
     for i in range(1, len(data)+1):
         if i == 1:  # 最佳模型
             for j in range(6):
                 table[(i, j)].set_facecolor('#d4edda')
-    
+
     ax.set_title('Regression Experiment Results Summary', fontsize=16, fontweight='bold', pad=20)
-    
+
     output_path = Path(output_dir) / 'regression_results_summary_table.png'
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"✅ Saved: {output_path}")

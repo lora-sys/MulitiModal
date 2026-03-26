@@ -1,0 +1,20 @@
+{
+  "experiment_id": "train_baseline_c",
+  "run_id": "r1",
+  "seed": 42,
+  "model": "baseline_c",
+  "fusion_type": "cross_attention",
+  "batch_size": 32,
+  "lr": 0.001,
+  "optimizer": "Adam",
+  "weight_decay": 0.0001,
+  "num_epochs": 50,
+  "num_workers": 0,
+  "device": "cuda",
+  "scheduler": "CosineAnnealingLR",
+  "warmup_epochs": 0,
+  "encoder_lr_ratio": 1.0,
+  "dropout": 0.3,
+  "augmentation": "none",
+  "notes": ""
+}

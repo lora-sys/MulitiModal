@@ -1,0 +1,181 @@
+============================================================
+🧠 按摩椅舒适度分类 - 训练
+============================================================
+📊 模型类型: simple_concat
+📦 批次大小: 32
+🔢 类别数: 3
+
+📂 加载数据集...
+📦 UnifiedNPZDataSource initialized: 6684 samples
+📦 UnifiedNPZDataSource initialized: 6684 samples
+📦 预加载数据到内存...
+✅ 预加载完成: 6684 样本
+[*] Created dataset: 6684 samples from experiment/model/unified_dataset_expanded.npz
+训练集: 5347 样本
+验证集: 1337 样本
+
+🏗️ 创建模型...
+设备: cuda
+[优化] 基础学习率: 0.001
+[优化] 参数组 0: lr=0.001000, 参数数量=39
+
+🚀 开始训练...
+------------------------------------------------------------
+[优化] 滑动平均窗口大小: 5
+[Recorder] 配置已保存: experiment/results/train_simple_concat/r1/run_config.json
+[Recorder] 实验记录目录: experiment/results/train_simple_concat/r1
+Epoch [ 1/50] Train Loss: 0.7598 Acc: 71.72% | Val Loss: 0.3879 Acc: 95.81% | Smoothed Val: 0.3879 95.81% | LR: 0.000280
+  💾 保存最佳模型 (Smoothed Acc: 95.81%)
+Epoch [ 2/50] Train Loss: 0.2316 Acc: 93.79% | Val Loss: 0.1083 Acc: 97.08% | Smoothed Val: 0.2481 96.45% | LR: 0.000460
+  💾 保存最佳模型 (Smoothed Acc: 96.45%)
+Epoch [ 3/50] Train Loss: 0.1495 Acc: 94.82% | Val Loss: 0.9307 Acc: 71.95% | Smoothed Val: 0.4756 88.28% | LR: 0.000640
+Epoch [ 4/50] Train Loss: 0.1316 Acc: 95.12% | Val Loss: 0.0659 Acc: 97.98% | Smoothed Val: 0.3732 90.71% | LR: 0.000820
+Epoch [ 5/50] Train Loss: 0.1043 Acc: 96.78% | Val Loss: 0.0546 Acc: 98.06% | Smoothed Val: 0.3095 92.18% | LR: 0.001000
+Epoch [ 6/50] Train Loss: 0.1018 Acc: 96.58% | Val Loss: 0.2562 Acc: 89.83% | Smoothed Val: 0.2831 90.98% | LR: 0.000999
+Epoch [ 7/50] Train Loss: 0.0982 Acc: 96.78% | Val Loss: 0.3753 Acc: 86.46% | Smoothed Val: 0.3365 88.86% | LR: 0.000995
+Epoch [ 8/50] Train Loss: 0.0897 Acc: 96.99% | Val Loss: 0.0491 Acc: 98.13% | Smoothed Val: 0.1602 94.09% | LR: 0.000989
+Epoch [ 9/50] Train Loss: 0.0735 Acc: 97.66% | Val Loss: 0.1162 Acc: 96.34% | Smoothed Val: 0.1703 93.76% | LR: 0.000981
+Epoch [10/50] Train Loss: 0.0788 Acc: 97.36% | Val Loss: 0.2359 Acc: 90.50% | Smoothed Val: 0.2065 92.25% | LR: 0.000970
+Epoch [11/50] Train Loss: 0.0717 Acc: 97.46% | Val Loss: 0.1135 Acc: 96.48% | Smoothed Val: 0.1780 93.58% | LR: 0.000957
+Epoch [12/50] Train Loss: 0.0599 Acc: 98.13% | Val Loss: 0.0540 Acc: 98.06% | Smoothed Val: 0.1137 95.90% | LR: 0.000942
+Epoch [13/50] Train Loss: 0.0638 Acc: 98.30% | Val Loss: 0.0337 Acc: 99.18% | Smoothed Val: 0.1107 96.11% | LR: 0.000924
+Epoch [14/50] Train Loss: 0.0734 Acc: 97.48% | Val Loss: 0.1284 Acc: 94.91% | Smoothed Val: 0.1131 95.83% | LR: 0.000905
+Epoch [15/50] Train Loss: 0.0601 Acc: 98.04% | Val Loss: 0.2413 Acc: 90.50% | Smoothed Val: 0.1142 95.83% | LR: 0.000883
+Epoch [16/50] Train Loss: 0.0553 Acc: 98.28% | Val Loss: 0.0926 Acc: 97.16% | Smoothed Val: 0.1100 95.96% | LR: 0.000860
+Epoch [17/50] Train Loss: 0.0745 Acc: 97.85% | Val Loss: 0.0411 Acc: 98.88% | Smoothed Val: 0.1074 96.13% | LR: 0.000835
+Epoch [18/50] Train Loss: 0.0567 Acc: 98.07% | Val Loss: 0.0339 Acc: 98.80% | Smoothed Val: 0.1074 96.05% | LR: 0.000808
+Epoch [19/50] Train Loss: 0.0614 Acc: 97.83% | Val Loss: 0.0335 Acc: 99.18% | Smoothed Val: 0.0885 96.90% | LR: 0.000780
+  💾 保存最佳模型 (Smoothed Acc: 96.90%)
+Epoch [20/50] Train Loss: 0.0454 Acc: 98.52% | Val Loss: 0.0370 Acc: 99.03% | Smoothed Val: 0.0476 98.61% | LR: 0.000750
+  💾 保存最佳模型 (Smoothed Acc: 98.61%)
+Epoch [21/50] Train Loss: 0.0485 Acc: 98.34% | Val Loss: 0.0597 Acc: 97.91% | Smoothed Val: 0.0410 98.76% | LR: 0.000719
+  💾 保存最佳模型 (Smoothed Acc: 98.76%)
+Epoch [22/50] Train Loss: 0.0482 Acc: 98.49% | Val Loss: 0.0939 Acc: 97.38% | Smoothed Val: 0.0516 98.46% | LR: 0.000688
+Epoch [23/50] Train Loss: 0.0577 Acc: 98.00% | Val Loss: 0.0544 Acc: 98.06% | Smoothed Val: 0.0557 98.31% | LR: 0.000655
+Epoch [24/50] Train Loss: 0.0510 Acc: 98.32% | Val Loss: 0.0584 Acc: 98.20% | Smoothed Val: 0.0607 98.12% | LR: 0.000621
+Epoch [25/50] Train Loss: 0.0514 Acc: 98.32% | Val Loss: 0.0288 Acc: 99.25% | Smoothed Val: 0.0590 98.16% | LR: 0.000587
+Epoch [26/50] Train Loss: 0.0566 Acc: 98.28% | Val Loss: 0.0673 Acc: 98.13% | Smoothed Val: 0.0605 98.20% | LR: 0.000553
+Epoch [27/50] Train Loss: 0.0582 Acc: 98.02% | Val Loss: 0.0617 Acc: 97.91% | Smoothed Val: 0.0541 98.31% | LR: 0.000518
+Epoch [28/50] Train Loss: 0.0382 Acc: 98.78% | Val Loss: 0.0324 Acc: 99.25% | Smoothed Val: 0.0497 98.55% | LR: 0.000483
+Epoch [29/50] Train Loss: 0.0404 Acc: 98.63% | Val Loss: 0.0306 Acc: 99.33% | Smoothed Val: 0.0441 98.77% | LR: 0.000448
+  💾 保存最佳模型 (Smoothed Acc: 98.77%)
+Epoch [30/50] Train Loss: 0.0452 Acc: 98.60% | Val Loss: 0.0338 Acc: 98.88% | Smoothed Val: 0.0452 98.70% | LR: 0.000414
+Epoch [31/50] Train Loss: 0.0485 Acc: 98.37% | Val Loss: 0.0480 Acc: 98.28% | Smoothed Val: 0.0413 98.73% | LR: 0.000380
+Epoch [32/50] Train Loss: 0.0343 Acc: 98.80% | Val Loss: 0.0299 Acc: 99.10% | Smoothed Val: 0.0349 98.97% | LR: 0.000346
+  💾 保存最佳模型 (Smoothed Acc: 98.97%)
+Epoch [33/50] Train Loss: 0.0339 Acc: 98.95% | Val Loss: 0.0449 Acc: 98.58% | Smoothed Val: 0.0374 98.83% | LR: 0.000313
+Epoch [34/50] Train Loss: 0.0900 Acc: 98.77% | Val Loss: 0.0694 Acc: 97.83% | Smoothed Val: 0.0452 98.53% | LR: 0.000282
+Epoch [35/50] Train Loss: 0.0395 Acc: 98.82% | Val Loss: 0.0375 Acc: 98.88% | Smoothed Val: 0.0459 98.53% | LR: 0.000251
+Epoch [36/50] Train Loss: 0.0371 Acc: 99.08% | Val Loss: 0.0346 Acc: 98.80% | Smoothed Val: 0.0432 98.64% | LR: 0.000221
+Epoch [37/50] Train Loss: 0.0331 Acc: 98.92% | Val Loss: 0.0428 Acc: 98.50% | Smoothed Val: 0.0458 98.52% | LR: 0.000193
+Epoch [38/50] Train Loss: 0.0284 Acc: 99.16% | Val Loss: 0.0324 Acc: 99.03% | Smoothed Val: 0.0433 98.61% | LR: 0.000166
+Epoch [39/50] Train Loss: 0.0391 Acc: 98.95% | Val Loss: 0.0401 Acc: 98.73% | Smoothed Val: 0.0375 98.79% | LR: 0.000141
+Epoch [40/50] Train Loss: 0.0306 Acc: 99.06% | Val Loss: 0.0245 Acc: 99.18% | Smoothed Val: 0.0349 98.85% | LR: 0.000118
+Epoch [41/50] Train Loss: 0.0270 Acc: 99.06% | Val Loss: 0.0396 Acc: 98.65% | Smoothed Val: 0.0359 98.82% | LR: 0.000096
+Epoch [42/50] Train Loss: 0.0278 Acc: 99.06% | Val Loss: 0.0324 Acc: 98.95% | Smoothed Val: 0.0338 98.91% | LR: 0.000077
+Epoch [43/50] Train Loss: 0.0258 Acc: 99.16% | Val Loss: 0.0307 Acc: 98.80% | Smoothed Val: 0.0335 98.86% | LR: 0.000059
+Epoch [44/50] Train Loss: 0.0209 Acc: 99.38% | Val Loss: 0.0289 Acc: 99.18% | Smoothed Val: 0.0312 98.95% | LR: 0.000044
+Epoch [45/50] Train Loss: 0.0283 Acc: 99.05% | Val Loss: 0.0253 Acc: 99.25% | Smoothed Val: 0.0314 98.97% | LR: 0.000031
+Epoch [46/50] Train Loss: 0.0245 Acc: 99.27% | Val Loss: 0.0414 Acc: 98.65% | Smoothed Val: 0.0317 98.97% | LR: 0.000020
+Epoch [47/50] Train Loss: 0.0238 Acc: 99.29% | Val Loss: 0.0344 Acc: 98.73% | Smoothed Val: 0.0321 98.92% | LR: 0.000012
+Epoch [48/50] Train Loss: 0.0215 Acc: 99.29% | Val Loss: 0.0364 Acc: 98.73% | Smoothed Val: 0.0333 98.91% | LR: 0.000006
+Epoch [49/50] Train Loss: 0.0242 Acc: 99.21% | Val Loss: 0.0345 Acc: 98.73% | Smoothed Val: 0.0344 98.82% | LR: 0.000002
+Epoch [50/50] Train Loss: 0.0357 Acc: 99.25% | Val Loss: 0.0262 Acc: 99.25% | Smoothed Val: 0.0346 98.82% | LR: 0.000001
+------------------------------------------------------------
+✅ 训练完成! 最佳验证准确率: 98.97% | 耗时: 168.2秒
+
+============================================================
+🔍 加载最佳模型进行详细评估...
+============================================================
+[加载] 模型: experiment/model/best_model_simple_concat.pth
+
+[调试] 验证集大小: 1337
+[调试] 预测数量: 1337
+[调试] 标签分布: [511 514 312]
+
+============================================================
+📊 详细评估报告
+============================================================
+
+📋 分类报告:
+              precision    recall  f1-score   support
+
+       一般(0)     0.9961    0.9902    0.9931       511
+       正常(1)     0.9883    0.9883    0.9883       514
+       良好(2)     0.9873    0.9968    0.9920       312
+
+    accuracy                         0.9910      1337
+   macro avg     0.9906    0.9918    0.9912      1337
+weighted avg     0.9910    0.9910    0.9910      1337
+
+
+📊 混淆矩阵:
+[[506   5   0]
+ [  2 508   4]
+ [  0   1 311]]
+
+📈 每类详细指标:
+  一般(0):
+    Precision: 0.9961
+    Recall:    0.9902
+    F1-Score:  0.9931
+    Support:   511
+  正常(1):
+    Precision: 0.9883
+    Recall:    0.9883
+    F1-Score:  0.9883
+    Support:   514
+  良好(2):
+    Precision: 0.9873
+    Recall:    0.9968
+    F1-Score:  0.9920
+    Support:   312
+
+📊 总体指标:
+  Accuracy:         0.9910
+  Macro Precision:  0.9906
+  Macro Recall:     0.9918
+  Macro F1-Score:   0.9912
+  Weighted F1-Score:0.9910
+Traceback (most recent call last):
+  File "/home/lora/repos/MulitiModal/experiment/model/train.py", line 783, in <module>
+    main()
+    ~~~~^^
+  File "/home/lora/repos/MulitiModal/experiment/model/train.py", line 620, in main
+    plot_confusion_matrix(cm, save_path=cm_path)
+    ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lora/repos/MulitiModal/experiment/model/train.py", line 219, in plot_confusion_matrix
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/matplotlib/pyplot.py", line 1250, in savefig
+    res = fig.savefig(*args, **kwargs)  # type: ignore[func-returns-value]
+  File "/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/matplotlib/figure.py", line 3490, in savefig
+    self.canvas.print_figure(fname, **kwargs)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/matplotlib/backend_bases.py", line 2186, in print_figure
+    result = print_method(
+        filename,
+    ...<3 lines>...
+        bbox_inches_restore=_bbox_inches_restore,
+        **kwargs)
+  File "/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/matplotlib/backend_bases.py", line 2042, in <lambda>
+    print_method = functools.wraps(meth)(lambda *args, **kwargs: meth(
+                                                                 ~~~~^
+        *args, **{k: v for k, v in kwargs.items() if k not in skip}))
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/matplotlib/backends/backend_agg.py", line 481, in print_png
+    self._print_pil(filename_or_obj, "png", pil_kwargs, metadata)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/matplotlib/backends/backend_agg.py", line 430, in _print_pil
+    mpl.image.imsave(
+    ~~~~~~~~~~~~~~~~^
+        filename_or_obj, self.buffer_rgba(), format=fmt, origin="upper",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        dpi=self.figure.dpi, metadata=metadata, pil_kwargs=pil_kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/matplotlib/image.py", line 1657, in imsave
+    image.save(fname, **pil_kwargs)
+    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/PIL/Image.py", line 2585, in save
+    fp = builtins.open(filename, "w+b")
+FileNotFoundError: [Errno 2] No such file or directory: 'experiment/test/result/confusion_matrix_simple_concat.png'
