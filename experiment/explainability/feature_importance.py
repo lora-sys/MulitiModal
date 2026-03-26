@@ -132,7 +132,12 @@ class FeatureImportanceAnalyzer:
                 scores.append(score)
 
             # 重要性 = 基准性能 - 置换后性能
-            importance = baseline_score - np.mean(scores)
+            # 对于损失指标（越小越好），需要反转符号
+            delta = baseline_score - np.mean(scores)
+            if metric == "loss" or not self._greater_is_better(metric):
+                importance = -delta
+            else:
+                importance = delta
             importance_scores[feature_name] = importance
 
             self.logger.info(f"  {feature_name}: {importance:.4f}")
@@ -260,18 +265,40 @@ class FeatureImportanceAnalyzer:
         else:
             raise ValueError(f"未知的指标: {metric}")
 
+    def _greater_is_better(self, metric: str) -> bool:
+        """判断指标是否越大越好
+
+        Args:
+            metric: 指标名称
+
+        Returns:
+            bool: True表示越大越好，False表示越小越好
+        """
+        greater_is_better_metrics = ['accuracy', 'acc', 'f1', 'r2', 'precision', 'recall', 'pearson']
+        return metric.lower() in greater_is_better_metrics
+
     def _get_feature_groups(self) -> Dict[str, Dict[str, int]]:
         """获取特征组
 
         Returns:
             Dict: 特征组字典
         """
-        return {
-            'Dynamic Waveform': {'dynamic': 0},
-            'Static Basic': {'static_basic': 0},
-            'Static Scores': {'static_scores': 0},
-            'Constitution': {'constitution': 0},
-        }
+        # 优先使用调用者提供的feature_names
+        if hasattr(self, 'feature_names') and self.feature_names:
+            return {
+                self.feature_names[0]: {'dynamic': 0},
+                self.feature_names[1]: {'static_basic': 0},
+                self.feature_names[2]: {'static_scores': 0},
+                self.feature_names[3]: {'constitution': 0},
+            }
+        else:
+            # 回退到默认名称
+            return {
+                'Dynamic Waveform': {'dynamic': 0},
+                'Static Basic': {'static_basic': 0},
+                'Static Scores': {'static_scores': 0},
+                'Constitution': {'constitution': 0},
+            }
 
     def visualize_importance(
         self,

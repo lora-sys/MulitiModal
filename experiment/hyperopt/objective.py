@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 from typing import Dict, Any, Optional, Tuple
 import dataclasses
+import optuna
 
 # 添加项目路径
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -80,6 +81,9 @@ class ObjectiveFunction:
 
             return best_metric
 
+        except optuna.TrialPruned:
+            # 重新抛出剪枝异常，保持PRUNED状态
+            raise
         except Exception as e:
             self.logger.error(f"Trial 失败: {e}")
             # 返回最差值，让Optuna跳过这个trial
@@ -170,14 +174,10 @@ class ObjectiveFunction:
             shared_dim=params.get("shared_dim", 64),
             hidden_dim=params.get("hidden_dim", 128),
             dropout=params.get("dropout", 0.3),
-            # 编码器特定参数
-            inception_depth=params.get("inception_depth", 3),
-            inception_bottleneck_channels=params.get("inception_bottleneck_channels", 32),
-            transformer_num_heads=params.get("transformer_num_heads", 4),
-            transformer_num_layers=params.get("transformer_num_layers", 2),
-            transformer_dim_feedforward=params.get("transformer_dim_feedforward", 256),
-            lstm_hidden_size=params.get("lstm_hidden_size", 64),
-            lstm_num_layers=params.get("lstm_num_layers", 2),
+            # 编码器特定参数（使用模型工厂期望的参数名）
+            num_heads=params.get("num_heads", params.get("transformer_num_heads", 4)),
+            num_layers=params.get("num_layers", params.get("transformer_num_layers", 2)),
+            dim_feedforward=params.get("dim_feedforward", params.get("transformer_dim_feedforward", 256)),
         )
 
         model = model.to(self.device)
@@ -296,10 +296,12 @@ class ObjectiveFunction:
                     scores = batch.get('scores', batch.get('label', None))
                     if scores is None:
                         scores = batch['label'].to(self.device)
+                    else:
+                        scores = scores.to(self.device)
 
                     # 前向传播
                     outputs = model(dynamic, static_basic, static_scores, constitution)
-                    loss = criterion(outputs.squeeze(), scores)
+                    loss = criterion(outputs.squeeze(-1), scores)
 
                 # 反向传播
                 loss.backward()
@@ -317,6 +319,8 @@ class ObjectiveFunction:
             val_loss = 0.0
             val_correct = 0
             val_total = 0
+            val_labels = []
+            val_preds = []
 
             with torch.no_grad():
                 for batch in self.val_loader:
@@ -333,24 +337,55 @@ class ObjectiveFunction:
                         _, predicted = outputs.max(1)
                         val_total += labels.size(0)
                         val_correct += predicted.eq(labels).sum().item()
+
+                        # 收集标签和预测用于F1计算
+                        val_labels.extend(labels.cpu().numpy())
+                        val_preds.extend(predicted.cpu().numpy())
                     else:
                         scores = batch.get('scores', batch.get('label', None))
                         if scores is None:
                             scores = batch['label'].to(self.device)
+                        else:
+                            scores = scores.to(self.device)
 
                         outputs = model(dynamic, static_basic, static_scores, constitution)
-                        loss = criterion(outputs.squeeze(), scores)
+                        loss = criterion(outputs.squeeze(-1), scores)
+
+                        # 收集标签和预测用于R2计算
+                        val_labels.extend(scores.cpu().numpy())
+                        val_preds.extend(outputs.squeeze(-1).cpu().numpy())
 
                     val_loss += loss.item()
 
             # 计算验证指标
             avg_val_loss = val_loss / len(self.val_loader)
 
+            # 根据配置的优化指标计算current_metric
+            objective_metric = self.config.get_objective_metric()
+
             if self.config.task_type == "classification":
                 val_acc = 100. * val_correct / val_total
-                current_metric = val_acc  # 优化准确率（越大越好）
+                if objective_metric == "accuracy":
+                    current_metric = val_acc
+                elif objective_metric == "f1":
+                    # 计算F1分数
+                    from sklearn.metrics import f1_score
+                    val_f1 = f1_score(val_labels, val_preds, average='weighted')
+                    current_metric = val_f1 * 100  # 转换为百分比
+                else:
+                    current_metric = val_acc  # 默认使用准确率
             else:
-                current_metric = avg_val_loss  # 优化MAE（越小越好）
+                # 回归任务支持多种指标
+                if objective_metric == "mae":
+                    current_metric = avg_val_loss
+                elif objective_metric == "rmse":
+                    current_metric = np.sqrt(avg_val_loss)
+                elif objective_metric == "r2":
+                    # 计算R²
+                    from sklearn.metrics import r2_score
+                    current_metric = -r2_score(val_labels, val_preds)  # R²越大越好，取负值使其越小越好
+                else:
+                    current_metric = avg_val_loss  # 默认使用MAE
 
             # 更新最佳指标
             if self.config.get_direction() == "maximize":

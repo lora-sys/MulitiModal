@@ -347,13 +347,16 @@ class SimpleConcatModel(nn.Module):
 
 #### 策略2：晚融合Transformer（Late Fusion）
 ```python
-class LateFusionModel(nn.Module):
+class LateFusionTransformerModel(nn.Module):
     """独立编码后用Transformer融合"""
     def __init__(self, num_classes=3, num_heads=4):
         super().__init__()
         self.temporal_encoder = TemporalEncoder()
         self.static_encoder = StaticEncoder()
-        
+
+        # 拼接后投影到256维
+        self.combined_proj = nn.Linear(384, 256)
+
         # Transformer编码器
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=256,
@@ -362,22 +365,23 @@ class LateFusionModel(nn.Module):
             dropout=0.1
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=2)
-        
+
         self.classifier = nn.Linear(256, num_classes)
-    
+
     def forward(self, dynamic, static):
         temporal_feat = self.temporal_encoder(dynamic)  # (batch, 256)
         static_feat = self.static_encoder(static)      # (batch, 128)
-        
-        # 拼接并扩展维度
+
+        # 拼接并投影到256维
         combined = torch.cat([temporal_feat, static_feat], dim=1)  # (batch, 384)
-        combined = combined.unsqueeze(0)  # (1, batch, 384)
-        
+        combined = self.combined_proj(combined)  # (batch, 256)
+        combined = combined.unsqueeze(0)  # (1, batch, 256)
+
         # Transformer融合
         fused = self.transformer(combined)
-        fused = fused.squeeze(0)  # (batch, 384)
-        
-        output = self.classifier(fused[:, :256])
+        fused = fused.squeeze(0)  # (batch, 256)
+
+        output = self.classifier(fused)
         return output
 ```
 
@@ -389,34 +393,37 @@ class CrossAttentionModel(nn.Module):
         super().__init__()
         self.temporal_encoder = TemporalEncoder()
         self.static_encoder = StaticEncoder()
-        
+
         # 多头交叉注意力
         self.cross_attention = nn.MultiheadAttention(
             embed_dim=256,
             num_heads=num_heads,
             dropout=0.1
         )
-        
+
+        # 静态特征投影层
+        self.static_proj = nn.Linear(128, 256)
+
         # 门控机制
         self.gate = nn.Sequential(
             nn.Linear(256 + 128, 128),
             nn.Sigmoid()
         )
-        
+
         self.classifier = nn.Sequential(
             nn.Linear(256, 128),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(128, num_classes)
         )
-    
+
     def forward(self, dynamic, static):
         temporal_feat = self.temporal_encoder(dynamic)  # (batch, 256)
         static_feat = self.static_encoder(static)      # (batch, 128)
-        
+
         # 将静态特征投影到256维
-        static_proj = F.linear(static_feat, torch.randn(256, 128))
-        
+        static_proj = self.static_proj(static_feat)
+
         # 交叉注意力：用静态特征查询时序特征
         attn_output, _ = self.cross_attention(
             query=static_proj.unsqueeze(0),
@@ -424,11 +431,11 @@ class CrossAttentionModel(nn.Module):
             value=temporal_feat.unsqueeze(0)
         )
         attn_output = attn_output.squeeze(0)
-        
+
         # 门控融合
         gate_weight = self.gate(torch.cat([temporal_feat, static_feat], dim=1))
         fused = gate_weight * attn_output + (1 - gate_weight) * temporal_feat
-        
+
         output = self.classifier(fused)
         return output
 ```
@@ -547,7 +554,9 @@ def train(model, train_loader, val_loader, config):
     )
     
     # 学习率调度器
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmupRestarts(
+    # 注意：使用标准PyTorch调度器 CosineAnnealingWarmRestarts
+    # 如需支持warmup功能，需安装第三方库 pytorch-cosine-annealing-with-warmup
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
         T_0=config['T_0'],
         T_mult=1,

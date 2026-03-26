@@ -117,9 +117,9 @@ docs/
 
 ## 🔗 相关资源
 
-- **项目仓库**: `https://github.com/lora-sys/Pixel-Heart-OS-`
-- **代码位置**: `/home/lora/repos/MulitiModal`
-- **实验结果**: `/home/lora/repos/MulitiModal/experiment/results`
+- **项目仓库**: `https://github.com/lora-sys/MulitiModal`
+- **代码位置**: `./`
+- **实验结果**: `./experiment/results`
 
 ---
 
