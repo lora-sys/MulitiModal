@@ -3,7 +3,10 @@
 # 逐个运行5-fold交叉验证，每个fold独立运行
 # 避免内存累积导致进程被杀死
 
-cd /home/lora/repos/MulitiModal
+# 计算项目根目录（脚本所在目录的父目录的父目录）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$PROJECT_ROOT"
 source venv/bin/activate
 
 RESULTS_DIR="experiment/results/k_fold_baseline_c_regression"
@@ -20,8 +23,8 @@ echo "开始5-Fold交叉验证（逐个fold运行）" | tee -a $LOG_FILE
 echo "每个fold独立运行，避免内存累积" | tee -a $LOG_FILE
 echo "============================================================" | tee -a $LOG_FILE
 
-# 初始化结果JSON
-echo '{"model_type": "baseline_c", "task_type": "regression", "n_folds": 5, "num_epochs": 15, "random_seed": 42, "fold_results": []}' > $RESULTS_FILE
+# 初始化结果JSON（num_epochs 由 train_single_fold.py 决定，此处省略）
+echo '{"model_type": "baseline_c", "task_type": "regression", "n_folds": 5, "random_seed": 42, "fold_results": []}' > $RESULTS_FILE
 
 for fold in {0..4}
 do

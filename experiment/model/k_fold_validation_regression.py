@@ -113,9 +113,9 @@ def train_fold(model, train_loader, val_loader, device, fold_num):
                 
                 loss = criterion(outputs.squeeze(), labels)
                 val_loss += loss.item()
-                
-                predictions.extend(outputs.squeeze().cpu().numpy())
-                targets.extend(labels.cpu().numpy())
+
+                predictions.extend(outputs.detach().cpu().numpy().ravel())
+                targets.extend(labels.cpu().numpy().ravel())
         
         # 计算 MAE
         predictions = np.array(predictions)
@@ -167,7 +167,7 @@ def main():
         val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)
         
         # 创建模型
-        model = get_model(model_type=MODEL_TYPE, num_classes=1, num_constitutions=38).to(device)
+        model = get_model(model_type=MODEL_TYPE, num_classes=1, num_constitutions=39).to(device)
         
         # 训练
         fold_start_time = time.time()

@@ -111,28 +111,36 @@ def train_fold(model, train_loader, val_loader, device, fold_num, task_type="cla
                 dynamic = batch['dynamic'].to(device)
                 static_basic = batch['static_basic'].to(device)
                 labels = batch['label'].to(device)
-                
+
                 if MODEL_TYPE in ["multimodal", "simple_concat", "late_fusion", "baseline_a", "baseline_b", "baseline_c"]:
                     static_scores = batch['static_scores'].to(device)
                     constitution = batch['constitution'].to(device)
                     outputs = model(dynamic, static_basic, static_scores, constitution)
                 else:
                     outputs = model(dynamic, static_basic)
-                
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
-                
+
                 if task_type == "classification":
+                    loss = criterion(outputs, labels)
+                    val_loss += loss.item()
                     _, predicted = outputs.max(1)
                     val_total += labels.size(0)
                     val_correct += predicted.eq(labels).sum().item()
+                else:
+                    # 回归任务：计算 MAE
+                    outputs = outputs.view(-1)
+                    labels = labels.view(-1)
+                    loss = criterion(outputs, labels)
+                    val_loss += loss.item()
+                    val_total += labels.size(0)
+                    val_correct += torch.abs(outputs - labels).sum().item()
         
         # 计算指标
         train_acc = 100.0 * train_correct / train_total if train_total > 0 else 0
         val_acc = 100.0 * val_correct / val_total if val_total > 0 else 0
-        
+        val_mae = val_correct / val_total if val_total > 0 else 0  # 回归任务的 MAE
+
         # 更新最佳模型
-        current_metric = val_acc if task_type == "classification" else val_loss
+        current_metric = val_acc if task_type == "classification" else val_mae
         is_better = current_metric > best_metric if task_type == "classification" else current_metric < best_metric
         
         if is_better:
@@ -160,28 +168,42 @@ def main():
     
     # 准备标签用于分层抽样
     labels = np.array([dataset[i]['label'] for i in range(len(dataset))])
-    
+
     # 创建 K-Fold 分割
-    skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_SEED)
-    
+    if TASK_TYPE == "regression":
+        # 回归任务使用普通 KFold
+        from sklearn.model_selection import KFold
+        skf = KFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_SEED)
+    else:
+        # 分类任务使用 StratifiedKFold
+        skf = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_SEED)
+
     fold_results = []
     total_start_time = time.time()
-    
+
     print(f"\n开始交叉验证...")
     print("-" * 60)
-    
-    for fold, (train_idx, val_idx) in enumerate(skf.split(np.arange(len(dataset)), labels)):
+
+    # 根据任务类型选择分割参数
+    if TASK_TYPE == "regression":
+        # 回归任务：KFold 只需要 X 参数
+        folds = list(skf.split(np.arange(len(dataset))))
+    else:
+        # 分类任务：StratifiedKFold 需要 X 和 y 参数
+        folds = list(skf.split(np.arange(len(dataset)), labels))
+
+    for fold, (train_idx, val_idx) in enumerate(folds):
         print(f"\n📦 Fold {fold + 1}/{N_FOLDS}")
         print(f"  训练集: {len(train_idx)} 样本")
         print(f"  验证集: {len(val_idx)} 样本")
-        
+
         # 创建子数据集
         train_dataset = Subset(dataset, train_idx)
         val_dataset = Subset(dataset, val_idx)
-        
+
         train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=0)
         val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)
-        
+
         # 创建模型
         num_classes = 3 if TASK_TYPE == "classification" else 1
         model = get_model(model_type=MODEL_TYPE, num_classes=num_classes, num_constitutions=38).to(device)

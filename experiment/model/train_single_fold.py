@@ -146,8 +146,8 @@ def train_single_fold(fold_num):
                 labels = batch['label'].to(device)
 
                 outputs = model(dynamic, static_basic, static_scores, constitution)
-                predictions.extend(outputs.squeeze().cpu().numpy())
-                targets.extend(labels.squeeze().cpu().numpy())
+                predictions.extend(outputs.detach().cpu().numpy().ravel())
+                targets.extend(labels.cpu().numpy().ravel())
 
         # 计算 MAE
         predictions = np.array(predictions)
@@ -157,7 +157,7 @@ def train_single_fold(fold_num):
         # 更新最佳模型
         if mae < best_mae:
             best_mae = mae
-            best_epoch = epoch
+            best_epoch = epoch + 1  # 使用1-based epoch编号
 
         print(f"  Epoch {epoch+1}/{NUM_EPOCHS}, MAE: {mae:.4f}, Best: {best_mae:.4f} (Epoch {best_epoch})")
 
@@ -183,7 +183,7 @@ def train_single_fold(fold_num):
             "model_type": "baseline_c",
             "task_type": "regression",
             "n_folds": 5,
-            "num_epochs": 15,
+            "num_epochs": NUM_EPOCHS,
             "random_seed": 42,
             "fold_results": []
         }
