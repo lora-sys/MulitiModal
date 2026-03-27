@@ -9,15 +9,46 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from matplotlib import rcParams
+from matplotlib import rcParams, font_manager
 
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['Noto Sans CJK SC', 'WenQuanYi Zen Hei', 'DejaVu Sans']
+# 设置中文字体（使用系统可用的字体）
+from matplotlib.font_manager import FontProperties
+
+# 查找可用的中文字体
+chinese_fonts = []
+for font in font_manager.findSystemFonts():
+    try:
+        font_prop = FontProperties(fname=font)
+        font_name = font_prop.get_name()
+        # 优先使用 WenQuanYi Zen Hei，因为它是一个完整的字体文件
+        if 'Zen Hei' in font_name:
+            chinese_fonts.insert(0, (font, font_name))
+        elif 'CJK' in font_name:
+            chinese_fonts.append((font, font_name))
+    except:
+        pass
+
+# 使用找到的中文字体
+if chinese_fonts:
+    font_path, font_name = chinese_fonts[0]
+    plt.rcParams['font.family'] = font_name
+    plt.rcParams['font.sans-serif'] = [font_name]
+    print(f"[*] 使用中文字体: {font_name}")
+else:
+    # 回退到字体名称
+    plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'sans-serif']
+    plt.rcParams['font.family'] = 'sans-serif'
+
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
-# 设置图表风格
+# 设置图表风格（不覆盖字体设置）
 sns.set_style("whitegrid")
 sns.set_palette("husl")
+
+# 重新设置字体（确保不被 seaborn 覆盖）
+if chinese_fonts:
+    plt.rcParams['font.family'] = font_name
+    plt.rcParams['font.sans-serif'] = [font_name]
 
 # 输出目录（锚定到脚本文件所在目录）
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -637,10 +668,10 @@ def plot_experiment_summary_dashboard():
     ]
     
     text = '\n'.join(findings)
-    ax8.text(0.05, 0.95, '关键发现：', transform=ax8.transAxes, 
+    ax8.text(0.05, 0.95, '关键发现：', transform=ax8.transAxes,
             fontsize=14, fontweight='bold', va='top')
-    ax8.text(0.05, 0.90, text, transform=ax8.transAxes, 
-            fontsize=11, va='top', family='monospace')
+    ax8.text(0.05, 0.90, text, transform=ax8.transAxes,
+            fontsize=11, va='top')
     
     plt.suptitle('', fontsize=0)  # 隐藏默认标题
     plt.savefig(f'{OUTPUT_DIR}/实验总结仪表板.png', dpi=300, bbox_inches='tight')
