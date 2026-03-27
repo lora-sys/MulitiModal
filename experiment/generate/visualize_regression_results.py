@@ -12,9 +12,34 @@ import sys
 
 # 设置字体（避免中文乱码）
 import matplotlib
+import matplotlib.font_manager as font_manager
 matplotlib.use('Agg')  # 使用非交互式后端
-plt.rcParams["font.family"] = ["DejaVu Sans", "sans-serif"]
-plt.rcParams["axes.unicode_minus"] = False
+
+# 查找可用的中文字体
+chinese_fonts = []
+for font in font_manager.findSystemFonts():
+    try:
+        font_prop = font_manager.FontProperties(fname=font)
+        font_name = font_prop.get_name()
+        # 优先使用 WenQuanYi Zen Hei
+        if 'Zen Hei' in font_name:
+            chinese_fonts.insert(0, (font, font_name))
+        elif 'CJK' in font_name:
+            chinese_fonts.append((font, font_name))
+    except:
+        pass
+
+# 使用找到的中文字体
+if chinese_fonts:
+    font_path, font_name = chinese_fonts[0]
+    plt.rcParams['font.family'] = font_name
+    plt.rcParams['font.sans-serif'] = [font_name]
+    print(f"[*] 使用中文字体: {font_name}")
+else:
+    plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei', 'Noto Sans CJK SC', 'sans-serif']
+    plt.rcParams['font.family'] = 'sans-serif'
+
+plt.rcParams['axes.unicode_minus'] = False
 
 # 添加路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
