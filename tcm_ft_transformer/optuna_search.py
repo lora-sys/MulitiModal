@@ -31,20 +31,20 @@ def objective(trial, X, y, n_splits=5, num_epochs=20):
         mean_val_loss: 平均验证损失
     """
     # =====================================================================
-    # 定义搜索空间
+    # 定义搜索空间（连续分布，充分利用 TPE 贝叶斯优化）
     # =====================================================================
     model_params = {
         'd_token': 64,  # 固定
         'n_heads': 4,  # 固定
-        'n_layers': trial.suggest_categorical('n_layers', OPTUNA_CONFIG['search_space']['n_layers']),
-        'dropout': trial.suggest_categorical('dropout', OPTUNA_CONFIG['search_space']['dropout']),
+        'n_layers': trial.suggest_int('n_layers', 2, 4),  # 连续整数搜索
+        'dropout': trial.suggest_float('dropout', 0.1, 0.5, step=0.05),  # 连续搜索，步长 0.05
         'n_classes': 9,
     }
-    
+
     train_config = {
         'batch_size': TRAIN_CONFIG['batch_size'],
         'num_epochs': num_epochs,  # 减少轮数以加快搜索
-        'learning_rate': trial.suggest_categorical('learning_rate', OPTUNA_CONFIG['search_space']['learning_rate']),
+        'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-2, log=True),  # 对数空间连续搜索
         'weight_decay': TRAIN_CONFIG['weight_decay'],
         'warmup_ratio': TRAIN_CONFIG['warmup_ratio'],
         'grad_clip_max_norm': TRAIN_CONFIG['grad_clip_max_norm'],
@@ -125,8 +125,8 @@ def run_optuna_search(
     # 创建采样器和剪枝器
     sampler = TPESampler(seed=CV_CONFIG['random_state'])
     pruner = MedianPruner(n_startup_trials=5, n_warmup_steps=3)
-    
-    # 创建研究
+
+    # 创建研究（如果已存在则加载，否则创建新的）
     study = optuna.create_study(
         study_name=study_name,
         direction=OPTUNA_CONFIG['direction'],
@@ -135,6 +135,13 @@ def run_optuna_search(
         storage=storage,
         load_if_exists=True
     )
+
+    # 提示用户是否加载了历史试验
+    n_existing_trials = len(study.trials)
+    if n_existing_trials > 0:
+        print(f"\n⚠️ 加载已有研究，包含 {n_existing_trials} 个历史试验")
+        print(f"   本次将再添加 {n_trials} 个新试验")
+        print(f"   如需重新开始，请删除 {storage} 文件")
     
     # 运行优化
     study.optimize(

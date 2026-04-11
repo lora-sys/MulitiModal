@@ -3,6 +3,7 @@
 实现完整的训练流程：Optuna 搜索 -> 交叉验证 -> 最终测试
 """
 
+import json
 import os
 import sys
 import argparse
@@ -210,69 +211,115 @@ def run_full_pipeline(
     )
     
     # =====================================================================
-    # 阶段 3: 最终测试（可选）
+    # 阶段 3: 最终测试（Ensemble 多模型集成预测）
     # =====================================================================
     print("\n" + "=" * 80)
-    print("阶段 3: 最终测试（使用锁定的测试集）")
+    print("阶段 3: 最终测试（Ensemble 集成预测）")
     print("=" * 80)
-    
-    # 加载最佳模型
+
+    # 加载所有 5 个 fold 的模型
     from ft_transformer import get_model
     from preprocess import create_dataloaders
-    
-    model = get_model(
-        n_features=8,
-        n_classes=9,
-        **final_model_params
-    )
-    
-    checkpoint_path = os.path.join(
-        os.path.dirname(OUTPUT_FILES["best_model"]),
-        f'fold_{best_fold_idx}',
-        OUTPUT_FILES["best_model"]
-    )
-    
-    if os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location=device)
+    from train import KLDivLossWithLogSoftmax
+    from config import CHECKPOINT_DIR
+
+    all_models = []
+    for fold_idx in range(n_splits):
+        checkpoint_path = os.path.join(CHECKPOINT_DIR, f'fold_{fold_idx}', OUTPUT_FILES["best_model"])
+        
+        if not os.path.exists(checkpoint_path):
+            print(f"警告: 未找到 Fold {fold_idx + 1} 的模型检查点: {checkpoint_path}")
+            continue
+        
+        model = get_model(
+            n_features=8,
+            n_classes=9,
+            **final_model_params
+        )
+        
+        checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(device)
         model.eval()
+        all_models.append((fold_idx, model))
         
-        print(f"已加载最佳模型 (Fold {best_fold_idx + 1})")
-        
-        # 在测试集上评估
+        print(f"已加载 Fold {fold_idx + 1} 模型")
+
+    if len(all_models) == 0:
+        print("错误: 未找到任何模型检查点，跳过最终测试")
+    else:
+        # 检查模型数量是否足够
+        if len(all_models) < n_splits:
+            print(f"\n⚠️ 警告: 仅加载 {len(all_models)}/{n_splits} 个 fold 模型, "
+                  f"Ensemble 结果可能不准确")
+        if len(all_models) < 3:
+            print("错误: 可用模型少于 3 个，Ensemble 结果不可靠")
+        else:
+            print(f"\n使用 {len(all_models)} 个模型进行 Ensemble 预测")
+
+        # 在测试集上进行集成预测
         test_loader = create_dataloaders(
             X_test, y_test,
             batch_size=TRAIN_CONFIG['batch_size'],
             shuffle=False,
             num_workers=0
         )
-        
-        test_loss = 0.0
+
+        # 复用训练时的损失函数（确保数值保护一致）
+        criterion = KLDivLossWithLogSoftmax()
+
+        ensemble_loss = 0.0
         all_preds = []
         all_trues = []
-        
+        individual_losses = [[] for _ in all_models]
+
         with torch.no_grad():
             for batch_X, batch_y in test_loader:
                 batch_X = batch_X.to(device)
                 batch_y = batch_y.to(device)
-                
-                outputs = model(batch_X)
-                
-                # 计算 KL 损失（注意：outputs 已经是概率分布，需要 log）
-                log_probs = torch.log(torch.clamp(outputs, min=1e-8))
-                loss = torch.nn.functional.kl_div(log_probs, batch_y, reduction='batchmean')
-                
-                test_loss += loss.item()
-                all_preds.append(outputs.cpu().numpy())
+
+                # 收集所有模型的预测
+                model_preds = []
+                for i, (fold_idx, model) in enumerate(all_models):
+                    pred = model(batch_X)
+                    model_preds.append(pred)
+
+                    # 计算单个模型的损失（复用 KLDivLossWithLogSoftmax）
+                    single_loss = criterion(pred, batch_y)
+                    individual_losses[i].append(single_loss.item())
+
+                # Ensemble 预测：平均所有模型的输出
+                ensemble_pred = torch.stack(model_preds, dim=0).mean(dim=0)
+
+                # 计算 Ensemble 损失（复用 KLDivLossWithLogSoftmax）
+                loss = criterion(ensemble_pred, batch_y)
+
+                ensemble_loss += loss.item()
+                all_preds.append(ensemble_pred.cpu().numpy())
                 all_trues.append(batch_y.cpu().numpy())
-        
-        test_loss /= len(test_loader)
+
+        ensemble_loss /= len(test_loader)
         all_preds = np.concatenate(all_preds, axis=0)
         all_trues = np.concatenate(all_trues, axis=0)
+
+        print(f"\n{'=' * 80}")
+        print("Ensemble 预测结果")
+        print(f"{'=' * 80}")
+        print(f"Ensemble 测试损失: {ensemble_loss:.6f}")
         
-        print(f"\n测试集结果:")
-        print(f"  测试损失: {test_loss:.6f}")
+        # 打印每个模型的单独表现
+        print(f"\n各模型单独表现:")
+        for i, (fold_idx, _) in enumerate(all_models):
+            avg_loss = np.mean(individual_losses[i])
+            print(f"  Fold {fold_idx + 1}: {avg_loss:.6f}")
+        
+        # 计算 Ensemble 提升
+        individual_mean = np.mean([np.mean(losses) for losses in individual_losses])
+        improvement = (individual_mean - ensemble_loss) / individual_mean * 100
+        print(f"\n单模型平均损失: {individual_mean:.6f}")
+        print(f"Ensemble 损失: {ensemble_loss:.6f}")
+        print(f"Ensemble 相对提升: {improvement:.2f}%")
+        print(f"{'=' * 80}")
         
         # 绘制预测分布
         plot_prediction_distribution(
@@ -288,21 +335,90 @@ def run_full_pipeline(
         
         # 保存测试结果
         test_results = {
-            'test_loss': test_loss,
-            'best_fold': best_fold_idx + 1,
+            'ensemble_test_loss': ensemble_loss,
+            'individual_model_losses': [np.mean(losses) for losses in individual_losses],
+            'individual_mean_loss': individual_mean,
+            'ensemble_improvement_percent': improvement,
+            'n_models_in_ensemble': len(all_models),
             'best_params': best_params,
         }
         
         test_results_path = os.path.join(os.path.dirname(OUTPUT_FILES["best_model"]), OUTPUT_FILES["test_results"])
-        import json
         with open(test_results_path, 'w') as f:
             json.dump(test_results, f, indent=2)
         
         print(f"已保存测试结果: {test_results_path}")
-    else:
-        print(f"警告: 未找到模型检查点: {checkpoint_path}")
-        print("跳过最终测试")
+
+    # =====================================================================
+    # 阶段 4: 全局最终训练（基于 CV 最优 epoch）
+    # =====================================================================
+    print("\n" + "=" * 80)
+    print("阶段 4: 全局最终训练（基于 CV 信息）")
+    print("=" * 80)
+
+    # 计算 5-fold CV 的平均最优 epoch
+    fold_optimal_epochs = []
+    for history in fold_histories:
+        # 找到验证损失最小的 epoch
+        best_epoch = np.argmin(history['val_loss']) + 1
+        fold_optimal_epochs.append(best_epoch)
+
+    avg_optimal_epoch = int(round(np.mean(fold_optimal_epochs)))
     
+    print(f"各 Fold 最优 Epoch:")
+    for i, epoch in enumerate(fold_optimal_epochs):
+        print(f"  Fold {i + 1}: 第 {epoch} 轮")
+    print(f"平均最优 epoch: {avg_optimal_epoch}")
+    print(f"训练数据量: {len(X_pool)} 样本 (100% 训练池)")
+    print(f"使用参数: 最佳参数（来自 Optuna 搜索）")
+    print("=" * 80)
+
+    # 创建最终训练用的 DataLoader（使用全部 pool 数据）
+    final_train_loader = create_dataloaders(
+        X_pool, y_pool,
+        batch_size=TRAIN_CONFIG['batch_size'],
+        shuffle=True,
+        num_workers=0
+    )
+
+    # 创建最终模型
+    final_model = get_model(
+        n_features=8,
+        n_classes=9,
+        **final_model_params
+    )
+
+    # 训练最终模型
+    from train import Trainer
+    from config import CHECKPOINT_DIR
+    
+    final_checkpoint_dir = CHECKPOINT_DIR
+    final_trainer = Trainer(
+        model=final_model,
+        train_loader=final_train_loader,
+        val_loader=None,  # 无验证集，使用全部数据
+        device=device,
+        learning_rate=best_params['learning_rate'],
+        weight_decay=TRAIN_CONFIG['weight_decay'],
+        warmup_ratio=TRAIN_CONFIG['warmup_ratio'],
+        num_epochs=avg_optimal_epoch,  # 使用 CV 找到的最优 epoch 数
+        patience=None,  # 无验证集，早停自然跳过，训练完整 epochs
+        grad_clip_max_norm=TRAIN_CONFIG['grad_clip_max_norm'],
+        checkpoint_dir=final_checkpoint_dir
+    )
+
+    # 训练最终模型
+    final_history = final_trainer.train()
+    
+    # 保存最终模型（Trainer.train() 已自动保存，这里再保存一个明确命名的副本）
+    final_model_path = os.path.join(final_checkpoint_dir, 'final_model.pth')
+    final_trainer.save_checkpoint(final_model_path)
+    
+    print(f"\n✅ 全局最终模型已保存: {final_model_path}")
+    print(f"\n最终模型训练历史:")
+    print(f"  训练轮数: {len(final_history['train_loss'])}")
+    print(f"  最终训练损失: {final_history['train_loss'][-1]:.6f}")
+
     # =====================================================================
     # 完成
     # =====================================================================
@@ -310,13 +426,21 @@ def run_full_pipeline(
     print("训练流程完成！")
     print("=" * 80)
     print("\n交付物清单:")
-    print(f"  1. 模型权重: {OUTPUT_FILES['best_model']}")
-    print(f"  2. 标准化参数: {OUTPUT_FILES['scaler_params']}")
-    print(f"  3. 训练历史: {OUTPUT_FILES['training_history']}")
-    print(f"  4. 交叉验证对比: {OUTPUT_FILES['cv_comparison']}")
-    print(f"  5. 交叉验证结果: {OUTPUT_FILES['cv_results']}")
-    print(f"  6. Optuna 搜索结果: optuna_results.json")
-    print(f"  7. Optuna 可视化: optuna_results.png")
+    print(f"  1. 最佳模型权重 (Fold {best_fold_idx + 1}): checkpoints/best_model.pth")
+    print(f"  2. 全局最终模型: checkpoints/final_model.pth ⭐ (推荐用于部署)")
+    print(f"  3. Ensemble 模型: checkpoints/fold_0~4/best_model.pth (5 个模型)")
+    print(f"  4. 标准化参数: {OUTPUT_FILES['scaler_params']}")
+    print(f"  5. 训练历史: {OUTPUT_FILES['training_history']}")
+    print(f"  6. 交叉验证对比: {OUTPUT_FILES['cv_comparison']}")
+    print(f"  7. 交叉验证结果: {OUTPUT_FILES['cv_results']}")
+    print(f"  8. Optuna 搜索结果: optuna_results.json")
+    print(f"  9. Optuna 可视化: optuna_results.png")
+    print(f"  10. 测试结果: {OUTPUT_FILES['test_results']}")
+    print("=" * 80)
+    print("\n模型使用说明:")
+    print("  - 部署/生产环境: 使用 final_model.pth（全局最终模型）")
+    print("  - 研究/对比实验: 使用 fold_*/best_model.pth（Ensemble）")
+    print("  - 评估模型性能: 参考阶段 3 的 Ensemble 测试结果")
     print("=" * 80)
 
 

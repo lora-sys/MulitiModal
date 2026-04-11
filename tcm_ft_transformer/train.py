@@ -76,8 +76,9 @@ class WarmupScheduler:
             for param_group in self.optimizer.param_groups:
                 param_group['lr'] = lr
         else:
-            # Cosine 退火阶段
-            self.cosine_scheduler.step()
+            # Cosine 退火阶段：显式传递 epoch 以避免断点续训时的不同步
+            cosine_epoch = epoch - self.warmup_epochs
+            self.cosine_scheduler.step(cosine_epoch)
     
     def get_lr(self):
         return self.optimizer.param_groups[0]['lr']
@@ -206,6 +207,8 @@ class Trainer:
     def train(self):
         """
         完整训练流程
+        
+        注意：如果 val_loader=None，则跳过验证和早停，完整训练所有 epochs
         """
         print("=" * 60)
         print("开始训练")
@@ -216,53 +219,78 @@ class Trainer:
         print(f"权重衰减: {self.optimizer.param_groups[0]['weight_decay']}")
         print(f"Warmup 比例: {TRAIN_CONFIG['warmup_ratio']}")
         print(f"梯度裁剪: {self.grad_clip_max_norm}")
-        print(f"早停耐心值: {self.patience}")
+        
+        has_validation = self.val_loader is not None
+        if has_validation:
+            print(f"早停耐心值: {self.patience}")
+        else:
+            print("模式: 全局训练（无验证集，训练完整 epochs）")
+        
         print("=" * 60)
-        
+
         start_time = time.time()
-        
+
         for epoch in range(self.num_epochs):
             # 更新学习率
             self.scheduler.step(epoch)
             current_lr = self.scheduler.get_lr()
-            
+
             # 训练
             train_loss = self.train_epoch(epoch)
-            
-            # 验证
-            val_loss = self.validate()
-            
-            # 记录历史
-            self.history['train_loss'].append(train_loss)
-            self.history['val_loss'].append(val_loss)
-            self.history['learning_rate'].append(current_lr)
-            
-            # 打印进度
-            print(f"\nEpoch {epoch+1}/{self.num_epochs} - "
-                  f"Train Loss: {train_loss:.6f}, "
-                  f"Val Loss: {val_loss:.6f}, "
-                  f"LR: {current_lr:.6f}")
-            
-            # 早停检查
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
-                self.epochs_no_improve = 0
-                
-                # 保存最佳模型
-                self.save_checkpoint(os.path.join(self.checkpoint_dir, OUTPUT_FILES["best_model"]))
-                print(f"  → 保存最佳模型 (Val Loss: {val_loss:.6f})")
+
+            # 验证（如果有验证集）
+            if has_validation:
+                val_loss = self.validate()
+
+                # 记录历史
+                self.history['train_loss'].append(train_loss)
+                self.history['val_loss'].append(val_loss)
+                self.history['learning_rate'].append(current_lr)
+
+                # 打印进度
+                print(f"\nEpoch {epoch+1}/{self.num_epochs} - "
+                      f"Train Loss: {train_loss:.6f}, "
+                      f"Val Loss: {val_loss:.6f}, "
+                      f"LR: {current_lr:.6f}")
+
+                # 早停检查
+                if val_loss < self.best_val_loss:
+                    self.best_val_loss = val_loss
+                    self.epochs_no_improve = 0
+
+                    # 保存最佳模型
+                    self.save_checkpoint(os.path.join(self.checkpoint_dir, OUTPUT_FILES["best_model"]))
+                    print(f"  → 保存最佳模型 (Val Loss: {val_loss:.6f})")
+                else:
+                    self.epochs_no_improve += 1
+                    print(f"  → 无改进 ({self.epochs_no_improve}/{self.patience})")
+
+                    if self.epochs_no_improve >= self.patience:
+                        print(f"\n早停触发！在第 {epoch+1} 轮停止训练。")
+                        break
             else:
-                self.epochs_no_improve += 1
-                print(f"  → 无改进 ({self.epochs_no_improve}/{self.patience})")
-                
-                if self.epochs_no_improve >= self.patience:
-                    print(f"\n早停触发！在第 {epoch+1} 轮停止训练。")
-                    break
-        
+                # 无验证集模式：只记录训练损失
+                self.history['train_loss'].append(train_loss)
+                self.history['val_loss'].append(None)
+                self.history['learning_rate'].append(current_lr)
+
+                print(f"\nEpoch {epoch+1}/{self.num_epochs} - "
+                      f"Train Loss: {train_loss:.6f}, "
+                      f"LR: {current_lr:.6f}")
+
+                # 保存最后一个 epoch 的模型
+                if epoch == self.num_epochs - 1:
+                    self.save_checkpoint(os.path.join(self.checkpoint_dir, OUTPUT_FILES["best_model"]))
+                    print(f"  → 保存最终模型 (Train Loss: {train_loss:.6f})")
+
         total_time = time.time() - start_time
         print(f"\n训练完成！总耗时: {total_time/60:.2f} 分钟")
-        print(f"最佳验证损失: {self.best_val_loss:.6f}")
         
+        if has_validation:
+            print(f"最佳验证损失: {self.best_val_loss:.6f}")
+        else:
+            print(f"最终训练损失: {train_loss:.6f}")
+
         return self.history
     
     def save_checkpoint(self, path):
@@ -281,7 +309,7 @@ class Trainer:
         """
         加载检查点
         """
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.best_val_loss = checkpoint['best_val_loss']

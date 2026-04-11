@@ -60,14 +60,16 @@ TRAIN_CONFIG = {
 # =========================================================================
 OPTUNA_CONFIG = {
     "n_trials": 20,  # 试验次数
-    "n_jobs": 1,  # 并行任务数
+    "n_jobs": 1,  # 并行任务数（每个 trial 内部有 5-fold CV，并行可能导致资源竞争）
     "direction": "minimize",  # 最小化目标
     "sampler": "TPESampler",  # 采样器
     "pruner": "MedianPruner",  # 剪枝器
+    # 注意：实际搜索空间在 optuna_search.py 中使用连续分布（suggest_float/suggest_int）
+    # 这里仅保留历史记录和可视化参考
     "search_space": {
-        "n_layers": [2, 3, 4],  # Transformer 层数
-        "learning_rate": [1e-4, 5e-4, 1e-3, 5e-3],  # 学习率
-        "dropout": [0.1, 0.2, 0.3, 0.4, 0.5],  # Dropout
+        "n_layers": [2, 3, 4],  # Transformer 层数（实际使用 suggest_int(2, 4)）
+        "learning_rate": [1e-5, 1e-2],  # 学习率范围（实际使用 log 空间连续搜索）
+        "dropout": [0.1, 0.5],  # Dropout 范围（实际使用 step=0.05 连续搜索）
     },
 }
 

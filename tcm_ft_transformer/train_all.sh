@@ -126,31 +126,85 @@ clean_old_results() {
 
 # 运行训练
 run_training() {
-    print_info "开始训练..."
-    
-    # 运行完整流程
-    python3 main.py \
+    print_info "开始训练（后台运行）..."
+
+    # 创建日志目录
+    mkdir -p logs
+
+    # 检查是否有训练正在运行
+    if [ -f logs/train.pid ]; then
+        OLD_PID=$(cat logs/train.pid)
+        if ps -p $OLD_PID > /dev/null 2>&1; then
+            print_warning "⚠️  检测到正在运行的训练 (PID: $OLD_PID)"
+            read -p "是否停止旧训练并启动新训练? (y/n): " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                print_info "停止旧训练..."
+                kill $OLD_PID
+                sleep 2
+            else
+                print_info "取消启动新训练"
+                exit 0
+            fi
+        fi
+    fi
+
+    # 使用时间戳的日志文件
+    LOG_FILE="logs/train_$(date +%Y%m%d_%H%M%S).log"
+
+    # 使用 nohup 后台运行（默认使用所有可用 GPU）
+    nohup python3 -u main.py \
         --mode full \
         --data data/vital_signs_dataset_final.csv \
         --trials 20 \
         --epochs_search 20 \
         --epochs_final 50 \
-        --device cuda
-    
-    if [ $? -eq 0 ]; then
-        print_success "训练完成！"
+        --device cuda \
+        > "$LOG_FILE" 2>&1 &
+
+    TRAIN_PID=$!
+    echo $TRAIN_PID > logs/train.pid
+
+    # 等待 5 秒检查进程是否启动成功
+    sleep 5
+    if ps -p $TRAIN_PID > /dev/null 2>&1; then
+        # 进一步检查日志是否包含早期错误
+        if grep -qi "error\|exception\|traceback" "$LOG_FILE" 2>/dev/null; then
+            print_error "❌ 训练启动时发生错误"
+            echo "--- 日志内容 ---"
+            cat "$LOG_FILE"
+            echo "----------------"
+            exit 1
+        fi
+        
+        print_success "✅ 训练已在后台启动"
+        print_info "进程 ID: $TRAIN_PID"
+        print_info "日志文件: $LOG_FILE"
+        echo ""
+        print_info "常用命令:"
+        print_info "  查看日志: tail -f $LOG_FILE"
+        print_info "  查看进程: ps -p $TRAIN_PID"
+        print_info "  停止训练: kill $TRAIN_PID"
+        print_info "  GPU 监控: nvidia-smi"
+        echo ""
+        print_warning "⚠️  关闭 SSH 后训练会继续运行"
+        print_warning "   重新连接后用上面的命令查看进度"
     else
-        print_error "训练失败"
+        print_error "❌ 训练启动失败，请检查日志: $LOG_FILE"
+        if [ -s "$LOG_FILE" ]; then
+            echo "--- 日志最后 20 行 ---"
+            tail -n 20 "$LOG_FILE"
+        fi
         exit 1
     fi
 }
 
 # 显示结果
 show_results() {
-    print_info "训练结果:"
-    
+    print_info "训练已启动，但尚未完成:"
+
     echo ""
-    echo "交付物清单:"
+    echo "训练完成后将生成以下文件:"
     echo "  1. 模型权重: checkpoints/best_model.pth"
     echo "  2. 标准化参数: data/scaler_params.npz"
     echo "  3. 训练历史: checkpoints/training_history.png"
@@ -158,6 +212,9 @@ show_results() {
     echo "  5. 交叉验证结果: results/cv_results.json"
     echo "  6. Optuna 搜索结果: checkpoints/optuna_results.json"
     echo "  7. Optuna 可视化: checkpoints/optuna_results.png"
+    echo ""
+    echo "使用以下命令查看训练进度:"
+    echo "  tail -f logs/train_*.log"
     echo ""
 }
 
@@ -167,7 +224,10 @@ main() {
     echo "FT-Transformer 中医体质分类 - 一键训练脚本"
     echo "=============================================================================="
     echo ""
-    
+
+    # 确保必要的目录存在
+    mkdir -p logs checkpoints results
+
     # 检查环境
     check_python
     check_venv
