@@ -7,7 +7,7 @@ experiment/rawdata/row_data/
 *.csv
 experiment/rawdata/clean_data
 /.opencode/
-
+venv
 # Python cache
 __pycache__/
 *.py[cod]
