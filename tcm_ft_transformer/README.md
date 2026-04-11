@@ -38,8 +38,8 @@ tcm_ft_transformer/
 python3 -m venv venv
 source venv/bin/activate
 
-# 安装依赖
-pip install torch numpy pandas scikit-learn optuna matplotlib tqdm
+# 安装依赖（使用项目根目录的 requirements.txt）
+pip install -r ../requirements.txt
 ```
 
 ### 2. 准备数据
@@ -186,8 +186,8 @@ python3 generate_sample_data.py
 ### 3. 依赖缺失
 
 ```bash
-# 安装所有依赖
-pip install torch numpy pandas scikit-learn optuna matplotlib tqdm
+# 安装所有依赖（使用项目根目录的 requirements.txt）
+pip install -r ../requirements.txt
 ```
 
 ## 许可证
