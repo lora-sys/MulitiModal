@@ -89,14 +89,13 @@ check_dependencies() {
 # 检查数据文件
 check_data() {
     print_info "检查数据文件..."
-    
+
     DATA_FILE="data/vital_signs_dataset_final.csv"
-    
+
     if [ ! -f "$DATA_FILE" ]; then
-        print_warning "数据文件不存在: $DATA_FILE"
-        print_info "生成示例数据..."
-        python3 generate_sample_data.py
-        print_success "示例数据已生成"
+        print_error "数据文件不存在: $DATA_FILE"
+        print_error "请确保数据集已放置在正确位置"
+        exit 1
     else
         print_success "数据文件存在: $DATA_FILE"
     fi

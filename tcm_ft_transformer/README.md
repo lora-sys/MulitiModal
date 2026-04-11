@@ -21,7 +21,6 @@ tcm_ft_transformer/
 ├── optuna_search.py       # Optuna 超参数搜索
 ├── visualize.py           # 可视化工具
 ├── main.py                # 主入口文件
-├── generate_sample_data.py # 示例数据生成
 ├── train_all.sh           # 一键训练脚本
 ├── data/                  # 数据目录
 ├── checkpoints/           # 模型检查点
@@ -49,11 +48,7 @@ pip install -r ../requirements.txt
 - 前 8 列: 特征 (Age, Gender, BMI, HeartRate, SBP, DBP, SpO2, Temperature)
 - 后 9 列: 标签 (平和质、气虚质、阳虚质、阴虚质、痰湿质、湿热质、血瘀质、气郁质、特禀质)
 
-如果没有真实数据，可以运行示例数据生成脚本:
-
-```bash
-python3 generate_sample_data.py
-```
+**注意**: 请确保数据集文件已放置在 `data/vital_signs_dataset_final.csv` 位置。
 
 ### 3. 一键训练
 
@@ -178,10 +173,7 @@ TRAIN_CONFIG = {
 
 ### 2. 数据文件不存在
 
-```bash
-# 生成示例数据
-python3 generate_sample_data.py
-```
+请确保数据集文件已放置在 `data/vital_signs_dataset_final.csv` 位置。
 
 ### 3. 依赖缺失
 
