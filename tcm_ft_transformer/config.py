@@ -38,7 +38,7 @@ MODEL_CONFIG = {
     "n_heads": 4,  # 注意力头数（固定）
     "n_layers": 3,  # Transformer 层数（可搜索）
     "dropout": 0.3,  # Dropout 比例（可搜索）
-    "n_classes": 9,  # 输出类别数
+    # n_classes 不在这里，会在 train.py 中显式传递
 }
 
 # =========================================================================
