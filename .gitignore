@@ -8,6 +8,9 @@ experiment/rawdata/row_data/
 experiment/rawdata/clean_data
 /.opencode/
 venv
+# Archived files
+experiment/archive/
+
 # Python cache
 __pycache__/
 *.py[cod]
@@ -16,3 +19,9 @@ __pycache__/
 # Training logs
 experiment/model/log.txt
 training_output.log
+.vscode
+checkpoints
+data 
+log 
+results
+.vscode
