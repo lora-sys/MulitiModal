@@ -136,24 +136,24 @@ def run_optuna_search(
         load_if_exists=True
     )
 
-    # 提示用户是否加载了历史试验
-    n_existing_trials = len(study.trials)
-    if n_existing_trials > 0:
-        print(f"\n⚠️ 加载已有研究，包含 {n_existing_trials} 个历史试验")
+    # 提示用户是否加载了历史试验（只计算已完成的试验）
+    n_completed = sum(1 for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE)
+    if n_completed > 0:
+        print(f"\n⚠️ 加载已有研究，包含 {n_completed} 个已完成的试验")
 
-        # 如果已有试验数量 >= 目标数量，直接跳过优化
-        if n_existing_trials >= n_trials:
-            print(f"   已有 {n_existing_trials} 个试验，满足要求")
+        # 如果已有已完成试验数量 >= 目标数量，直接跳过优化
+        if n_completed >= n_trials:
+            print(f"   已有 {n_completed} 个已完成试验，满足要求")
             print(f"   跳过优化，直接使用已有结果")
             print(f"   如需重新开始，请删除 {storage} 文件")
         else:
-            remaining_trials = n_trials - n_existing_trials
+            remaining_trials = n_trials - n_completed
             print(f"   本次将再添加 {remaining_trials} 个新试验（目标: {n_trials}）")
             print(f"   如需重新开始，请删除 {storage} 文件")
 
     # 运行优化（只在需要时运行）
-    if n_existing_trials < n_trials:
-        remaining_trials = n_trials - n_existing_trials
+    if n_completed < n_trials:
+        remaining_trials = n_trials - n_completed
         study.optimize(
             lambda trial: objective(trial, X, y, n_splits, num_epochs),
             n_trials=remaining_trials,
@@ -161,17 +161,25 @@ def run_optuna_search(
             show_progress_bar=True
         )
     else:
-        print(f"\n✅ 跳过 Optuna 优化，使用已有的 {n_existing_trials} 个试验结果")
-    
+        print(f"\n✅ 跳过 Optuna 优化，使用已有的 {n_completed} 个已完成试验结果")
+
+    # 重新计算已完成试验数量
+    n_completed = sum(1 for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE)
+
     # 打印结果
     print("\n" + "=" * 60)
     print("搜索完成！")
     print("=" * 60)
-    print(f"最佳试验: {study.best_trial.number}")
-    print(f"最佳验证损失: {study.best_value:.6f}")
-    print(f"最佳参数:")
-    for key, value in study.best_params.items():
-        print(f"  {key}: {value}")
+
+    if n_completed > 0:
+        print(f"最佳试验: {study.best_trial.number}")
+        print(f"最佳验证损失: {study.best_value:.6f}")
+        print(f"最佳参数:")
+        for key, value in study.best_params.items():
+            print(f"  {key}: {value}")
+    else:
+        print("没有已完成的试验")
+
     print("=" * 60)
     
     # 保存结果

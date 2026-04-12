@@ -61,17 +61,20 @@ def load_best_params(best_params_path):
     """加载最佳超参数"""
     with open(best_params_path, 'r') as f:
         data = json.load(f)
-    
+
     print(f"✅ 加载最佳超参数:")
     print(f"  来源: {best_params_path}")
-    print(f"  最佳值: {data['best_value']:.6f}")
-    print(f"  试验次数: {data['n_trials']}")
-    print(f"  时间戳: {data['timestamp']}")
+    if data.get('best_value') is not None:
+        print(f"  最佳值: {data['best_value']:.6f}")
+    if data.get('n_trials') is not None:
+        print(f"  试验次数: {data['n_trials']}")
+    if data.get('timestamp') is not None:
+        print(f"  时间戳: {data['timestamp']}")
     print(f"\n  超参数:")
-    for key, value in data['best_params'].items():
+    for key, value in data.get('best_params', data).items():
         print(f"    {key}: {value}")
-    
-    return data['best_params']
+
+    return data.get('best_params', data)
 
 
 def main():
@@ -111,7 +114,10 @@ def main():
     # 设置默认训练轮数（如果最佳参数中没有）
     if 'num_epochs' not in best_params:
         best_params['num_epochs'] = 100  # 完整训练使用更多轮数
-    
+
+    if 'batch_size' not in best_params:
+        best_params['batch_size'] = 32  # 默认批次大小
+
     print(f"\n📋 最终训练配置:")
     print(f"  数据集: {args.data_root}")
     print(f"  设备: {args.device}")

@@ -126,10 +126,24 @@ class WESADDataSource(IDataSource):
             # 检查缓存
             if sample_id in self._data_cache:
                 return self._data_cache[sample_id]
-            
+
             # 加载传感器数据
-            sensor_data = np.load(sample_info['sensor_path'], allow_pickle=True)
-            
+            loaded = np.load(sample_info['sensor_path'], allow_pickle=True)
+
+            # 转换为字典（处理 .npz 和 dict-in-array 两种格式）
+            if isinstance(loaded, np.ndarray):
+                sensor_data = loaded.item()
+            elif isinstance(loaded, np.lib.npyio.NpzFile):
+                sensor_data = {}
+                for key in loaded.files:
+                    val = loaded[key]
+                    if val.dtype == np.object_:
+                        sensor_data[key] = val.item()
+                    else:
+                        sensor_data[key] = val
+            else:
+                sensor_data = dict(loaded)
+
             # 提取 ECG 和 ACC 信号
             ecg = sensor_data.get('chest', {}).get('ECG', [])
             acc = sensor_data.get('chest', {}).get('ACC', [])
@@ -354,22 +368,47 @@ def create_wesad_dataset(data_root: str, train_ratio: float = 0.8) -> tuple:
     
     # 创建完整数据集
     full_dataset = WESADDataset(data_root)
-    
-    # 划分训练集和验证集
+
+    # 按subject_id分组样本索引
+    subject_to_indices = {}
+    for idx in range(len(full_dataset)):
+        sample = full_dataset._sample_list[idx]
+        subject_id = sample['subject_id']
+        if subject_id not in subject_to_indices:
+            subject_to_indices[subject_id] = []
+        subject_to_indices[subject_id].append(idx)
+
+    # 随机打乱subject顺序
+    subject_ids = list(subject_to_indices.keys())
+    torch.manual_seed(42)
+    shuffled_indices = torch.randperm(len(subject_ids)).tolist()
+    shuffled_subject_ids = [subject_ids[i] for i in shuffled_indices]
+
+    # 按比例分配subjects到train/val
     n_samples = len(full_dataset)
     n_train = int(train_ratio * n_samples)
     n_val = n_samples - n_train
-    
-    train_dataset, val_dataset = random_split(
-        full_dataset,
-        [n_train, n_val],
-        generator=torch.Generator().manual_seed(42)
-    )
-    
+
+    train_indices = []
+    val_indices = []
+
+    for subject_id in shuffled_subject_ids:
+        indices = subject_to_indices[subject_id]
+        if len(train_indices) < n_train:
+            train_indices.extend(indices)
+        else:
+            val_indices.extend(indices)
+
+    # 确保train_indices不超过n_train
+    train_indices = train_indices[:n_train]
+
+    train_dataset = torch.utils.data.Subset(full_dataset, train_indices)
+    val_dataset = torch.utils.data.Subset(full_dataset, val_indices)
+
     print(f"📊 数据集划分:")
-    print(f"  训练集: {n_train} 样本")
-    print(f"  验证集: {n_val} 样本")
-    
+    print(f"  训练集: {len(train_indices)} 样本")
+    print(f"  验证集: {len(val_indices)} 样本")
+
     return train_dataset, val_dataset
 
 
