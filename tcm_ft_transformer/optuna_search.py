@@ -38,7 +38,7 @@ def objective(trial, X, y, n_splits=5, num_epochs=20):
         'n_heads': 4,  # 固定
         'n_layers': trial.suggest_int('n_layers', 2, 4),  # 连续整数搜索
         'dropout': trial.suggest_float('dropout', 0.1, 0.5, step=0.05),  # 连续搜索，步长 0.05
-        'n_classes': 9,
+        # n_classes 不在这里，会在 train.py 中显式传递
     }
 
     train_config = {
@@ -140,16 +140,28 @@ def run_optuna_search(
     n_existing_trials = len(study.trials)
     if n_existing_trials > 0:
         print(f"\n⚠️ 加载已有研究，包含 {n_existing_trials} 个历史试验")
-        print(f"   本次将再添加 {n_trials} 个新试验")
-        print(f"   如需重新开始，请删除 {storage} 文件")
-    
-    # 运行优化
-    study.optimize(
-        lambda trial: objective(trial, X, y, n_splits, num_epochs),
-        n_trials=n_trials,
-        n_jobs=1,
-        show_progress_bar=True
-    )
+
+        # 如果已有试验数量 >= 目标数量，直接跳过优化
+        if n_existing_trials >= n_trials:
+            print(f"   已有 {n_existing_trials} 个试验，满足要求")
+            print(f"   跳过优化，直接使用已有结果")
+            print(f"   如需重新开始，请删除 {storage} 文件")
+        else:
+            remaining_trials = n_trials - n_existing_trials
+            print(f"   本次将再添加 {remaining_trials} 个新试验（目标: {n_trials}）")
+            print(f"   如需重新开始，请删除 {storage} 文件")
+
+    # 运行优化（只在需要时运行）
+    if n_existing_trials < n_trials:
+        remaining_trials = n_trials - n_existing_trials
+        study.optimize(
+            lambda trial: objective(trial, X, y, n_splits, num_epochs),
+            n_trials=remaining_trials,
+            n_jobs=1,
+            show_progress_bar=True
+        )
+    else:
+        print(f"\n✅ 跳过 Optuna 优化，使用已有的 {n_existing_trials} 个试验结果")
     
     # 打印结果
     print("\n" + "=" * 60)

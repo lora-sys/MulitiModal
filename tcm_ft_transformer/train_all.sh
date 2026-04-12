@@ -6,6 +6,10 @@
 
 set -e  # 遇到错误立即退出
 
+# 获取脚本所在目录
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -34,13 +38,33 @@ print_error() {
 check_python() {
     print_info "检查 Python 环境..."
     
-    if ! command -v python3 &> /dev/null; then
-        print_error "未找到 Python 3"
+    # 优先使用 conda 环境的 python（如果存在）
+    if [ -n "$CONDA_PREFIX" ]; then
+        PYTHON_CMD="$CONDA_PREFIX/bin/python"
+        print_info "检测到 conda 环境: $CONDA_DEFAULT_ENV"
+    elif [ -n "$VIRTUAL_ENV" ]; then
+        PYTHON_CMD="$VIRTUAL_ENV/bin/python"
+        print_info "检测到虚拟环境: $VIRTUAL_ENV"
+    # 然后尝试使用当前激活的 python 命令
+    elif command -v python &> /dev/null; then
+        PYTHON_CMD=$(which python)
+    # 最后回退到 python3
+    elif command -v python3 &> /dev/null; then
+        PYTHON_CMD=$(which python3)
+    else
+        print_error "未找到 Python 解释器"
         exit 1
     fi
     
-    PYTHON_VERSION=$(python3 --version | cut -d' ' -f2 | cut -d'.' -f1,2)
+    # 验证 Python 可用性
+    if ! $PYTHON_CMD --version &> /dev/null; then
+        print_error "Python 解释器不可用: $PYTHON_CMD"
+        exit 1
+    fi
+    
+    PYTHON_VERSION=$($PYTHON_CMD --version | cut -d' ' -f2 | cut -d'.' -f1,2)
     print_success "Python 版本: $PYTHON_VERSION"
+    print_info "Python 路径: $PYTHON_CMD"
 }
 
 # 检查虚拟环境
@@ -59,6 +83,17 @@ check_venv() {
 check_dependencies() {
     print_info "检查依赖..."
     
+    # 定义包名和对应的导入名称
+    declare -A PACKAGE_IMPORT_MAP=(
+        ["torch"]="torch"
+        ["numpy"]="numpy"
+        ["pandas"]="pandas"
+        ["scikit-learn"]="sklearn"
+        ["optuna"]="optuna"
+        ["matplotlib"]="matplotlib"
+        ["tqdm"]="tqdm"
+    )
+    
     REQUIRED_PACKAGES=(
         "torch"
         "numpy"
@@ -72,7 +107,8 @@ check_dependencies() {
     MISSING_PACKAGES=()
     
     for package in "${REQUIRED_PACKAGES[@]}"; do
-        if ! python3 -c "import $package" 2>/dev/null; then
+        import_name="${PACKAGE_IMPORT_MAP[$package]}"
+        if ! $PYTHON_CMD -c "import $import_name" 2>/dev/null; then
             MISSING_PACKAGES+=($package)
         fi
     done
@@ -153,7 +189,7 @@ run_training() {
     LOG_FILE="logs/train_$(date +%Y%m%d_%H%M%S).log"
 
     # 使用 nohup 后台运行（默认使用所有可用 GPU）
-    nohup python3 -u main.py \
+    nohup $PYTHON_CMD -u main.py \
         --mode full \
         --data data/vital_signs_dataset_final.csv \
         --trials 20 \
