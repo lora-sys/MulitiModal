@@ -17,8 +17,8 @@ class TCM_Encoder(nn.Module):
         super().__init__()
         self.device = device
         self.scaler_params = self._load_scaler(scaler_path)
-        self.mean = torch.tensor(self.scaler_params['mean'], dtype=torch.float32).to(device)
-        self.std = torch.tensor(self.scaler_params['std'], dtype=torch.float32).to(device)
+        self.register_buffer('mean', torch.tensor(self.scaler_params['mean'], dtype=torch.float32))
+        self.register_buffer('std', torch.tensor(self.scaler_params['std'], dtype=torch.float32))
         self.model = self._load_ft_transformer(model_path)
         self.model.to(device)
         self.model.eval()
@@ -76,8 +76,8 @@ class TCM_Encoder(nn.Module):
         with torch.no_grad():
             x_normalized = self.normalize(x)
             cls_token = self.extract_cls_token(x_normalized)
-            features = self.feature_projection(cls_token)
             probs = self.model(x_normalized)
+        features = self.feature_projection(cls_token)
         return features, probs
 
     def encode(self, x):
@@ -88,6 +88,11 @@ class TCM_Encoder(nn.Module):
         constitution = torch.argmax(probs, dim=1)
         constitution_names = [self.constitution_names[idx] for idx in constitution.cpu().numpy()]
         return constitution, constitution_names, probs
+
+    def train(self, mode: bool = True):
+        super().train(mode)
+        self.model.eval()
+        return self
 
 
 def create_tcm_encoder(

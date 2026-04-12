@@ -75,19 +75,19 @@ class ExperimentResult:
 
 
 class ExperimentRecorder:
-    CSV_REQUIRED_FIELDS = [
+    CSV_REQUIRED_FIELDS = (
         'experiment_id', 'run_id', 'seed', 'model', 'fusion_type',
         'batch_size', 'lr', 'optimizer', 'weight_decay', 'num_epochs',
         'num_workers', 'device', 'train_time_min', 'train_loss_final',
         'val_loss_best', 'val_epoch_of_best', 'val_accuracy_best',
         'val_macro_f1_best', 'test_accuracy', 'test_macro_f1', 'notes'
-    ]
+    )
 
-    CSV_OPTIONAL_FIELDS = [
+    CSV_OPTIONAL_FIELDS = (
         'per_class_precision', 'per_class_recall', 'confusion_matrix_path',
         'attention_stats_path', 'checkpoint_path', 'gpu_mem_peak_gb',
         'train_steps_per_epoch', 'augmentation', 'timestamp'
-    ]
+    )
 
     def __init__(
         self,
@@ -311,7 +311,7 @@ class ExperimentRecorder:
         from sklearn.metrics import confusion_matrix
         cm = confusion_matrix(y_true, y_pred)
 
-        fig, ax = plt.subplots(figsize=(8, 6))
+        _fig, ax = plt.subplots(figsize=(8, 6))
         im = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
         ax.figure.colorbar(im, ax=ax)
 
@@ -369,7 +369,7 @@ class ExperimentRecorder:
         if not self.history['train_loss']:
             return ""
 
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        _fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
         epochs = range(1, len(self.history['train_loss']) + 1)
 
