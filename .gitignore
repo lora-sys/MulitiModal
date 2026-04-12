@@ -20,8 +20,7 @@ __pycache__/
 experiment/model/log.txt
 training_output.log
 .vscode
-checkpoints
-data 
-log 
-results
-.vscode
+/checkpoints
+/data
+/log
+/results

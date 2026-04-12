@@ -555,7 +555,7 @@ class DualGatingFusionModel(nn.Module):
         self.shared_dim = shared_dim
         self.num_constitutions = num_constitutions
 
-        from encoders import create_tcm_encoder
+        from .encoders import create_tcm_encoder
         self.tcm_encoder = create_tcm_encoder(
             model_path=tcm_model_path,
             scaler_path=tcm_scaler_path,
@@ -566,6 +566,7 @@ class DualGatingFusionModel(nn.Module):
         print(f"[DualGating] TCM Encoder 参数冻结状态: {'✅ 已冻结' if tcm_frozen else '❌ 未冻结'}")
 
         self.pressure_encoder = InceptionEncoder(in_channels=2, out_channels=shared_dim, depth=3)
+        self.pressure_proj = nn.Linear(shared_dim * 4, shared_dim)
 
         self.gate_a = nn.Sequential(
             nn.Linear(num_constitutions, gate_dim),
@@ -609,6 +610,7 @@ class DualGatingFusionModel(nn.Module):
     def forward(self, dynamic, static_basic, return_intermediate=False):
         tcm_features, tcm_probs = self.tcm_encoder(static_basic)
         pressure_features = self.pressure_encoder(dynamic)
+        pressure_features = self.pressure_proj(pressure_features)
         gate_a_weights = self.gate_a(tcm_probs)
         gated_pressure = pressure_features * gate_a_weights
         gate_b_weights = self.gate_b(pressure_features)

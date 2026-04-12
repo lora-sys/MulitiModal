@@ -112,12 +112,14 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
     print(f"测试集样本数: {len(X_test)}")
     
     # 从训练池中划分验证集（用于最终模型选择）
-    # 使用 80% 训练，20% 验证
+    # 使用 80% 训练，20% 验证，使用分层采样保持类别比例
+    stratify_target = y_pool.argmax(axis=1) if y_pool.ndim > 1 else y_pool
     X_train_final, X_val_final, y_train_final, y_val_final = train_test_split(
         X_pool, y_pool,
         test_size=0.2,
         random_state=DATA_CONFIG['random_state'],
-        shuffle=True
+        shuffle=True,
+        stratify=stratify_target
     )
     
     print(f"最终训练集样本数: {len(X_train_final)}")
@@ -234,10 +236,91 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
         fold_train_losses = []
         fold_histories = []
         fold_optimal_epochs = []
-    
-    for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_train_final)):
+
+        for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_train_final)):
+            print(f"\n{'=' * 80}")
+            print(f"Fold {fold_idx + 1}/{n_splits}")
+            print(f"{'=' * 80}")
+
+            X_train, X_val = X_train_final[train_idx], X_train_final[val_idx]
+            y_train, y_val = y_train_final[train_idx], y_train_final[val_idx]
+
+            # 训练单个 fold
+            history, best_val_loss = train_single_fold(
+                X_train, y_train,
+                X_val, y_val,
+                model_params=final_model_params,
+                train_config=final_train_config,
+                fold_idx=fold_idx
+            )
+
+            # 找到最优 epoch
+            best_epoch = np.argmin(history['val_loss']) + 1
+            fold_optimal_epochs.append(best_epoch)
+
+            fold_val_losses.append(best_val_loss)
+            fold_train_losses.append(min(history['train_loss']))
+            fold_histories.append(history)
+
+            print(f"\nFold {fold_idx + 1} 完成:")
+            print(f"  最优 epoch: {best_epoch}")
+            print(f"  最佳验证损失: {best_val_loss:.6f}")
+            print(f"  最佳训练损失: {min(history['train_loss']):.6f}")
+            print(f"  过拟合差距: {best_val_loss - min(history['train_loss']):.6f}")
+
+        # 计算统计结果
+        mean_val_loss = np.mean(fold_val_losses)
+        std_val_loss = np.std(fold_val_losses)
+        mean_train_loss = np.mean(fold_train_losses)
+        std_train_loss = np.std(fold_train_losses)
+        overfit_gaps = np.array(fold_val_losses) - np.array(fold_train_losses)
+        mean_overfit_gap = np.mean(overfit_gaps)
+
+        # 使用中位数而不是平均数（避免异常值影响）
+        median_optimal_epoch = int(np.median(fold_optimal_epochs))
+        mean_optimal_epoch = int(round(np.mean(fold_optimal_epochs)))
+
         print(f"\n{'=' * 80}")
-        print(f"Fold {fold_idx + 1}/{n_splits}")
+        print("交叉验证结果汇总")
+        print(f"{'=' * 80}")
+        print(f"各 Fold 最优 Epoch: {fold_optimal_epochs}")
+        print(f"中位数最优 epoch: {median_optimal_epoch} ⭐ (推荐)")
+        print(f"平均最优 epoch: {mean_optimal_epoch}")
+        print(f"平均验证损失: {mean_val_loss:.6f} ± {std_val_loss:.6f}")
+        print(f"平均训练损失: {mean_train_loss:.6f} ± {std_train_loss:.6f}")
+        print(f"平均过拟合差距: {mean_overfit_gap:.6f}")
+        print(f"{'=' * 80}")
+
+        # 保存交叉验证结果
+        cv_results = {
+            'mean_val_loss': mean_val_loss,
+            'std_val_loss': std_val_loss,
+            'mean_train_loss': mean_train_loss,
+            'std_train_loss': std_train_loss,
+            'fold_val_losses': fold_val_losses,
+            'fold_train_losses': fold_train_losses,
+            'fold_optimal_epochs': fold_optimal_epochs,
+            'median_optimal_epoch': median_optimal_epoch,
+            'mean_optimal_epoch': mean_optimal_epoch,
+            'overfit_gaps': overfit_gaps.tolist(),
+            'mean_overfit_gap': mean_overfit_gap,
+            'best_params': best_params,
+        }
+
+        save_cv_results(cv_results, save_path=OUTPUT_FILES["cv_results"])
+
+        # 绘制交叉验证对比图
+        plot_cv_comparison(cv_results, save_path=OUTPUT_FILES["cv_comparison"])
+
+        # 绘制最佳 fold 的训练历史（如果有）
+        if len(fold_histories) > 0:
+            best_fold_idx = np.argmin(fold_val_losses)
+            plot_training_history(
+                fold_histories[best_fold_idx],
+                save_path=OUTPUT_FILES["training_history"]
+            )
+        else:
+            print("  跳过训练历史绘制（无历史数据）")
         print(f"{'=' * 80}")
         
         X_train, X_val = X_train_final[train_idx], X_train_final[val_idx]
@@ -389,55 +472,55 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
             print(f"\n{'=' * 80}")
             print(f"训练候选模型: {epoch_num} 轮")
             print(f"{'=' * 80}")
-        
-        # 创建新模型
-        model = get_model(
-            n_features=8,
-            n_classes=9,
-            **final_model_params
-        )
-        
-        # 训练模型
-        trainer = Trainer(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            device=device,
-            learning_rate=best_params['learning_rate'],
-            weight_decay=TRAIN_CONFIG['weight_decay'],
-            warmup_ratio=TRAIN_CONFIG['warmup_ratio'],
-            num_epochs=epoch_num,
-            patience=None,  # 不使用早停，训练完整 epoch 数
-            grad_clip_max_norm=TRAIN_CONFIG['grad_clip_max_norm'],
-            checkpoint_dir=CHECKPOINT_DIR
-        )
-        
-        history = trainer.train()
-        
-        # 在验证集上评估
-        val_loss, _, _ = evaluate_model(model, val_loader, criterion, device)
-        
-        print(f"\n候选模型 ({epoch_num} 轮) 完成:")
-        print(f"  最终训练损失: {history['train_loss'][-1]:.6f}")
-        print(f"  验证损失: {val_loss:.6f}")
-        
-        # 保存模型
-        checkpoint_path = os.path.join(CHECKPOINT_DIR, f'candidate_model_epoch_{epoch_num}.pth')
-        torch.save({
-            'epoch': epoch_num,
-            'model_state_dict': model.state_dict(),
-            'val_loss': val_loss,
-            'history': history,
-            'model_params': final_model_params,
-            'train_config': final_train_config,
-        }, checkpoint_path)
-        
-        candidate_models.append({
-            'epoch_num': epoch_num,
-            'val_loss': val_loss,
-            'checkpoint_path': checkpoint_path,
-            'history': history,
-        })
+
+            # 创建新模型
+            model = get_model(
+                n_features=8,
+                n_classes=9,
+                **final_model_params
+            )
+
+            # 训练模型
+            trainer = Trainer(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                device=device,
+                learning_rate=best_params['learning_rate'],
+                weight_decay=TRAIN_CONFIG['weight_decay'],
+                warmup_ratio=TRAIN_CONFIG['warmup_ratio'],
+                num_epochs=epoch_num,
+                patience=None,  # 不使用早停，训练完整 epoch 数
+                grad_clip_max_norm=TRAIN_CONFIG['grad_clip_max_norm'],
+                checkpoint_dir=CHECKPOINT_DIR
+            )
+
+            history = trainer.train()
+
+            # 在验证集上评估
+            val_loss, _, _ = evaluate_model(model, val_loader, criterion, device)
+
+            print(f"\n候选模型 ({epoch_num} 轮) 完成:")
+            print(f"  最终训练损失: {history['train_loss'][-1]:.6f}")
+            print(f"  验证损失: {val_loss:.6f}")
+
+            # 保存模型
+            checkpoint_path = os.path.join(CHECKPOINT_DIR, f'candidate_model_epoch_{epoch_num}.pth')
+            torch.save({
+                'epoch': epoch_num,
+                'model_state_dict': model.state_dict(),
+                'val_loss': val_loss,
+                'history': history,
+                'model_params': final_model_params,
+                'train_config': final_train_config,
+            }, checkpoint_path)
+
+            candidate_models.append({
+                'epoch_num': epoch_num,
+                'val_loss': val_loss,
+                'checkpoint_path': checkpoint_path,
+                'history': history,
+            })
     
     # =====================================================================
     # 阶段 4: 在验证集上选择最佳模型
