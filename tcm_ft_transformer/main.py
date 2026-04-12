@@ -116,14 +116,12 @@ def run_full_pipeline(
     for key, value in best_params.items():
         print(f"  {key}: {value}")
     
-    # 合并最佳参数（只包含模型参数，不包含训练配置）
+    # 合并最佳参数
     final_model_params = {
         'd_token': MODEL_CONFIG['d_token'],
         'n_heads': MODEL_CONFIG['n_heads'],
-        # n_classes 不在这里，会在 train.py 中显式传递
         'n_layers': best_params.get('n_layers', 3),
         'dropout': best_params.get('dropout', 0.3),
-        # learning_rate 是训练配置，不是模型参数，不在这里传递
     }
     
     final_train_config = {

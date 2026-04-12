@@ -287,7 +287,7 @@ class MultiExpertFusionModel(nn.Module):
         # 使用 ModuleDict 组织编码器（便于参数分组）
         self.encoders = nn.ModuleDict({
             'dynamic': InceptionEncoder(in_channels=2, out_channels=shared_dim, depth=3),
-            'static_basic': StaticMLPEncoder(in_dim=4, out_dim=shared_dim),
+            'static_basic': StaticMLPEncoder(in_dim=8, out_dim=shared_dim),  # 改为8维以支持TCM的8个体征
             'static_scores': StaticMLPEncoder(in_dim=2, out_dim=shared_dim),
             'constitution': ConstitutionEmbedding(num_constitutions=num_constitutions, embed_dim=32, out_dim=shared_dim),
         })
@@ -424,7 +424,7 @@ class SimpleConcatModel(nn.Module):
         
         # Static basic encoder: 2 层 MLP
         self.static_basic_encoder = nn.Sequential(
-            nn.Linear(4, 32),
+            nn.Linear(8, 32),  # 改为8维以支持TCM的8个体征
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(32, shared_dim),
@@ -538,7 +538,7 @@ class LateFusionTransformerModel(nn.Module):
         
         # Static encoders
         self.static_basic_encoder = nn.Sequential(
-            nn.Linear(4, 32),
+            nn.Linear(8, 32),  # 改为8维以支持TCM的8个体征
             nn.ReLU(),
             nn.Linear(32, shared_dim),
         )
@@ -666,7 +666,7 @@ class SimpleAttentionFusion(nn.Module):
         )
         
         self.static_basic_encoder = nn.Sequential(
-            nn.Linear(4, 32),
+            nn.Linear(8, 32),  # 改为8维以支持TCM的8个体征
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(32, shared_dim),
@@ -788,7 +788,7 @@ class GatedFusion(nn.Module):
         )
         
         self.static_basic_encoder = nn.Sequential(
-            nn.Linear(4, 32),
+            nn.Linear(8, 32),  # 改为8维以支持TCM的8个体征
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(32, shared_dim),
@@ -875,6 +875,159 @@ class GatedFusion(nn.Module):
 
 
 # =========================================================================
+# Dual Gating Fusion Model - 使用 TCM Encoder 和双门控融合
+# 描述: 集成训练好的 TCM 模型，通过双门控机制融合中医体质和压力信号
+# 目标: 回归任务 - 预测放松度和疲劳缓解度（0-1 连续值）
+# =========================================================================
+class DualGatingFusionModel(nn.Module):
+    """
+    双门控融合模型
+    
+    架构:
+    1. TCM Encoder: 将8维静态体征编码为128维特征 + 9维体质概率
+    2. 压力编码器: 将时序压力信号编码为128维特征
+    3. 双门控融合:
+       - 门控 A: 中医概率 → 压力特征权重
+       - 门控 B: 压力特征 → 静态特征权重
+    4. 回归头: 输出放松度和疲劳缓解度（0-1）
+    
+    特点:
+    - TCM 参数冻结，保护先验知识
+    - 双向信息流：中医指导压力，压力修正静态
+    - 回归任务，不需要类别平衡
+    """
+    def __init__(
+        self,
+        num_outputs=2,  # 放松度 + 疲劳缓解度
+        num_constitutions=9,  # 9种中医体质
+        shared_dim=128,
+        projector_dim=128,
+        gate_dim=128,
+        hidden_dim=256,
+        dropout=0.3,
+        tcm_model_path='data/tcm_ft_transformer/checkpoints/best_model.pth',
+        tcm_scaler_path='data/tcm_ft_transformer/data/scaler_params.npz',
+    ):
+        super().__init__()
+        
+        self.shared_dim = shared_dim
+        self.num_constitutions = num_constitutions
+        
+        # 加载 TCM Encoder（从 encoders.py 导入）
+        from encoders import create_tcm_encoder
+        self.tcm_encoder = create_tcm_encoder(
+            model_path=tcm_model_path,
+            scaler_path=tcm_scaler_path,
+            device='cpu'  # 初始化时先在 CPU，后续会移动到正确设备
+        )
+        
+        # 验证 TCM Encoder 参数已冻结
+        tcm_frozen = all(not p.requires_grad for p in self.tcm_encoder.parameters())
+        print(f"[DualGating] TCM Encoder 参数冻结状态: {'✅ 已冻结' if tcm_frozen else '❌ 未冻结'}")
+        
+        # 压力编码器（使用 Inception）
+        self.pressure_encoder = InceptionEncoder(
+            in_channels=2,  # 2个传感器
+            out_channels=shared_dim,
+            depth=3
+        )
+        
+        # 门控 A: 中医概率 → 压力特征权重
+        self.gate_a = nn.Sequential(
+            nn.Linear(num_constitutions, gate_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(gate_dim, shared_dim),
+            nn.Sigmoid()
+        )
+        
+        # 门控 B: 压力特征 → 静态特征权重
+        self.gate_b = nn.Sequential(
+            nn.Linear(shared_dim, shared_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(shared_dim, shared_dim),
+            nn.Sigmoid()
+        )
+        
+        # 投影层：将融合特征投影到统一维度
+        self.fusion_proj = nn.Sequential(
+            nn.Linear(shared_dim * 2, projector_dim),
+            nn.ReLU(),
+            nn.LayerNorm(projector_dim),
+            nn.Dropout(dropout)
+        )
+        
+        # 回归头：预测放松度和疲劳缓解度
+        self.regressor = nn.Sequential(
+            nn.Linear(projector_dim, hidden_dim),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.LayerNorm(hidden_dim // 2),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim // 2, num_outputs),
+            nn.Sigmoid()  # 输出 0-1
+        )
+        
+        # 存储结构信息
+        self.fusion_type = "dual_gating"
+        self.model_name = "DualGatingFusion"
+        
+    def forward(self, dynamic, static_basic, return_intermediate=False):
+        """
+        前向传播
+        
+        Args:
+            dynamic: (B, 2, T) 压力信号
+            static_basic: (B, 8) 静态体征（8个特征）
+            return_intermediate: 是否返回中间结果
+            
+        Returns:
+            outputs: (B, 2) 放松度、疲劳缓解度
+            intermediate: (可选) 中间结果字典
+        """
+        # 1. TCM 编码
+        tcm_features, tcm_probs = self.tcm_encoder(static_basic)
+        
+        # 2. 压力编码
+        pressure_features = self.pressure_encoder(dynamic)
+        
+        # 3. 门控 A: 中医指导压力
+        gate_a_weights = self.gate_a(tcm_probs)  # (B, shared_dim)
+        gated_pressure = pressure_features * gate_a_weights  # (B, shared_dim)
+        
+        # 4. 门控 B: 压力修正静态
+        gate_b_weights = self.gate_b(pressure_features)  # (B, shared_dim)
+        gated_static = tcm_features * gate_b_weights  # (B, shared_dim)
+        
+        # 5. 特征融合
+        fused = torch.cat([gated_static, gated_pressure], dim=1)  # (B, shared_dim * 2)
+        
+        # 6. 投影
+        fused_proj = self.fusion_proj(fused)  # (B, projector_dim)
+        
+        # 7. 回归预测
+        outputs = self.regressor(fused_proj)  # (B, 2)
+        
+        if return_intermediate:
+            return outputs, {
+                'tcm_features': tcm_features,
+                'tcm_probs': tcm_probs,
+                'pressure_features': pressure_features,
+                'gate_a_weights': gate_a_weights,
+                'gate_b_weights': gate_b_weights,
+                'gated_pressure': gated_pressure,
+                'gated_static': gated_static,
+                'fused_features': fused,
+            }
+        
+        return outputs
+
+
+# =========================================================================
 # 工厂函数: 根据配置返回模型
 # =========================================================================
 def get_model(model_type="baseline_c", num_classes=3, dyn_channels=2, static_dim=4, **kwarg):
@@ -928,6 +1081,20 @@ def get_model(model_type="baseline_c", num_classes=3, dyn_channels=2, static_dim
             shared_dim=kwarg.get('shared_dim', 64),
             hidden_dim=kwarg.get('hidden_dim', 128),
             dropout=kwarg.get('dropout', 0.3),
+        )
+    
+    # Dual Gating Fusion (新增)
+    if model_type == "dual_gating":
+        return DualGatingFusionModel(
+            num_outputs=2,  # 放松度 + 疲劳缓解度
+            num_constitutions=kwarg.get('num_constitutions', 9),
+            shared_dim=kwarg.get('shared_dim', 128),
+            projector_dim=kwarg.get('projector_dim', 128),
+            gate_dim=kwarg.get('gate_dim', 128),
+            hidden_dim=kwarg.get('hidden_dim', 256),
+            dropout=kwarg.get('dropout', 0.3),
+            tcm_model_path=kwarg.get('tcm_model_path', 'data/tcm_ft_transformer/checkpoints/best_model.pth'),
+            tcm_scaler_path=kwarg.get('tcm_scaler_path', 'data/tcm_ft_transformer/data/scaler_params.npz'),
         )
     
     raise ValueError(f"Unknown model type: {model_type}")
