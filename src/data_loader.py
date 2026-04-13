@@ -286,7 +286,7 @@ class WESADDataset(Dataset):
 
 
 class BUTPPGDataset(Dataset):
-    """BUT PPG v2.0.0 loader for SBP regression.
+    """BUT PPG v2.0.0 loader for HR regression.
 
     Primary loader: WFDB-like .hea/.dat + subject-info.csv (this repo's downloaded format).
     Fallback loader: .h5 (kept for compatibility).
@@ -313,7 +313,55 @@ class BUTPPGDataset(Dataset):
             self._build_from_h5(but_dir)
 
         if not self.samples:
-            raise RuntimeError("BUT PPG samples are empty; check data format and blood pressure labels.")
+            raise RuntimeError("BUT PPG samples are empty; check data format and HR extraction.")
+
+    def _extract_reference_hr(self, row: Dict) -> Optional[float]:
+        """Try to read reference HR from metadata row if present."""
+        for k, v in row.items():
+            key = (k or "").strip().lower()
+            if "heart" in key or key in {"hr", "heart rate", "heart_rate", "pulse", "pulse rate"}:
+                hr = _safe_float(v, np.nan)
+                if not np.isnan(hr) and hr > 0:
+                    return float(hr)
+        return None
+
+    def _extract_reference_hr_from_hea(self, hea_path: Path) -> Optional[float]:
+        """Try to parse reference HR from .hea comments if available."""
+        try:
+            text = hea_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            return None
+        patterns = [
+            r"\bhr\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)",
+            r"\bheart[_\s-]*rate\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)",
+            r"\bpulse\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)",
+        ]
+        for pat in patterns:
+            m = re.search(pat, text, flags=re.IGNORECASE)
+            if m:
+                try:
+                    hr = float(m.group(1))
+                    if hr > 0:
+                        return hr
+                except Exception:
+                    pass
+        return None
+
+    def _estimate_bpm_from_ppg(self, ppg_ch1: np.ndarray, fs: float = 30.0) -> float:
+        """Estimate BPM from PPG channel-1 by peak interval."""
+        if ppg_ch1.size < 10 or find_peaks is None:
+            return 70.0
+        fs = 30.0 if fs <= 0 else fs
+        distance = max(1, int(0.35 * fs))
+        peaks, _ = find_peaks(ppg_ch1, distance=distance)
+        if len(peaks) < 2:
+            return 70.0
+        rr = np.diff(peaks) / fs
+        rr = rr[rr > 0]
+        if rr.size == 0:
+            return 70.0
+        bpm = 60.0 / float(np.mean(rr))
+        return float(np.clip(bpm, 30.0, 220.0))
 
     def _load_subject_info(self, but_dir: Path) -> Dict[str, Dict]:
         info_path = next(iter(sorted(but_dir.rglob("subject-info.csv"))), None)
@@ -366,24 +414,29 @@ class BUTPPGDataset(Dataset):
 
                 info[rid] = {
                     "sbp": sbp,
+                    "ref_hr": self._extract_reference_hr(row),
                     "static": _safe_zscore(static, self.mean, self.std),
                 }
 
         return info
 
-    def _parse_hea(self, hea_path: Path) -> Tuple[int, Optional[Path]]:
+    def _parse_hea(self, hea_path: Path) -> Tuple[int, float, Optional[Path]]:
         lines = hea_path.read_text(encoding="utf-8", errors="ignore").splitlines()
         if not lines:
-            return 0, None
+            return 0, 30.0, None
 
         header_parts = lines[0].split()
         if len(header_parts) < 2:
-            return 0, None
+            return 0, 30.0, None
 
         try:
             n_sig = int(header_parts[1])
         except Exception:
             n_sig = 0
+        try:
+            fs = float(header_parts[2]) if len(header_parts) >= 3 else 30.0
+        except Exception:
+            fs = 30.0
 
         dat_path = None
         for line in lines[1:]:
@@ -399,7 +452,7 @@ class BUTPPGDataset(Dataset):
             if fallback.exists():
                 dat_path = fallback
 
-        return n_sig, dat_path
+        return n_sig, fs, dat_path
 
     def _build_from_wfdb(self, but_dir: Path, hea_files: List[Path]) -> None:
         subject_info = self._load_subject_info(but_dir)
@@ -407,10 +460,10 @@ class BUTPPGDataset(Dataset):
         for hea_path in hea_files:
             rid = hea_path.stem.replace("_PPG", "")
             meta = subject_info.get(rid)
-            if meta is None or meta.get("sbp") is None:
+            if meta is None:
                 continue
 
-            n_sig, dat_path = self._parse_hea(hea_path)
+            n_sig, fs, dat_path = self._parse_hea(hea_path)
             if n_sig <= 0 or dat_path is None or not dat_path.exists():
                 continue
 
@@ -437,11 +490,17 @@ class BUTPPGDataset(Dataset):
                 one = signal[:1, : self.window_size]
                 x = np.concatenate([one, one], axis=0)
 
+            ref_hr = meta.get("ref_hr")
+            if ref_hr is None:
+                ref_hr = self._extract_reference_hr_from_hea(hea_path)
+            if ref_hr is None:
+                ref_hr = self._estimate_bpm_from_ppg(x[0], fs=fs)
+
             self.samples.append(
                 Sample(
                     dynamic=x.astype(np.float32),
                     static=meta["static"].copy(),
-                    target=float(meta["sbp"]),
+                    target=float(ref_hr),
                 )
             )
 
@@ -453,6 +512,8 @@ class BUTPPGDataset(Dataset):
                 lname = name.lower()
                 if "sbp" in lname:
                     found["sbp"] = np.asarray(obj)
+                elif any(k in lname for k in ["hr", "heart_rate", "heart rate", "bpm", "pulse"]):
+                    found.setdefault("hr", np.asarray(obj))
                 elif any(k in lname for k in ["ppg", "signal", "wave"]):
                     found.setdefault("signals", []).append(np.asarray(obj))
 
@@ -472,9 +533,14 @@ class BUTPPGDataset(Dataset):
         for h5_path in h5_files:
             with h5py.File(h5_path, "r") as f:
                 found = self._scan_h5_datasets(f)
-                if "sbp" not in found or "signals" not in found:
+                if "signals" not in found:
                     continue
-                sbp = np.asarray(found["sbp"]).reshape(-1)
+                # Optional HR label datasets in h5 (if present)
+                ref_hr = None
+                for hr_key in ["hr", "heart_rate", "bpm", "pulse"]:
+                    if hr_key in found:
+                        ref_hr = np.asarray(found[hr_key]).reshape(-1)
+                        break
                 signal = np.asarray(found["signals"][0])
 
                 if signal.ndim == 2:
@@ -484,7 +550,7 @@ class BUTPPGDataset(Dataset):
                 if signal.shape[1] not in (2, 3):
                     continue
 
-                n = min(len(sbp), signal.shape[0])
+                n = signal.shape[0]
                 for i in range(n):
                     x = signal[i].astype(np.float32)
                     if x.shape[-1] < self.window_size:
@@ -497,11 +563,22 @@ class BUTPPGDataset(Dataset):
                                 .squeeze(0)
                                 .numpy()
                             )
+                    target_hr = None
+                    if ref_hr is not None and i < len(ref_hr):
+                        try:
+                            hr_val = float(ref_hr[i])
+                            if hr_val > 0:
+                                target_hr = hr_val
+                        except Exception:
+                            target_hr = None
+                    if target_hr is None:
+                        target_hr = self._estimate_bpm_from_ppg(x[0], fs=30.0)
+
                     self.samples.append(
                         Sample(
                             dynamic=x,
                             static=np.zeros((8,), dtype=np.float32),
-                            target=float(sbp[i]),
+                            target=float(target_hr),
                         )
                     )
 

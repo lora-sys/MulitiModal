@@ -85,7 +85,13 @@ def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
             optimizer.step()
 
     metrics = eval_linear_head(model, head, val_loader, device)
-    return metrics
+    return {
+        "task": "heart_rate_regression_bpm",
+        "mse": metrics["mse"],
+        "rmse": metrics["rmse"],
+        "mae": metrics["mae"],
+        "pearson": metrics["pearson"],
+    }
 
 
 def _spearman(x: np.ndarray, y: np.ndarray) -> float:
@@ -130,9 +136,10 @@ def main() -> None:
     ensure_dirs(paths)
     device = resolve_device(args.device)
 
-    print(f"[{timestamp()}] >>> Cross-domain A: BUT PPG")
+    print(f"[{timestamp()}] >>> Cross-domain A: BUT PPG (HR mechanism validation)")
     but_metrics = run_but_validation(paths, args, device)
-    print(f"[{timestamp()}] BUT metrics: {but_metrics}")
+    print(f"[{timestamp()}] BUT HR Pearson: {but_metrics['pearson']:.4f}")
+    print(f"[{timestamp()}] BUT HR MAE (BPM): {but_metrics['mae']:.4f}")
 
     # print(f"[{timestamp()}] >>> Cross-domain B: MIMIC static")
     # mimic_metrics = run_mimic_validation(paths, args, device)
