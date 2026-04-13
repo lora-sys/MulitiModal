@@ -41,7 +41,7 @@ def eval_linear_head(model: DualGatingModel, head: nn.Module, loader: DataLoader
 
 
 def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
-    dataset = BUTPPGDataset(paths.but_ppg_dir)
+    dataset = BUTPPGDataset(paths.but_ppg_dir, scaler_path=Path(args.tcm_scaler))
     n_val = max(1, int(0.2 * len(dataset)))
     n_train = len(dataset) - n_val
     train_ds, val_ds = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(42))

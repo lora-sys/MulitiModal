@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import csv
+import pickle
+import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset, random_split
 
-from src.config import FEATURE_BASELINES, Paths, TrainConfig, WESAD_LABEL_MAP
+from src.config import FEATURE_BASELINES, WESAD_LABEL_MAP
 
 
 try:
@@ -36,15 +39,6 @@ def compute_stride(window_size: int, overlap: float) -> int:
     return max(stride, 1)
 
 
-def sliding_windows(arr: np.ndarray, window_size: int, stride: int) -> List[np.ndarray]:
-    if arr.shape[-1] < window_size:
-        return []
-    out = []
-    for start in range(0, arr.shape[-1] - window_size + 1, stride):
-        out.append(arr[..., start : start + window_size])
-    return out
-
-
 def _safe_zscore(x: np.ndarray, mean: np.ndarray, std: np.ndarray) -> np.ndarray:
     std_safe = np.where(std == 0, 1.0, std)
     return (x - mean) / std_safe
@@ -60,9 +54,7 @@ def load_scaler_npz(path: Path) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def estimate_hr_from_ecg(ecg: np.ndarray, sampling_rate: float = 700.0) -> float:
-    if ecg.size < 5:
-        return 70.0
-    if find_peaks is None:
+    if ecg.size < 5 or find_peaks is None:
         return 70.0
     peaks, _ = find_peaks(ecg, distance=max(1, int(0.3 * sampling_rate)))
     if len(peaks) < 2:
@@ -74,27 +66,8 @@ def estimate_hr_from_ecg(ecg: np.ndarray, sampling_rate: float = 700.0) -> float
     return float(60.0 / mean_rr)
 
 
-def _extract_nested(mat_obj, keys: List[str]):
-    cur = mat_obj
-    for key in keys:
-        if isinstance(cur, np.ndarray) and cur.dtype.names is not None:
-            cur = cur[key]
-        elif isinstance(cur, np.ndarray) and cur.shape == (1, 1):
-            cur = cur[0, 0]
-            if hasattr(cur, key):
-                cur = getattr(cur, key)
-            else:
-                cur = cur[key]
-        elif hasattr(cur, "__getitem__"):
-            cur = cur[key]
-        else:
-            raise KeyError(f"Cannot descend key={key}")
-    return cur
-
-
 def _to_1d(x) -> np.ndarray:
-    arr = np.asarray(x).squeeze()
-    return arr.astype(np.float32)
+    return np.asarray(x).squeeze().astype(np.float32)
 
 
 def _field(obj, name: str):
@@ -111,6 +84,29 @@ def _field(obj, name: str):
     raise KeyError(f"Field '{name}' not found")
 
 
+def _parse_wesad_readme_demographics(readme_path: Path) -> Tuple[float, float]:
+    """Return (age, gender_numeric[0 male/1 female])."""
+    age = 35.0
+    gender = 0.0
+    if not readme_path.exists():
+        return age, gender
+
+    text = readme_path.read_text(encoding="utf-8", errors="ignore")
+    age_match = re.search(r"Age\s*:\s*(\d+)", text, flags=re.IGNORECASE)
+    if age_match:
+        age = float(age_match.group(1))
+
+    gender_match = re.search(r"Gender\s*:\s*([A-Za-z]+)", text, flags=re.IGNORECASE)
+    if gender_match:
+        g = gender_match.group(1).strip().lower()
+        if g.startswith("f"):
+            gender = 1.0
+        elif g.startswith("m"):
+            gender = 0.0
+
+    return age, gender
+
+
 @dataclass
 class Sample:
     dynamic: np.ndarray  # [2, 1000]
@@ -119,7 +115,11 @@ class Sample:
 
 
 class WESADDataset(Dataset):
-    """WESAD windows with strict label reconstruction and 50% overlap."""
+    """WESAD windows with strict label reconstruction and 50% overlap.
+
+    Primary loader: .pkl (official released format).
+    Fallback loader: .mat (kept for compatibility).
+    """
 
     def __init__(
         self,
@@ -128,8 +128,6 @@ class WESADDataset(Dataset):
         window_size: int = 1000,
         overlap: float = 0.5,
     ):
-        if loadmat is None:
-            raise ImportError("scipy is required for WESAD .mat loading")
         self.samples: List[Sample] = []
         self.window_size = window_size
         self.stride = compute_stride(window_size, overlap)
@@ -137,24 +135,41 @@ class WESADDataset(Dataset):
         self._build(wesad_dir)
 
     def _build(self, wesad_dir: Path) -> None:
-        mat_files = sorted(wesad_dir.rglob("*.mat"))
-        if not mat_files:
-            raise FileNotFoundError(f"No .mat files found under {wesad_dir}")
+        pkl_files = sorted(wesad_dir.rglob("S*.pkl"))
+        if pkl_files:
+            self._build_from_pkl(pkl_files)
+        else:
+            self._build_from_mat(wesad_dir)
 
-        for mat_path in mat_files:
-            data = loadmat(mat_path, squeeze_me=False, struct_as_record=False)
-            if "signal" not in data or "label" not in data:
-                continue
+        if not self.samples:
+            raise RuntimeError("WESAD samples are empty after filtering. Check source files and label mapping.")
 
-            chest = data["signal"]["chest"][0, 0]
-            ecg = _to_1d(_field(chest, "ECG"))
-            eda = _to_1d(_field(chest, "EDA"))
-            labels = _to_1d(data["label"]).astype(np.int32)
+    def _build_from_pkl(self, pkl_files: List[Path]) -> None:
+        for pkl_path in pkl_files:
+            subj_dir = pkl_path.parent
+            subject_name = subj_dir.name
+            age, gender = _parse_wesad_readme_demographics(subj_dir / f"{subject_name}_readme.txt")
 
             try:
-                temp = _to_1d(_field(chest, "Temp"))
-            except Exception:
-                temp = np.full_like(eda, 36.5)
+                with open(pkl_path, "rb") as f:
+                    data = pickle.load(f, encoding="latin1")
+            except Exception as exc:
+                warnings.warn(f"Skip corrupted WESAD pickle {pkl_path}: {exc}")
+                continue
+
+            if "signal" not in data or "label" not in data or "chest" not in data["signal"]:
+                warnings.warn(f"Skip unexpected WESAD pickle format: {pkl_path}")
+                continue
+
+            chest = data["signal"]["chest"]
+            if "ECG" not in chest or "EDA" not in chest:
+                warnings.warn(f"Skip WESAD subject missing ECG/EDA: {pkl_path}")
+                continue
+
+            ecg = _to_1d(chest["ECG"])
+            eda = _to_1d(chest["EDA"])
+            labels = _to_1d(data["label"]).astype(np.int32)
+            temp = _to_1d(chest["Temp"]) if "Temp" in chest else np.full_like(eda, 36.5)
 
             n = min(len(ecg), len(eda), len(labels), len(temp))
             ecg = ecg[:n]
@@ -165,7 +180,8 @@ class WESADDataset(Dataset):
             for start in range(0, n - self.window_size + 1, self.stride):
                 end = start + self.window_size
                 window_labels = labels[start:end]
-                # Strictly remove transition windows if any raw label is 0.
+
+                # Strictly remove transition windows.
                 if np.any(window_labels == 0):
                     continue
 
@@ -181,8 +197,8 @@ class WESADDataset(Dataset):
                 hr = estimate_hr_from_ecg(ecg_w)
                 static = np.array(
                     [
-                        35.0,  # age (WESAD not provided in this loader)
-                        0.0,  # gender (unknown -> neutral default)
+                        age,
+                        gender,
                         FEATURE_BASELINES["bmi"],
                         hr,
                         FEATURE_BASELINES["sbp"],
@@ -193,12 +209,69 @@ class WESADDataset(Dataset):
                     dtype=np.float32,
                 )
                 static = _safe_zscore(static, self.mean, self.std)
-
                 dyn = np.stack([ecg_w, eda_w], axis=0).astype(np.float32)
                 self.samples.append(Sample(dynamic=dyn, static=static, target=float(target)))
 
-        if not self.samples:
-            raise RuntimeError("WESAD samples are empty after filtering. Check label mapping and source files.")
+    def _build_from_mat(self, wesad_dir: Path) -> None:
+        if loadmat is None:
+            raise ImportError("scipy is required for WESAD .mat loading")
+
+        mat_files = sorted(wesad_dir.rglob("*.mat"))
+        if not mat_files:
+            raise FileNotFoundError(
+                f"No WESAD .pkl or .mat files found under {wesad_dir}. Current code expects WESAD release files."
+            )
+
+        for mat_path in mat_files:
+            data = loadmat(mat_path, squeeze_me=False, struct_as_record=False)
+            if "signal" not in data or "label" not in data:
+                continue
+            chest = data["signal"]["chest"][0, 0]
+            ecg = _to_1d(_field(chest, "ECG"))
+            eda = _to_1d(_field(chest, "EDA"))
+            labels = _to_1d(data["label"]).astype(np.int32)
+            try:
+                temp = _to_1d(_field(chest, "Temp"))
+            except Exception:
+                temp = np.full_like(eda, 36.5)
+
+            n = min(len(ecg), len(eda), len(labels), len(temp))
+            ecg = ecg[:n]
+            eda = eda[:n]
+            labels = labels[:n]
+            temp = temp[:n]
+
+            for start in range(0, n - self.window_size + 1, self.stride):
+                end = start + self.window_size
+                window_labels = labels[start:end]
+                if np.any(window_labels == 0):
+                    continue
+                window_label = int(np.round(np.median(window_labels)))
+                target = map_wesad_label(window_label)
+                if target is None:
+                    continue
+
+                ecg_w = ecg[start:end]
+                eda_w = eda[start:end]
+                temp_w = temp[start:end]
+                hr = estimate_hr_from_ecg(ecg_w)
+
+                static = np.array(
+                    [
+                        35.0,
+                        0.0,
+                        FEATURE_BASELINES["bmi"],
+                        hr,
+                        FEATURE_BASELINES["sbp"],
+                        FEATURE_BASELINES["dbp"],
+                        FEATURE_BASELINES["spo2"],
+                        float(np.mean(temp_w) if len(temp_w) else 36.5),
+                    ],
+                    dtype=np.float32,
+                )
+                static = _safe_zscore(static, self.mean, self.std)
+                dyn = np.stack([ecg_w, eda_w], axis=0).astype(np.float32)
+                self.samples.append(Sample(dynamic=dyn, static=static, target=float(target)))
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -213,19 +286,166 @@ class WESADDataset(Dataset):
 
 
 class BUTPPGDataset(Dataset):
-    """BUT PPG v2.0.0 loader for SBP regression."""
+    """BUT PPG v2.0.0 loader for SBP regression.
 
-    def __init__(self, but_dir: Path, window_size: int = 1000):
-        if h5py is None:
-            raise ImportError("h5py is required for BUT PPG loading")
+    Primary loader: WFDB-like .hea/.dat + subject-info.csv (this repo's downloaded format).
+    Fallback loader: .h5 (kept for compatibility).
+    """
+
+    def __init__(self, but_dir: Path, window_size: int = 1000, scaler_path: Optional[Path] = None):
         self.window_size = window_size
         self.samples: List[Sample] = []
+        self.mean, self.std = load_scaler_npz(scaler_path) if scaler_path is not None else (
+            np.zeros((8,), dtype=np.float32),
+            np.ones((8,), dtype=np.float32),
+        )
         self.proj = torch.nn.Conv1d(3, 2, kernel_size=1, bias=False)
         for p in self.proj.parameters():
             p.requires_grad = False
+
         self._build(but_dir)
 
-    def _scan_datasets(self, h5file):
+    def _build(self, but_dir: Path) -> None:
+        hea_files = sorted(but_dir.rglob("*_PPG.hea"))
+        if hea_files:
+            self._build_from_wfdb(but_dir, hea_files)
+        else:
+            self._build_from_h5(but_dir)
+
+        if not self.samples:
+            raise RuntimeError("BUT PPG samples are empty; check data format and blood pressure labels.")
+
+    def _load_subject_info(self, but_dir: Path) -> Dict[str, Dict]:
+        info_path = next(iter(sorted(but_dir.rglob("subject-info.csv"))), None)
+        if info_path is None:
+            warnings.warn("subject-info.csv not found; BUT labels may be unavailable.")
+            return {}
+
+        info: Dict[str, Dict] = {}
+        with open(info_path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rid = (row.get("ID") or "").strip()
+                if not rid:
+                    continue
+
+                bp_str = (row.get("Blood pressure [mmHg]") or "").strip()
+                sbp = None
+                dbp = None
+                if "/" in bp_str:
+                    parts = bp_str.split("/")
+                    try:
+                        sbp = float(parts[0])
+                        dbp = float(parts[1])
+                    except Exception:
+                        sbp = None
+                        dbp = None
+
+                age = _safe_float(row.get("Age [years]"), 35.0)
+                gender = _gender_to_numeric(row.get("Gender"))
+                height_cm = _safe_float(row.get("Height [cm]"), np.nan)
+                weight_kg = _safe_float(row.get("Weight [kg]"), np.nan)
+                spo2 = _safe_float(row.get("SpO2 [%]"), FEATURE_BASELINES["spo2"])
+                bmi = _compute_bmi(weight_kg, height_cm)
+                if np.isnan(bmi):
+                    bmi = FEATURE_BASELINES["bmi"]
+
+                static = np.array(
+                    [
+                        age,
+                        gender,
+                        bmi,
+                        70.0,  # HR not directly available at metadata row level
+                        sbp if sbp is not None else FEATURE_BASELINES["sbp"],
+                        dbp if dbp is not None else FEATURE_BASELINES["dbp"],
+                        spo2,
+                        36.5,
+                    ],
+                    dtype=np.float32,
+                )
+
+                info[rid] = {
+                    "sbp": sbp,
+                    "static": _safe_zscore(static, self.mean, self.std),
+                }
+
+        return info
+
+    def _parse_hea(self, hea_path: Path) -> Tuple[int, Optional[Path]]:
+        lines = hea_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        if not lines:
+            return 0, None
+
+        header_parts = lines[0].split()
+        if len(header_parts) < 2:
+            return 0, None
+
+        try:
+            n_sig = int(header_parts[1])
+        except Exception:
+            n_sig = 0
+
+        dat_path = None
+        for line in lines[1:]:
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0].endswith(".dat"):
+                dat_path = hea_path.parent / parts[0]
+                break
+
+        if dat_path is None:
+            fallback = hea_path.with_suffix(".dat")
+            if fallback.exists():
+                dat_path = fallback
+
+        return n_sig, dat_path
+
+    def _build_from_wfdb(self, but_dir: Path, hea_files: List[Path]) -> None:
+        subject_info = self._load_subject_info(but_dir)
+
+        for hea_path in hea_files:
+            rid = hea_path.stem.replace("_PPG", "")
+            meta = subject_info.get(rid)
+            if meta is None or meta.get("sbp") is None:
+                continue
+
+            n_sig, dat_path = self._parse_hea(hea_path)
+            if n_sig <= 0 or dat_path is None or not dat_path.exists():
+                continue
+
+            raw = np.fromfile(dat_path, dtype=np.int16)
+            if raw.size < n_sig or raw.size % n_sig != 0:
+                continue
+
+            signal = raw.reshape(-1, n_sig).T.astype(np.float32)  # [C, L]
+            if signal.shape[-1] < self.window_size:
+                continue
+
+            # Normalize channel count to 2 according to protocol.
+            if signal.shape[0] >= 3:
+                x = signal[:3, : self.window_size]
+                with torch.no_grad():
+                    x = (
+                        self.proj(torch.tensor(x[None, ...], dtype=torch.float32))
+                        .squeeze(0)
+                        .numpy()
+                    )
+            elif signal.shape[0] == 2:
+                x = signal[:2, : self.window_size]
+            else:  # 1 channel -> duplicate to 2 channels
+                one = signal[:1, : self.window_size]
+                x = np.concatenate([one, one], axis=0)
+
+            self.samples.append(
+                Sample(
+                    dynamic=x.astype(np.float32),
+                    static=meta["static"].copy(),
+                    target=float(meta["sbp"]),
+                )
+            )
+
+    def _scan_h5_datasets(self, h5file):
         found = {}
 
         def _visit(name, obj):
@@ -239,20 +459,24 @@ class BUTPPGDataset(Dataset):
         h5file.visititems(_visit)
         return found
 
-    def _build(self, but_dir: Path) -> None:
+    def _build_from_h5(self, but_dir: Path) -> None:
+        if h5py is None:
+            raise ImportError("h5py is required for BUT PPG .h5 loading")
+
         h5_files = sorted(but_dir.rglob("*.h5"))
         if not h5_files:
-            raise FileNotFoundError(f"No .h5 files found under {but_dir}")
+            raise FileNotFoundError(
+                f"No BUT PPG .hea/.dat or .h5 found under {but_dir}. Current data appears unsupported."
+            )
 
         for h5_path in h5_files:
             with h5py.File(h5_path, "r") as f:
-                found = self._scan_datasets(f)
+                found = self._scan_h5_datasets(f)
                 if "sbp" not in found or "signals" not in found:
                     continue
                 sbp = np.asarray(found["sbp"]).reshape(-1)
                 signal = np.asarray(found["signals"][0])
 
-                # expected shape -> [N, C, L]
                 if signal.ndim == 2:
                     signal = signal[:, None, :]
                 if signal.ndim == 3 and signal.shape[1] not in (2, 3):
@@ -263,13 +487,16 @@ class BUTPPGDataset(Dataset):
                 n = min(len(sbp), signal.shape[0])
                 for i in range(n):
                     x = signal[i].astype(np.float32)
-                    # force to length 1000
                     if x.shape[-1] < self.window_size:
                         continue
                     x = x[..., : self.window_size]
                     if x.shape[0] == 3:
                         with torch.no_grad():
-                            x = self.proj(torch.tensor(x[None, ...], dtype=torch.float32)).squeeze(0).numpy()
+                            x = (
+                                self.proj(torch.tensor(x[None, ...], dtype=torch.float32))
+                                .squeeze(0)
+                                .numpy()
+                            )
                     self.samples.append(
                         Sample(
                             dynamic=x,
@@ -277,9 +504,6 @@ class BUTPPGDataset(Dataset):
                             target=float(sbp[i]),
                         )
                     )
-
-        if not self.samples:
-            raise RuntimeError("BUT PPG samples are empty; check v2.0.0 file layout.")
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -346,3 +570,33 @@ def make_train_val_loaders(dataset: Dataset, batch_size: int, val_ratio: float =
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
     return train_loader, val_loader
+
+
+def _safe_float(v, default: float) -> float:
+    try:
+        if v is None:
+            return default
+        s = str(v).strip()
+        if s == "" or s.lower() in {"nan", "none"}:
+            return default
+        return float(s)
+    except Exception:
+        return default
+
+
+def _gender_to_numeric(v) -> float:
+    s = str(v or "").strip().lower()
+    if s.startswith("f"):
+        return 1.0
+    if s.startswith("m"):
+        return 0.0
+    return 0.0
+
+
+def _compute_bmi(weight_kg: float, height_cm: float) -> float:
+    if np.isnan(weight_kg) or np.isnan(height_cm) or height_cm <= 0:
+        return np.nan
+    h_m = height_cm / 100.0
+    if h_m <= 0:
+        return np.nan
+    return float(weight_kg / (h_m * h_m))
