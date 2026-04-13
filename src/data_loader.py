@@ -292,9 +292,17 @@ class BUTPPGDataset(Dataset):
     Fallback loader: .h5 (kept for compatibility).
     """
 
-    def __init__(self, but_dir: Path, window_size: int = 1000, scaler_path: Optional[Path] = None):
+    def __init__(
+        self,
+        but_dir: Path,
+        window_size: int = 1000,
+        scaler_path: Optional[Path] = None,
+        require_annotated_hr: bool = True,
+    ):
         self.window_size = window_size
         self.samples: List[Sample] = []
+        self.require_annotated_hr = require_annotated_hr
+        self.has_hr_annotations = False
         self.mean, self.std = load_scaler_npz(scaler_path) if scaler_path is not None else (
             np.zeros((8,), dtype=np.float32),
             np.ones((8,), dtype=np.float32),
@@ -385,6 +393,7 @@ class BUTPPGDataset(Dataset):
                             hr_ann[rid] = float(hr)
             except Exception as exc:
                 warnings.warn(f"Failed to parse quality-hr-ann.csv at {hr_ann_path}: {exc}")
+        self.has_hr_annotations = len(hr_ann) > 0
 
         info: Dict[str, Dict] = {}
         with open(info_path, "r", encoding="utf-8-sig", newline="") as f:
@@ -548,6 +557,8 @@ class BUTPPGDataset(Dataset):
             x = self._fit_to_window(x)
 
             ref_hr = meta.get("ref_hr")
+            if self.require_annotated_hr and self.has_hr_annotations and ref_hr is None:
+                continue
             if ref_hr is None:
                 ref_hr = self._extract_reference_hr_from_hea(hea_path)
             if ref_hr is None:

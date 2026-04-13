@@ -27,26 +27,48 @@ def parse_args() -> argparse.Namespace:
 
 
 @torch.no_grad()
-def eval_linear_head(model: DualGatingModel, head: nn.Module, loader: DataLoader, device: str):
+def eval_linear_head(
+    model: DualGatingModel,
+    head: nn.Module,
+    loader: DataLoader,
+    device: str,
+    target_mean: float,
+    target_std: float,
+):
     ys, ps = [], []
     model.eval()
     head.eval()
     for dynamic, static, target in loader:
         dynamic = dynamic.to(device)
         static = static.to(device)
-        pred = head(model.extract_fused_features(dynamic, static))
+        pred_norm = head(model.extract_fused_features(dynamic, static))
+        pred = pred_norm * target_std + target_mean
         ys.append(target.numpy())
         ps.append(pred.cpu().numpy())
     return regression_metrics(np.concatenate(ys), np.concatenate(ps))
 
 
 def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
-    dataset = BUTPPGDataset(paths.but_ppg_dir, scaler_path=Path(args.tcm_scaler))
+    dataset = BUTPPGDataset(
+        paths.but_ppg_dir,
+        scaler_path=Path(args.tcm_scaler),
+        require_annotated_hr=True,
+    )
+    if len(dataset) < 2:
+        raise RuntimeError("BUT dataset too small after HR-quality filtering; need at least 2 samples.")
     n_val = max(1, int(0.2 * len(dataset)))
-    n_train = len(dataset) - n_val
+    n_train = max(1, len(dataset) - n_val)
+    if n_train + n_val > len(dataset):
+        n_val = len(dataset) - n_train
     train_ds, val_ds = random_split(dataset, [n_train, n_val], generator=torch.Generator().manual_seed(42))
     train_loader = DataLoader(train_ds, batch_size=64, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=64, shuffle=False)
+
+    train_targets = np.array([dataset[idx][2].item() for idx in train_ds.indices], dtype=np.float32)
+    target_mean = float(np.mean(train_targets))
+    target_std = float(np.std(train_targets))
+    if target_std < 1e-6:
+        target_std = 1.0
 
     ckpt = torch.load(paths.checkpoints / "best_model.pth", map_location="cpu", weights_only=True)
     best_encoder = ckpt.get("best_encoder", "inceptiontime")
@@ -76,21 +98,25 @@ def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
             dynamic = dynamic.to(device)
             static = static.to(device)
             target = target.to(device)
+            target_norm = (target - target_mean) / target_std
             with torch.no_grad():
                 fused = model.extract_fused_features(dynamic, static)
-            pred = head(fused)
-            loss = loss_fn(pred, target)
+            pred_norm = head(fused)
+            loss = loss_fn(pred_norm, target_norm)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-    metrics = eval_linear_head(model, head, val_loader, device)
+    metrics = eval_linear_head(model, head, val_loader, device, target_mean, target_std)
     return {
         "task": "heart_rate_regression_bpm",
         "mse": metrics["mse"],
         "rmse": metrics["rmse"],
         "mae": metrics["mae"],
         "pearson": metrics["pearson"],
+        "target_mean_bpm": target_mean,
+        "target_std_bpm": target_std,
+        "num_samples": len(dataset),
     }
 
 
