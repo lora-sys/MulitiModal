@@ -120,8 +120,8 @@ def run_full_pipeline(
     final_model_params = {
         'd_token': MODEL_CONFIG['d_token'],
         'n_heads': MODEL_CONFIG['n_heads'],
-        'n_classes': MODEL_CONFIG['n_classes'],
-        **best_params
+        'n_layers': best_params.get('n_layers', 3),
+        'dropout': best_params.get('dropout', 0.3),
     }
     
     final_train_config = {

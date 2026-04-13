@@ -33,10 +33,10 @@ sys.path.insert(0, os.path.dirname(script_dir))  # experiment/
 sys.path.insert(0, os.path.join(os.path.dirname(script_dir), 'dataset'))
 sys.path.insert(0, os.path.join(os.path.dirname(script_dir), 'recorder'))
 
-from unified_source import UnifiedNPZDataSource
+from mask.unified_source import UnifiedNPZDataSource
 from nk2_processor import NK2Preprocessor
 from self_healing_processor import SelfHealingPreprocessor
-from unified_dataset import UnifiedMultimodalDataset
+from mask.unified_dataset import UnifiedMultimodalDataset
 from model import get_model
 from config import MODEL_CONFIG, MODEL_PARAMS, TRAIN_CONFIG, SCHEDULER_CONFIGS, CURRENT_SCHEDULER
 from recorder import ExperimentRecorder, compute_metrics
@@ -94,14 +94,26 @@ def train_epoch(model, dataloader, criterion, optimizer, device, model_type, sch
         optimizer.zero_grad()
 
         # 根据模型类型调用不同的 forward
-        if model_type in ["multimodal", "simple_concat", "late_fusion", "baseline_a", "baseline_b", "baseline_c"]:
+        if model_type == "dual_gating":
+            # 回归任务
+            outputs = model(dynamic, static_basic)
+            # 将分类标签转换为回归目标（暂时使用）
+            # 标签 0, 1, 2 -> 目标 0.3, 0.6, 0.9
+            regression_targets = (labels.float() + 1) / 3.0  # 0->0.33, 1->0.67, 2->1.0
+            # 复制到两个输出（放松度和疲劳缓解度）
+            regression_targets = regression_targets.unsqueeze(1).repeat(1, 2)
+            loss = criterion(outputs, regression_targets)
+        elif model_type in ["multimodal", "simple_concat", "late_fusion", "baseline_a", "baseline_b", "baseline_c"]:
+            # 分类任务
             static_scores = batch['static_scores'].to(device)
             constitution = batch['constitution'].to(device)
             outputs = model(dynamic, static_basic, static_scores, constitution)
+            loss = criterion(outputs, labels)
         else:
+            # 其他模型类型（假设是分类任务）
             outputs = model(dynamic, static_basic)
+            loss = criterion(outputs, labels)
 
-        loss = criterion(outputs, labels)
         loss.backward()
         optimizer.step()
 
@@ -110,11 +122,19 @@ def train_epoch(model, dataloader, criterion, optimizer, device, model_type, sch
             scheduler.step()
 
         total_loss += loss.item()
-        _, predicted = outputs.max(1)
-        total += labels.size(0)
-        correct += predicted.eq(labels).sum().item()
+        
+        # 计算准确率（仅对分类任务）
+        if model_type != "dual_gating":
+            _, predicted = outputs.max(1)
+            total += labels.size(0)
+            correct += predicted.eq(labels).sum().item()
 
-    return total_loss / len(dataloader), 100.0 * correct / total
+    if model_type == "dual_gating":
+        # 回归任务返回 loss 和 0（准确率不适用）
+        return total_loss / len(dataloader), 0.0
+    else:
+        # 分类任务返回 loss 和准确率
+        return total_loss / len(dataloader), 100.0 * correct / total
 
 
 def evaluate(model, dataloader, criterion, device, model_type):
@@ -135,27 +155,57 @@ def evaluate(model, dataloader, criterion, device, model_type):
             labels = batch['label'].to(device)
 
             # 根据模型类型调用不同的 forward
-            if model_type in ["multimodal", "simple_concat", "late_fusion", "baseline_a", "baseline_b", "baseline_c"]:
+            if model_type == "dual_gating":
+                # 回归任务
+                outputs = model(dynamic, static_basic)
+                # 将分类标签转换为回归目标
+                regression_targets = (labels.float() + 1) / 3.0
+                regression_targets = regression_targets.unsqueeze(1).repeat(1, 2)
+                loss = criterion(outputs, regression_targets)
+                
+                # 记录回归结果
+                all_labels.extend(labels.cpu().numpy())
+                all_preds.extend(outputs.cpu().numpy())
+                all_probs.extend(regression_targets.cpu().numpy())
+            elif model_type in ["multimodal", "simple_concat", "late_fusion", "baseline_a", "baseline_b", "baseline_c"]:
+                # 分类任务
                 static_scores = batch['static_scores'].to(device)
                 constitution = batch['constitution'].to(device)
                 outputs = model(dynamic, static_basic, static_scores, constitution)
-            else:
-                outputs = model(dynamic, static_basic)
+                loss = criterion(outputs, labels)
 
-            loss = criterion(outputs, labels)
+                _, predicted = outputs.max(1)
+                probs = torch.softmax(outputs, dim=1)
+
+                total += labels.size(0)
+                correct += predicted.eq(labels).sum().item()
+
+                all_labels.extend(labels.cpu().numpy())
+                all_preds.extend(predicted.cpu().numpy())
+                all_probs.extend(probs.cpu().numpy())
+            else:
+                # 其他模型类型（假设是分类任务）
+                outputs = model(dynamic, static_basic)
+                loss = criterion(outputs, labels)
+
+                _, predicted = outputs.max(1)
+                probs = torch.softmax(outputs, dim=1)
+
+                total += labels.size(0)
+                correct += predicted.eq(labels).sum().item()
+
+                all_labels.extend(labels.cpu().numpy())
+                all_preds.extend(predicted.cpu().numpy())
+                all_probs.extend(probs.cpu().numpy())
 
             total_loss += loss.item()
-            _, predicted = outputs.max(1)
-            probs = torch.softmax(outputs, dim=1)
 
-            total += labels.size(0)
-            correct += predicted.eq(labels).sum().item()
-
-            all_labels.extend(labels.cpu().numpy())
-            all_preds.extend(predicted.cpu().numpy())
-            all_probs.extend(probs.cpu().numpy())
-
-    return total_loss / len(dataloader), 100.0 * correct / total, all_labels, all_preds, all_probs
+    if model_type == "dual_gating":
+        # 回归任务返回 loss 和 0（准确率不适用）
+        return total_loss / len(dataloader), 0.0, all_labels, all_preds, all_probs
+    else:
+        # 分类任务返回 loss 和准确率
+        return total_loss / len(dataloader), 100.0 * correct / total, all_labels, all_preds, all_probs
 
 
 def detailed_evaluation(labels, preds, probs, num_classes=3, class_names=['一般(0)', '正常(1)', '良好(2)']):
@@ -377,7 +427,15 @@ def main():
     model = model.to(device)
 
     # 4. 训练配置
-    criterion = nn.CrossEntropyLoss()
+    # 根据模型类型选择 Loss 函数
+    if model_config["type"] == "dual_gating":
+        # 回归任务：预测放松度和疲劳缓解度（0-1）
+        criterion = nn.MSELoss()
+        print(f"[Loss] 使用 MSELoss（回归任务）")
+    else:
+        # 分类任务
+        criterion = nn.CrossEntropyLoss()
+        print(f"[Loss] 使用 CrossEntropyLoss（分类任务）")
 
     # 使用参数组（不同模块不同学习率）
     param_groups = get_parameter_groups(
@@ -777,6 +835,183 @@ def k_fold_train(n_folds=5, num_epochs=30):
     print(f"最高: {np.max(val_accs):.2f}%, 最低: {np.min(val_accs):.2f}%")
     
     return fold_results
+
+
+def train_wesad(data_root, model_path, num_epochs, batch_size, learning_rate, weight_decay=1e-4, encoder_lr_ratio=0.1, device='cpu', save_dir=None):
+    """训练WESAD模型 - 包装函数用于train_with_best_params.py"""
+    import time
+    from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+    print(f"训练WESAD模型:")
+    print(f"  数据根目录: {data_root}")
+    print(f"  模型保存路径: {model_path}")
+    print(f"  训练轮数: {num_epochs}")
+    print(f"  批次大小: {batch_size}")
+    print(f"  学习率: {learning_rate}")
+    print(f"  权重衰减: {weight_decay}")
+    print(f"  编码器学习率比例: {encoder_lr_ratio}")
+    print(f"  设备: {device}")
+
+    # 使用main函数的训练逻辑
+    start_time = time.time()
+
+    # 加载配置
+    dataset_config = load_dataset_config()
+    model_config = MODEL_CONFIG.copy()
+    train_config = TRAIN_CONFIG.copy()
+
+    # 覆盖配置
+    train_config["num_epochs"] = num_epochs
+    train_config["batch_size"] = batch_size
+    train_config["learning_rate"] = learning_rate
+    train_config["weight_decay"] = weight_decay
+    train_config["encoder_lr_ratio"] = encoder_lr_ratio
+
+    # 创建数据集
+    dataset = create_dataset(dataset_config)
+
+    # 划分训练/验证集
+    n_samples = len(dataset)
+    n_train = int(0.8 * n_samples)
+    n_val = n_samples - n_train
+
+    train_dataset, val_dataset = torch.utils.data.random_split(
+        dataset, [n_train, n_val]
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=train_config["batch_size"],
+        shuffle=True,
+        num_workers=0,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=train_config["batch_size"],
+        shuffle=False,
+        num_workers=0,
+    )
+
+    # 创建模型
+    model_params = MODEL_PARAMS.get(model_config["type"], {})
+    model = get_model(
+        model_type=model_config["type"],
+        num_classes=model_config["params"]["num_classes"],
+        dyn_channels=model_config["params"]["dyn_channels"],
+        static_dim=model_config["params"]["static_dim"],
+        **model_params
+    )
+    model = model.to(device)
+
+    # 训练配置
+    if model_config["type"] == "dual_gating":
+        criterion = nn.MSELoss()
+    else:
+        criterion = nn.CrossEntropyLoss()
+
+    param_groups = get_parameter_groups(
+        model,
+        model_type=model_config["type"],
+        encoder_lr_ratio=train_config.get("encoder_lr_ratio", 0.1)
+    )
+
+    base_lr = train_config["learning_rate"]
+    for group in param_groups:
+        if "lr_ratio" in group:
+            group["lr"] = base_lr * group["lr_ratio"]
+            del group["lr_ratio"]
+
+    optimizer = optim.Adam(
+        param_groups,
+        weight_decay=train_config.get("weight_decay", 1e-4),
+    )
+
+    # 调度器
+    scheduler_cfg = SCHEDULER_CONFIGS[CURRENT_SCHEDULER]
+    scheduler_type = scheduler_cfg.get("type")
+
+    if scheduler_type == "ReduceLROnPlateau":
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode=scheduler_cfg.get("mode", "min"),
+            patience=scheduler_cfg.get("patience", 5),
+            factor=scheduler_cfg.get("factor", 0.5),
+        )
+    elif scheduler_type == "CosineAnnealingLR":
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=scheduler_cfg.get("T_max", train_config["num_epochs"]),
+            eta_min=scheduler_cfg.get("eta_min", 1e-6),
+        )
+    else:
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+
+    # 训练循环
+    num_epochs = train_config["num_epochs"]
+    best_val_loss = float('inf')
+    val_loss_history = []
+
+    from collections import deque
+    smoothing_window = train_config.get("smoothing_window", 5)
+    val_loss_history = deque(maxlen=smoothing_window)
+
+    for epoch in range(num_epochs):
+        use_step_scheduler = scheduler_type in ["OneCycleLR"]
+
+        train_loss, train_acc = train_epoch(
+            model, train_loader, criterion, optimizer, device, model_config["type"],
+            scheduler=scheduler if use_step_scheduler else None
+        )
+        val_loss, val_acc, _, _, _ = evaluate(model, val_loader, criterion, device, model_config["type"])
+
+        val_loss_history.append(val_loss)
+        smoothed_val_loss = sum(val_loss_history) / len(val_loss_history)
+
+        if not use_step_scheduler:
+            if scheduler_type in ["ReduceLROnPlateau"]:
+                scheduler.step(smoothed_val_loss)
+            elif scheduler_type in ["CosineAnnealingLR", "CosineAnnealingWarmRestarts", "StepLR", "CosineAnnealingWarmup"]:
+                scheduler.step()
+            else:
+                scheduler.step(smoothed_val_loss)
+
+        if smoothed_val_loss < best_val_loss:
+            best_val_loss = smoothed_val_loss
+            if save_dir:
+                os.makedirs(save_dir, exist_ok=True)
+                torch.save(model.state_dict(), model_path)
+
+        if (epoch + 1) % 10 == 0:
+            print(f"  Epoch [{epoch+1:2d}/{num_epochs}] Val Loss: {val_loss:.4f} | Best: {best_val_loss:.4f}")
+
+    training_time = time.time() - start_time
+
+    # 计算回归指标（模拟）
+    val_loss, val_acc, all_labels, all_preds, all_probs = evaluate(
+        model, val_loader, criterion, device, model_config["type"]
+    )
+
+    mse = mean_squared_error(all_labels, all_preds)
+    mae = mean_absolute_error(all_labels, all_preds)
+    r2 = r2_score(all_labels, all_preds)
+
+    results = {
+        'best_val_loss': best_val_loss,
+        'mse': mse,
+        'mae': mae,
+        'r2': r2,
+        'training_time': training_time,
+    }
+
+    print(f"\n训练完成:")
+    print(f"  最佳验证损失: {best_val_loss:.6f}")
+    print(f"  MSE: {mse:.6f}")
+    print(f"  MAE: {mae:.6f}")
+    print(f"  R²: {r2:.6f}")
+    print(f"  训练时间: {training_time:.1f}秒")
+
+    return results
 
 
 if __name__ == "__main__":

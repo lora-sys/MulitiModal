@@ -5,11 +5,13 @@
 
 # 模型配置
 MODEL_CONFIG = {
-    "type": "baseline_c",  # 可选: simple_concat / late_fusion / multimodal / baseline_a / baseline_b / baseline_c
+    "type": "dual_gating",  # 可选: simple_concat / late_fusion / multimodal / baseline_a / baseline_b / baseline_c / dual_gating
     "params": {
         "dyn_channels": 2,  # 动态特征通道数（传感器数量）
-        "static_dim": 4,  # 静态特征维度
+        "static_dim": 8,  # 静态特征维度（TCM 8个体征）
         "num_classes": 3,  # 分类类别数（移除标签0，只使用1、2、3）
+        "projector_dim": 128,  # 投影层维度
+        "gate_dim": 128,  # 门控网络维度
     },
 }
 
@@ -36,6 +38,14 @@ MODEL_PARAMS = {
     "multimodal": {
         "num_constitutions": 38,  # 38种体质
         "shared_dim": 128,
+        "hidden_dim": 256,
+        "dropout": 0.3,
+    },
+    "dual_gating": {
+        "num_constitutions": 9,  # 9种中医体质
+        "shared_dim": 128,
+        "projector_dim": 128,
+        "gate_dim": 128,
         "hidden_dim": 256,
         "dropout": 0.3,
     },
