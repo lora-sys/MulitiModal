@@ -368,6 +368,23 @@ class BUTPPGDataset(Dataset):
         if info_path is None:
             warnings.warn("subject-info.csv not found; BUT labels may be unavailable.")
             return {}
+        hr_ann_path = next(iter(sorted(but_dir.rglob("quality-hr-ann.csv"))), None)
+        hr_ann: Dict[str, float] = {}
+        if hr_ann_path is not None:
+            try:
+                with open(hr_ann_path, "r", encoding="utf-8-sig", newline="") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        rid = (row.get("ID") or "").strip()
+                        if not rid:
+                            continue
+                        quality = _safe_float(row.get("Quality"), np.nan)
+                        hr = _safe_float(row.get("HR"), np.nan)
+                        # Prefer cleaner annotation labels when quality is marked good.
+                        if not np.isnan(hr) and hr > 0 and (np.isnan(quality) or int(quality) == 1):
+                            hr_ann[rid] = float(hr)
+            except Exception as exc:
+                warnings.warn(f"Failed to parse quality-hr-ann.csv at {hr_ann_path}: {exc}")
 
         info: Dict[str, Dict] = {}
         with open(info_path, "r", encoding="utf-8-sig", newline="") as f:
@@ -414,7 +431,7 @@ class BUTPPGDataset(Dataset):
 
                 info[rid] = {
                     "sbp": sbp,
-                    "ref_hr": self._extract_reference_hr(row),
+                    "ref_hr": hr_ann.get(rid, self._extract_reference_hr(row)),
                     "static": _safe_zscore(static, self.mean, self.std),
                 }
 
@@ -429,14 +446,30 @@ class BUTPPGDataset(Dataset):
         if len(header_parts) < 2:
             return 0, 30.0, None
 
-        try:
-            n_sig = int(header_parts[1])
-        except Exception:
-            n_sig = 0
-        try:
-            fs = float(header_parts[2]) if len(header_parts) >= 3 else 30.0
-        except Exception:
-            fs = 30.0
+        # Handle both standard WFDB and BUT custom-like header variants:
+        # e.g. "100001_PPG 300 30 1" where the last token is channel count.
+        n_sig = 0
+        fs = 30.0
+        if len(header_parts) >= 4:
+            try:
+                cand1 = int(float(header_parts[1]))
+                cand2 = int(float(header_parts[3]))
+                fs = float(header_parts[2])
+                if cand1 > 64 and 1 <= cand2 <= 16:
+                    n_sig = cand2
+                else:
+                    n_sig = cand1
+            except Exception:
+                pass
+        if n_sig <= 0:
+            try:
+                n_sig = int(float(header_parts[1]))
+            except Exception:
+                n_sig = 1
+            try:
+                fs = float(header_parts[2]) if len(header_parts) >= 3 else 30.0
+            except Exception:
+                fs = 30.0
 
         dat_path = None
         for line in lines[1:]:
@@ -454,6 +487,18 @@ class BUTPPGDataset(Dataset):
 
         return n_sig, fs, dat_path
 
+    def _fit_to_window(self, x: np.ndarray) -> np.ndarray:
+        """Resize temporal length to window_size using linear interpolation."""
+        if x.shape[-1] == self.window_size:
+            return x.astype(np.float32)
+        old_len = x.shape[-1]
+        if old_len <= 1:
+            return np.repeat(x, self.window_size, axis=-1).astype(np.float32)
+        old_idx = np.linspace(0.0, 1.0, old_len)
+        new_idx = np.linspace(0.0, 1.0, self.window_size)
+        out = np.stack([np.interp(new_idx, old_idx, ch) for ch in x], axis=0)
+        return out.astype(np.float32)
+
     def _build_from_wfdb(self, but_dir: Path, hea_files: List[Path]) -> None:
         subject_info = self._load_subject_info(but_dir)
 
@@ -461,7 +506,20 @@ class BUTPPGDataset(Dataset):
             rid = hea_path.stem.replace("_PPG", "")
             meta = subject_info.get(rid)
             if meta is None:
-                continue
+                fallback_static = np.array(
+                    [
+                        35.0,
+                        0.0,
+                        FEATURE_BASELINES["bmi"],
+                        70.0,
+                        FEATURE_BASELINES["sbp"],
+                        FEATURE_BASELINES["dbp"],
+                        FEATURE_BASELINES["spo2"],
+                        36.5,
+                    ],
+                    dtype=np.float32,
+                )
+                meta = {"ref_hr": None, "static": _safe_zscore(fallback_static, self.mean, self.std)}
 
             n_sig, fs, dat_path = self._parse_hea(hea_path)
             if n_sig <= 0 or dat_path is None or not dat_path.exists():
@@ -472,12 +530,10 @@ class BUTPPGDataset(Dataset):
                 continue
 
             signal = raw.reshape(-1, n_sig).T.astype(np.float32)  # [C, L]
-            if signal.shape[-1] < self.window_size:
-                continue
 
             # Normalize channel count to 2 according to protocol.
             if signal.shape[0] >= 3:
-                x = signal[:3, : self.window_size]
+                x = signal[:3]
                 with torch.no_grad():
                     x = (
                         self.proj(torch.tensor(x[None, ...], dtype=torch.float32))
@@ -485,10 +541,11 @@ class BUTPPGDataset(Dataset):
                         .numpy()
                     )
             elif signal.shape[0] == 2:
-                x = signal[:2, : self.window_size]
+                x = signal[:2]
             else:  # 1 channel -> duplicate to 2 channels
-                one = signal[:1, : self.window_size]
+                one = signal[:1]
                 x = np.concatenate([one, one], axis=0)
+            x = self._fit_to_window(x)
 
             ref_hr = meta.get("ref_hr")
             if ref_hr is None:
