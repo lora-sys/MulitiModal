@@ -24,3 +24,5 @@ training_output.log
 /data
 /log
 /results
+.opencode
+data

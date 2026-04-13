@@ -134,10 +134,11 @@ def main() -> None:
     but_metrics = run_but_validation(paths, args, device)
     print(f"[{timestamp()}] BUT metrics: {but_metrics}")
 
-    print(f"[{timestamp()}] >>> Cross-domain B: MIMIC static")
-    mimic_metrics = run_mimic_validation(paths, args, device)
-    print(f"[{timestamp()}] MIMIC metrics: {mimic_metrics}")
-
+    # print(f"[{timestamp()}] >>> Cross-domain B: MIMIC static")
+    # mimic_metrics = run_mimic_validation(paths, args, device)
+    # print(f"[{timestamp()}] MIMIC metrics: {mimic_metrics}")
+    print("[INFO] Mechanism Validation (Cross-Domain B) is temporarily skipped as per MVP strategy.")
+    mimic_metrics = {"skipped": True}
     save_json({"but": but_metrics, "mimic": mimic_metrics}, paths.results / "cross_domain_results.json")
 
 
