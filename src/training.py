@@ -98,7 +98,7 @@ def fit_regression_model_with_history(
     best_epoch = 1
 
     for epoch in range(1, max_epochs + 1):
-        run_epoch(model, train_loader, optimizer, device)
+        train_loss = run_epoch(model, train_loader, optimizer, device)
         metrics = evaluate(model, val_loader, device)
         val_loss = float(metrics["mse"])
         val_loss_history.append(val_loss)
@@ -114,8 +114,15 @@ def fit_regression_model_with_history(
         if counter >= patience:
             if best_weights is not None:
                 model.load_state_dict(best_weights)
-            print(f"Early stopping triggered at epoch {epoch}. Best epoch was {epoch - counter}.")
+            print(f"Early stopping triggered at epoch {epoch}. Best epoch was {epoch - counter}.", flush=True)
             break
+
+        print(
+            f"[Epoch {epoch}/{max_epochs}] train_loss={train_loss:.6f} "
+            f"val_mse={val_loss:.6f} best_val={best_val_loss:.6f} "
+            f"patience_counter={counter}/{patience}",
+            flush=True,
+        )
 
     if best_weights is not None:
         model.load_state_dict(best_weights)

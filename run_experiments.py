@@ -76,7 +76,8 @@ def run_single_experiment(name: str, model, train_loader, val_loader, cfg: Train
         f"[{timestamp()}] {name} | "
         f"MSE={val_metrics['mse']:.6f} RMSE={val_metrics['rmse']:.6f} "
         f"MAE={val_metrics['mae']:.6f} Pearson={val_metrics['pearson']:.6f} "
-        f"[推荐最佳 Epoch: {best_epoch}]"
+        f"[推荐最佳 Epoch: {best_epoch}]",
+        flush=True,
     )
     return model, val_metrics, val_mse_history, best_epoch
 
@@ -107,7 +108,8 @@ def run_step(
 ):
     print(
         f"[{timestamp()}] >>> {step_name}: re-instantiate model "
-        f"(encoder={encoder}, use_tcm={use_tcm}, gate_a={use_gate_a}, gate_b={use_gate_b})"
+        f"(encoder={encoder}, use_tcm={use_tcm}, gate_a={use_gate_a}, gate_b={use_gate_b})",
+        flush=True,
     )
     model = instantiate_model(
         encoder=encoder,
@@ -139,8 +141,15 @@ def main() -> None:
     )
     set_seed(cfg.seed)
 
+    print(f"[{timestamp()}] >>> Loading WESAD dataset from {paths.wesad_dir} ...", flush=True)
     dataset = WESADDataset(paths.wesad_dir, Path(args.tcm_scaler), window_size=cfg.window_size, overlap=cfg.window_overlap)
+    print(f"[{timestamp()}] >>> WESAD loaded. total_windows={len(dataset)}", flush=True)
     train_loader, val_loader = make_train_val_loaders(dataset, batch_size=cfg.batch_size, seed=cfg.seed)
+    print(
+        f"[{timestamp()}] >>> DataLoader ready. train_batches={len(train_loader)} val_batches={len(val_loader)} "
+        f"batch_size={cfg.batch_size} epochs={cfg.epochs}",
+        flush=True,
+    )
 
     detailed_logs = []
     experiment_logs = []  # Must end with exactly 9 step-level logs.
@@ -224,7 +233,7 @@ def main() -> None:
         clear_cuda_cache()
 
     assert best_encoder is not None
-    print(f"[{timestamp()}] Step4 best encoder: {best_encoder} (MSE={best_encoder_mse:.6f})")
+    print(f"[{timestamp()}] Step4 best encoder: {best_encoder} (MSE={best_encoder_mse:.6f})", flush=True)
     detailed_logs.append(
         {
             "step": 4,
@@ -338,7 +347,7 @@ def main() -> None:
     fig1 = plot_comparison(comparison_data)
     fig2 = plot_selection(selection_data)
     fig3 = plot_ablation(ablation_data)
-    print(f"[{timestamp()}] >>> Figures saved: {fig1}, {fig2}, {fig3}")
+    print(f"[{timestamp()}] >>> Figures saved: {fig1}, {fig2}, {fig3}", flush=True)
     experiment_logs.append({"step": 9, "name": "Plotting", "figures": [str(fig1), str(fig2), str(fig3)]})
 
     assert len(experiment_logs) == 9, f"Expected 9 experiment steps, got {len(experiment_logs)}"
@@ -351,7 +360,7 @@ def main() -> None:
         },
         paths.results / "experiments_summary.json",
     )
-    print(f"[{timestamp()}] >>> 9-step experiment matrix completed.")
+    print(f"[{timestamp()}] >>> 9-step experiment matrix completed.", flush=True)
 
 
 if __name__ == "__main__":
