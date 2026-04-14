@@ -30,3 +30,7 @@ pyyaml>=6.0.3
 
 # Biomedical Signal Processing
 neurokit2>=0.2.12
+
+optuna
+
+wfdb
