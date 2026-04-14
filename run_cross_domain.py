@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from pathlib import Path
+import re
 
 import numpy as np
 import torch
@@ -21,7 +23,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--epochs", type=int, default=8)
     p.add_argument("--but-dir", type=str, default=None)
     p.add_argument("--mimic-csv", type=str, default=None)
-    p.add_argument("--head-lr", type=float, default=1e-4)
+    p.add_argument("--head-lr", type=float, default=None)
+    p.add_argument("--best-params-yaml", type=str, default="configs/best_params.yaml")
     p.add_argument("--tcm-checkpoint", type=str, default=str(TCM_CHECKPOINT_PATH))
     p.add_argument("--tcm-scaler", type=str, default=str(TCM_SCALER_PATH))
     return p.parse_args()
@@ -41,10 +44,51 @@ def eval_linear_head(model: DualGatingModel, head: nn.Module, loader: DataLoader
     return regression_metrics(np.concatenate(ys), np.concatenate(ps))
 
 
+def _load_base_lr_from_yaml(path: Path, default_lr: float = 1e-3) -> float:
+    if not path.exists():
+        return default_lr
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    # Accept lines like: lr: 0.0007
+    m = re.search(r"^\s*lr\s*:\s*([0-9.eE+-]+)\s*$", text, flags=re.MULTILINE)
+    if m:
+        try:
+            lr = float(m.group(1))
+            if lr > 0:
+                return lr
+        except Exception:
+            pass
+    return default_lr
+
+
+def append_cross_domain_tsv(tsv_path: Path, row: dict) -> None:
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    headers = [
+        "timestamp",
+        "task",
+        "num_samples",
+        "base_lr",
+        "finetune_factor",
+        "finetune_lr",
+        "mse",
+        "rmse",
+        "mae",
+        "pearson",
+    ]
+    write_header = not tsv_path.exists()
+    with tsv_path.open("a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=headers, delimiter="\t")
+        if write_header:
+            writer.writeheader()
+        writer.writerow({k: row.get(k, "") for k in headers})
+
+
 def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
+    scaler_path = Path(args.tcm_scaler)
+    if not scaler_path.exists():
+        raise FileNotFoundError(f"TCM scaler not found: {scaler_path}")
     dataset = BUTPPGDataset(
         paths.but_ppg_dir,
-        scaler_path=Path(args.tcm_scaler),
+        scaler_path=scaler_path,
     )
     if len(dataset) < 2:
         raise RuntimeError("BUT dataset too small after HR-quality filtering; need at least 2 samples.")
@@ -72,8 +116,11 @@ def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
     for p in model.parameters():
         p.requires_grad = False
 
+    base_lr = _load_base_lr_from_yaml(Path(args.best_params_yaml), default_lr=1e-3)
+    finetune_factor = 0.1
+    finetune_lr = args.head_lr if args.head_lr is not None else (base_lr * finetune_factor)
     head = nn.Linear(256, 1).to(device)
-    optimizer = torch.optim.Adam(head.parameters(), lr=args.head_lr)
+    optimizer = torch.optim.Adam(head.parameters(), lr=finetune_lr)
     loss_fn = nn.MSELoss()
 
     # Keep feature extractor behavior frozen (including BN/dropout behavior)
@@ -100,7 +147,10 @@ def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
         "mae": metrics["mae"],
         "pearson": metrics["pearson"],
         "num_samples": len(dataset),
-        "head_lr": args.head_lr,
+        "base_lr": base_lr,
+        "finetune_factor": finetune_factor,
+        "finetune_lr": finetune_lr,
+        "scaler_path": str(scaler_path),
     }
 
 
@@ -150,6 +200,22 @@ def main() -> None:
     but_metrics = run_but_validation(paths, args, device)
     print(f"[{timestamp()}] BUT HR Pearson: {but_metrics['pearson']:.4f}")
     print(f"[{timestamp()}] BUT HR MAE (BPM): {but_metrics['mae']:.4f}")
+    print("(Note: Negative correlation is physiologically expected between WESAD Relaxation and Heart Rate)")
+    append_cross_domain_tsv(
+        paths.results / "cross_domain_metrics.tsv",
+        {
+            "timestamp": timestamp(),
+            "task": but_metrics["task"],
+            "num_samples": but_metrics["num_samples"],
+            "base_lr": but_metrics["base_lr"],
+            "finetune_factor": but_metrics["finetune_factor"],
+            "finetune_lr": but_metrics["finetune_lr"],
+            "mse": but_metrics["mse"],
+            "rmse": but_metrics["rmse"],
+            "mae": but_metrics["mae"],
+            "pearson": but_metrics["pearson"],
+        },
+    )
 
     # print(f"[{timestamp()}] >>> Cross-domain B: MIMIC static")
     # mimic_metrics = run_mimic_validation(paths, args, device)
