@@ -7,6 +7,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Training control
+MAX_EPOCHS = 50
+EARLY_STOPPING_PATIENCE = 10  # 连续 10 轮不掉分就停
+
 # Default pre-trained TCM assets provided by user.
 TCM_CHECKPOINT_PATH = Path("/home/lora/repos/MulitiModal/tcm_ft_transformer/checkpoints/best_model.pth")
 TCM_SCALER_PATH = Path("/home/lora/repos/MulitiModal/tcm_ft_transformer/scaler_params.npz")
@@ -30,7 +34,7 @@ class TrainConfig:
     batch_size: int = 64
     lr: float = 1e-3
     weight_decay: float = 1e-4
-    epochs: int = 12
+    epochs: int = MAX_EPOCHS
     window_size: int = 1000
     window_overlap: float = 0.5
 

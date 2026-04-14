@@ -84,21 +84,27 @@ class DualGatingModel(nn.Module):
         encoder_name: str = "inceptiontime",
         tcm_checkpoint_path: Path | str = TCM_CHECKPOINT_PATH,
         freeze_tcm: bool = True,
+        use_tcm: bool = True,
         use_gate_a: bool = True,
         use_gate_b: bool = True,
-        use_tcm_encoder: bool = True,
+        use_tcm_encoder: bool | None = None,
     ):
         super().__init__()
         self.dynamic_encoder = get_dynamic_encoder(encoder_name, in_channels=2)
-        self.use_gate_a = use_gate_a
-        self.use_gate_b = use_gate_b
-        self.use_tcm_encoder = use_tcm_encoder
+        # Backward compatibility for existing callsites.
+        if use_tcm_encoder is not None:
+            use_tcm = bool(use_tcm_encoder)
+        self.use_tcm = use_tcm
+        # Gate A is undefined without TCM probabilities.
+        self.use_gate_a = bool(use_gate_a) if self.use_tcm else False
+        self.use_gate_b = bool(use_gate_b)
 
-        if use_tcm_encoder:
+        if self.use_tcm:
             self.tcm_encoder = TCMEncoderAdapter(tcm_checkpoint_path, freeze=freeze_tcm)
+            self.static_proj = None
         else:
             self.tcm_encoder = None
-            self.static_encoder = nn.Linear(8, 128)
+            self.static_proj = nn.Linear(8, 128)
 
         # strict dimensions required by spec
         self.gate_a_linear = nn.Linear(9, 128)
@@ -114,12 +120,11 @@ class DualGatingModel(nn.Module):
     def extract_fused_features(self, dynamic: torch.Tensor, static_8d: torch.Tensor) -> torch.Tensor:
         pressure_embedding = self.dynamic_encoder(dynamic)  # [B, 128]
 
-        if self.use_tcm_encoder:
+        if self.use_tcm:
             static_embedding, tcm_probs = self.tcm_encoder(static_8d)
         else:
-            static_embedding = self.static_encoder(static_8d)
-            # dummy probabilities keep shape compatibility
-            tcm_probs = torch.softmax(torch.zeros(static_embedding.shape[0], 9, device=static_embedding.device), dim=1)
+            static_embedding = self.static_proj(static_8d)
+            tcm_probs = None
 
         if self.use_gate_a:
             gate_a = torch.sigmoid(self.gate_a_linear(tcm_probs))  # [B, 128]
