@@ -286,10 +286,13 @@ class WESADDataset(Dataset):
 
 
 class BUTPPGDataset(Dataset):
-    """BUT PPG v2.0.0 loader for HR regression.
+    """BUT PPG v2.0.0 loader for HR regression (quality-filtered).
 
-    Primary loader: WFDB-like .hea/.dat + subject-info.csv (this repo's downloaded format).
-    Fallback loader: .h5 (kept for compatibility).
+    Data contract for cross-domain A:
+    - Read `quality-hr-ann.csv`
+    - Keep only rows with Quality == 1
+    - Use HR column directly as BPM target
+    - Read each `*_PPG.dat` and duplicate first channel to [2, L]
     """
 
     def __init__(
@@ -297,103 +300,49 @@ class BUTPPGDataset(Dataset):
         but_dir: Path,
         window_size: int = 1000,
         scaler_path: Optional[Path] = None,
-        require_annotated_hr: bool = True,
     ):
         self.window_size = window_size
         self.samples: List[Sample] = []
-        self.require_annotated_hr = require_annotated_hr
-        self.has_hr_annotations = False
         self.mean, self.std = load_scaler_npz(scaler_path) if scaler_path is not None else (
             np.zeros((8,), dtype=np.float32),
             np.ones((8,), dtype=np.float32),
         )
-        self.proj = torch.nn.Conv1d(3, 2, kernel_size=1, bias=False)
-        for p in self.proj.parameters():
-            p.requires_grad = False
 
         self._build(but_dir)
 
     def _build(self, but_dir: Path) -> None:
-        hea_files = sorted(but_dir.rglob("*_PPG.hea"))
-        if hea_files:
-            self._build_from_wfdb(but_dir, hea_files)
-        else:
-            self._build_from_h5(but_dir)
+        self._build_from_wfdb(but_dir)
 
         if not self.samples:
             raise RuntimeError("BUT PPG samples are empty; check data format and HR extraction.")
 
-    def _extract_reference_hr(self, row: Dict) -> Optional[float]:
-        """Try to read reference HR from metadata row if present."""
-        for k, v in row.items():
-            key = (k or "").strip().lower()
-            if "heart" in key or key in {"hr", "heart rate", "heart_rate", "pulse", "pulse rate"}:
-                hr = _safe_float(v, np.nan)
-                if not np.isnan(hr) and hr > 0:
-                    return float(hr)
-        return None
-
-    def _extract_reference_hr_from_hea(self, hea_path: Path) -> Optional[float]:
-        """Try to parse reference HR from .hea comments if available."""
-        try:
-            text = hea_path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            return None
-        patterns = [
-            r"\bhr\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)",
-            r"\bheart[_\s-]*rate\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)",
-            r"\bpulse\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)",
-        ]
-        for pat in patterns:
-            m = re.search(pat, text, flags=re.IGNORECASE)
-            if m:
-                try:
-                    hr = float(m.group(1))
-                    if hr > 0:
-                        return hr
-                except Exception:
-                    pass
-        return None
-
-    def _estimate_bpm_from_ppg(self, ppg_ch1: np.ndarray, fs: float = 30.0) -> float:
-        """Estimate BPM from PPG channel-1 by peak interval."""
-        if ppg_ch1.size < 10 or find_peaks is None:
-            return 70.0
-        fs = 30.0 if fs <= 0 else fs
-        distance = max(1, int(0.35 * fs))
-        peaks, _ = find_peaks(ppg_ch1, distance=distance)
-        if len(peaks) < 2:
-            return 70.0
-        rr = np.diff(peaks) / fs
-        rr = rr[rr > 0]
-        if rr.size == 0:
-            return 70.0
-        bpm = 60.0 / float(np.mean(rr))
-        return float(np.clip(bpm, 30.0, 220.0))
+    def _load_quality_hr_ann(self, but_dir: Path) -> Dict[str, float]:
+        ann_path = next(iter(sorted(but_dir.rglob("quality-hr-ann.csv"))), None)
+        if ann_path is None:
+            raise FileNotFoundError(
+                f"quality-hr-ann.csv not found under {but_dir}. This file is required for BUT HR validation."
+            )
+        hr_labels: Dict[str, float] = {}
+        with open(ann_path, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                rid = (row.get("ID") or "").strip()
+                if not rid:
+                    continue
+                quality = _safe_float(row.get("Quality"), np.nan)
+                hr = _safe_float(row.get("HR"), np.nan)
+                # Strict cleaning: only keep high-quality labeled records.
+                if not np.isnan(quality) and int(quality) == 1 and (not np.isnan(hr)) and hr > 0:
+                    hr_labels[rid] = float(hr)
+        if not hr_labels:
+            raise RuntimeError("quality-hr-ann.csv loaded but no Quality=1 HR labels were found.")
+        return hr_labels
 
     def _load_subject_info(self, but_dir: Path) -> Dict[str, Dict]:
         info_path = next(iter(sorted(but_dir.rglob("subject-info.csv"))), None)
         if info_path is None:
-            warnings.warn("subject-info.csv not found; BUT labels may be unavailable.")
+            warnings.warn("subject-info.csv not found; fallback static features will be used.")
             return {}
-        hr_ann_path = next(iter(sorted(but_dir.rglob("quality-hr-ann.csv"))), None)
-        hr_ann: Dict[str, float] = {}
-        if hr_ann_path is not None:
-            try:
-                with open(hr_ann_path, "r", encoding="utf-8-sig", newline="") as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        rid = (row.get("ID") or "").strip()
-                        if not rid:
-                            continue
-                        quality = _safe_float(row.get("Quality"), np.nan)
-                        hr = _safe_float(row.get("HR"), np.nan)
-                        # Prefer cleaner annotation labels when quality is marked good.
-                        if not np.isnan(hr) and hr > 0 and (np.isnan(quality) or int(quality) == 1):
-                            hr_ann[rid] = float(hr)
-            except Exception as exc:
-                warnings.warn(f"Failed to parse quality-hr-ann.csv at {hr_ann_path}: {exc}")
-        self.has_hr_annotations = len(hr_ann) > 0
 
         info: Dict[str, Dict] = {}
         with open(info_path, "r", encoding="utf-8-sig", newline="") as f:
@@ -439,14 +388,15 @@ class BUTPPGDataset(Dataset):
                 )
 
                 info[rid] = {
-                    "sbp": sbp,
-                    "ref_hr": hr_ann.get(rid, self._extract_reference_hr(row)),
                     "static": _safe_zscore(static, self.mean, self.std),
                 }
 
         return info
 
     def _parse_hea(self, hea_path: Path) -> Tuple[int, float, Optional[Path]]:
+        if not hea_path.exists():
+            fallback = hea_path.with_suffix(".dat")
+            return 1, 30.0, fallback if fallback.exists() else None
         lines = hea_path.read_text(encoding="utf-8", errors="ignore").splitlines()
         if not lines:
             return 0, 30.0, None
@@ -508,11 +458,18 @@ class BUTPPGDataset(Dataset):
         out = np.stack([np.interp(new_idx, old_idx, ch) for ch in x], axis=0)
         return out.astype(np.float32)
 
-    def _build_from_wfdb(self, but_dir: Path, hea_files: List[Path]) -> None:
+    def _build_from_wfdb(self, but_dir: Path) -> None:
+        hr_labels = self._load_quality_hr_ann(but_dir)
         subject_info = self._load_subject_info(but_dir)
+        dat_files = sorted(but_dir.rglob("*_PPG.dat"))
+        if not dat_files:
+            raise FileNotFoundError(f"No *_PPG.dat files found under {but_dir}")
 
-        for hea_path in hea_files:
-            rid = hea_path.stem.replace("_PPG", "")
+        for dat_path in dat_files:
+            rid = dat_path.stem.replace("_PPG", "").strip()
+            if rid not in hr_labels:
+                # Strictly skip Quality=0 or missing annotation IDs.
+                continue
             meta = subject_info.get(rid)
             if meta is None:
                 fallback_static = np.array(
@@ -528,47 +485,30 @@ class BUTPPGDataset(Dataset):
                     ],
                     dtype=np.float32,
                 )
-                meta = {"ref_hr": None, "static": _safe_zscore(fallback_static, self.mean, self.std)}
+                meta = {"static": _safe_zscore(fallback_static, self.mean, self.std)}
 
+            hea_path = dat_path.with_suffix(".hea")
             n_sig, fs, dat_path = self._parse_hea(hea_path)
             if n_sig <= 0 or dat_path is None or not dat_path.exists():
                 continue
 
             raw = np.fromfile(dat_path, dtype=np.int16)
-            if raw.size < n_sig or raw.size % n_sig != 0:
+            if raw.size == 0:
                 continue
-
-            signal = raw.reshape(-1, n_sig).T.astype(np.float32)  # [C, L]
-
-            # Normalize channel count to 2 according to protocol.
-            if signal.shape[0] >= 3:
-                x = signal[:3]
-                with torch.no_grad():
-                    x = (
-                        self.proj(torch.tensor(x[None, ...], dtype=torch.float32))
-                        .squeeze(0)
-                        .numpy()
-                    )
-            elif signal.shape[0] == 2:
-                x = signal[:2]
-            else:  # 1 channel -> duplicate to 2 channels
-                one = signal[:1]
-                x = np.concatenate([one, one], axis=0)
+            if n_sig > 1 and raw.size % n_sig == 0:
+                signal = raw.reshape(-1, n_sig).astype(np.float32)  # [L, C]
+                ch0 = signal[:, 0]
+            else:
+                ch0 = raw.astype(np.float32)
+            ch0_t = torch.tensor(ch0, dtype=torch.float32)
+            x = torch.stack([ch0_t, ch0_t], dim=0).numpy()
             x = self._fit_to_window(x)
-
-            ref_hr = meta.get("ref_hr")
-            if self.require_annotated_hr and self.has_hr_annotations and ref_hr is None:
-                continue
-            if ref_hr is None:
-                ref_hr = self._extract_reference_hr_from_hea(hea_path)
-            if ref_hr is None:
-                ref_hr = self._estimate_bpm_from_ppg(x[0], fs=fs)
 
             self.samples.append(
                 Sample(
                     dynamic=x.astype(np.float32),
                     static=meta["static"].copy(),
-                    target=float(ref_hr),
+                    target=float(hr_labels[rid]),
                 )
             )
 
@@ -589,66 +529,9 @@ class BUTPPGDataset(Dataset):
         return found
 
     def _build_from_h5(self, but_dir: Path) -> None:
-        if h5py is None:
-            raise ImportError("h5py is required for BUT PPG .h5 loading")
-
-        h5_files = sorted(but_dir.rglob("*.h5"))
-        if not h5_files:
-            raise FileNotFoundError(
-                f"No BUT PPG .hea/.dat or .h5 found under {but_dir}. Current data appears unsupported."
-            )
-
-        for h5_path in h5_files:
-            with h5py.File(h5_path, "r") as f:
-                found = self._scan_h5_datasets(f)
-                if "signals" not in found:
-                    continue
-                # Optional HR label datasets in h5 (if present)
-                ref_hr = None
-                for hr_key in ["hr", "heart_rate", "bpm", "pulse"]:
-                    if hr_key in found:
-                        ref_hr = np.asarray(found[hr_key]).reshape(-1)
-                        break
-                signal = np.asarray(found["signals"][0])
-
-                if signal.ndim == 2:
-                    signal = signal[:, None, :]
-                if signal.ndim == 3 and signal.shape[1] not in (2, 3):
-                    signal = np.transpose(signal, (0, 2, 1))
-                if signal.shape[1] not in (2, 3):
-                    continue
-
-                n = signal.shape[0]
-                for i in range(n):
-                    x = signal[i].astype(np.float32)
-                    if x.shape[-1] < self.window_size:
-                        continue
-                    x = x[..., : self.window_size]
-                    if x.shape[0] == 3:
-                        with torch.no_grad():
-                            x = (
-                                self.proj(torch.tensor(x[None, ...], dtype=torch.float32))
-                                .squeeze(0)
-                                .numpy()
-                            )
-                    target_hr = None
-                    if ref_hr is not None and i < len(ref_hr):
-                        try:
-                            hr_val = float(ref_hr[i])
-                            if hr_val > 0:
-                                target_hr = hr_val
-                        except Exception:
-                            target_hr = None
-                    if target_hr is None:
-                        target_hr = self._estimate_bpm_from_ppg(x[0], fs=30.0)
-
-                    self.samples.append(
-                        Sample(
-                            dynamic=x,
-                            static=np.zeros((8,), dtype=np.float32),
-                            target=float(target_hr),
-                        )
-                    )
+        raise RuntimeError(
+            "BUT cross-domain validation now requires WFDB-style .dat + quality-hr-ann.csv and does not use .h5."
+        )
 
     def __len__(self) -> int:
         return len(self.samples)
