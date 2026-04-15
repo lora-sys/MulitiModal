@@ -118,12 +118,13 @@ def _field(obj, name: str):
     raise KeyError(f"Field '{name}' not found")
 
 
-def _parse_wesad_readme_demographics(readme_path: Path) -> Tuple[float, float]:
-    """Return (age, gender_numeric[0 male/1 female])."""
+def _parse_wesad_readme_demographics(readme_path: Path) -> Tuple[float, float, float]:
+    """Return (age, gender_numeric[male=1/female=0], bmi)."""
     age = 35.0
-    gender = 0.0
+    gender = 1.0  # default male=1
+    bmi = FEATURE_BASELINES["bmi"]
     if not readme_path.exists():
-        return age, gender
+        return age, gender, bmi
 
     text = readme_path.read_text(encoding="utf-8", errors="ignore")
     age_match = re.search(r"Age\s*:\s*(\d+)", text, flags=re.IGNORECASE)
@@ -133,17 +134,40 @@ def _parse_wesad_readme_demographics(readme_path: Path) -> Tuple[float, float]:
     gender_match = re.search(r"Gender\s*:\s*([A-Za-z]+)", text, flags=re.IGNORECASE)
     if gender_match:
         g = gender_match.group(1).strip().lower()
-        if g.startswith("f"):
+        if g.startswith("m"):
             gender = 1.0
-        elif g.startswith("m"):
+        elif g.startswith("f"):
             gender = 0.0
 
-    return age, gender
+    h_match = re.search(r"Height\s*\(cm\)\s*:\s*([0-9]+(?:\.[0-9]+)?)", text, flags=re.IGNORECASE)
+    w_match = re.search(r"Weight\s*\(kg\)\s*:\s*([0-9]+(?:\.[0-9]+)?)", text, flags=re.IGNORECASE)
+    if h_match and w_match:
+        height_cm = float(h_match.group(1))
+        weight_kg = float(w_match.group(1))
+        bmi_val = _compute_bmi(weight_kg, height_cm)
+        if not np.isnan(bmi_val):
+            bmi = float(bmi_val)
+
+    return age, gender, bmi
 
 
 def _load_wesad_subject_info_csv(wesad_dir: Path) -> Dict[str, Dict[str, float]]:
     """Load optional subject_info.csv with keys: Subject_ID, Age, Gender, Height, Weight."""
+    # Search both current wesad_dir and its parent to tolerate layouts:
+    # data/wesad/WESAD/... and data/wesad/subject_info.csv
     candidates = list(wesad_dir.rglob("subject_info.csv"))
+    parent = wesad_dir.parent
+    if parent.exists():
+        candidates.extend(parent.rglob("subject_info.csv"))
+    # de-dup while preserving order
+    seen = set()
+    deduped = []
+    for c in candidates:
+        s = str(c.resolve())
+        if s not in seen:
+            seen.add(s)
+            deduped.append(c)
+    candidates = deduped
     if not candidates:
         return {}
     info_path = candidates[0]
@@ -287,9 +311,7 @@ class WESADDataset(Dataset):
                 gender = info_from_csv["gender"]
                 bmi = info_from_csv["bmi"]
             else:
-                age, gender_readme = _parse_wesad_readme_demographics(subj_dir / f"{subject_name}_readme.txt")
-                gender = 1.0 if gender_readme < 0.5 else 0.0  # convert to M=1, F=0 as required
-                bmi = FEATURE_BASELINES["bmi"]
+                age, gender, bmi = _parse_wesad_readme_demographics(subj_dir / f"{subject_name}_readme.txt")
 
             hr_baseline = estimate_hr_from_bvp_baseline(bvp, labels=labels if bvp.size == labels.size else None, sampling_rate=64.0)
             static_4d = np.array([age, gender, bmi, hr_baseline], dtype=np.float32)
@@ -395,11 +417,6 @@ class BUTPPGDataset(Dataset):
     ):
         self.window_size = window_size
         self.samples: List[Sample] = []
-        self.mean, self.std = load_scaler_npz(scaler_path) if scaler_path is not None else (
-            np.zeros((8,), dtype=np.float32),
-            np.ones((8,), dtype=np.float32),
-        )
-
         self._build(but_dir)
 
     def _build(self, but_dir: Path) -> None:
@@ -470,17 +487,13 @@ class BUTPPGDataset(Dataset):
                         age,
                         gender,
                         bmi,
-                        70.0,  # HR not directly available at metadata row level
-                        sbp if sbp is not None else FEATURE_BASELINES["sbp"],
-                        dbp if dbp is not None else FEATURE_BASELINES["dbp"],
-                        spo2,
-                        36.5,
+                        70.0,  # placeholder HR at metadata level (no leakage from target HR)
                     ],
                     dtype=np.float32,
                 )
 
                 info[rid] = {
-                    "static": _safe_zscore(static, self.mean, self.std),
+                    "static": static,
                 }
 
         return info
@@ -567,17 +580,13 @@ class BUTPPGDataset(Dataset):
                 fallback_static = np.array(
                     [
                         35.0,
-                        0.0,
+                        1.0,
                         FEATURE_BASELINES["bmi"],
                         70.0,
-                        FEATURE_BASELINES["sbp"],
-                        FEATURE_BASELINES["dbp"],
-                        FEATURE_BASELINES["spo2"],
-                        36.5,
                     ],
                     dtype=np.float32,
                 )
-                meta = {"static": _safe_zscore(fallback_static, self.mean, self.std)}
+                meta = {"static": fallback_static}
 
             hea_path = dat_path.with_suffix(".hea")
             n_sig, fs, dat_path = self._parse_hea(hea_path)
