@@ -108,13 +108,15 @@ def load_and_preprocess_data(data_path=None, test_split=0.1, random_state=42, ep
     # 提取特征和标签
     n_features = DATA_CONFIG["n_features"]
     n_classes = DATA_CONFIG["n_classes"]
-    
-    # 前 n_features 列为特征，后 n_classes 列为标签
+
+    # 前 n_features 列为特征，最后 n_classes 列为标签
     X = df.iloc[:, :n_features].values
-    y = df.iloc[:, n_features:n_features + n_classes].values
-    
+    y = df.iloc[:, -n_classes:].values
+
     print(f"      特征矩阵 X: {X.shape}")
     print(f"      标签矩阵 y: {y.shape}")
+    print(f"      特征列: {list(df.columns[:n_features])}")
+    print(f"      标签列: {list(df.columns[-n_classes:])}")
     
     # 划分训练验证池和测试集
     X_pool, X_test, y_pool, y_test = train_test_split(
