@@ -159,23 +159,47 @@ def plot_confusion_matrix(y_true, y_pred, save_path=None):
     # 计算混淆矩阵
     cm = confusion_matrix(y_true_labels, y_pred_labels)
     
+    # 检查是否所有预测都是同一类别
+    unique_pred_labels = np.unique(y_pred_labels)
+    if len(unique_pred_labels) == 1:
+        print(f"⚠️  警告：所有预测都是同一类别 '{CONSTITUTION_NAMES[unique_pred_labels[0]]}'")
+        print(f"   这可能表明模型过拟合、测试数据单一，或者模型存在问题。")
+    
     # 绘制
     fig, ax = plt.subplots(figsize=(10, 8))
     
     im = ax.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
     ax.figure.colorbar(im, ax=ax)
     
-    # 设置刻度
-    ax.set(xticks=np.arange(cm.shape[1]),
-           yticks=np.arange(cm.shape[0]),
-           xticklabels=CONSTITUTION_NAMES,
-           yticklabels=CONSTITUTION_NAMES,
-           title='Confusion Matrix',
-           ylabel='True Label',
-           xlabel='Predicted Label')
+    # 动态调整刻度和标签
+    # 只显示实际出现的类别
+    unique_labels_true = np.unique(y_true_labels)
+    unique_labels_pred = np.unique(y_pred_labels)
+    all_unique_labels = np.unique(np.concatenate([unique_labels_true, unique_labels_pred]))
     
-    # 旋转 x 轴标签
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+    # 如果所有样本都是同一类别，使用该类别的标签
+    if len(all_unique_labels) == 1:
+        tick_labels = [CONSTITUTION_NAMES[all_unique_labels[0]]]
+        ax.set(xticks=[0],
+               yticks=[0],
+               xticklabels=tick_labels,
+               yticklabels=tick_labels,
+               title='Confusion Matrix',
+               ylabel='True Label',
+               xlabel='Predicted Label')
+    else:
+        # 正常情况：显示完整的混淆矩阵
+        ax.set(xticks=np.arange(cm.shape[1]),
+               yticks=np.arange(cm.shape[0]),
+               xticklabels=CONSTITUTION_NAMES,
+               yticklabels=CONSTITUTION_NAMES,
+               title='Confusion Matrix',
+               ylabel='True Label',
+               xlabel='Predicted Label')
+    
+    # 旋转 x 轴标签（只有多个类别时才旋转）
+    if len(all_unique_labels) > 1:
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
     
     # 添加数值
     thresh = cm.max() / 2.
