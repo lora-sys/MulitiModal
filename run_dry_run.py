@@ -35,7 +35,7 @@ def _single_step(model: nn.Module, pred: torch.Tensor, target: torch.Tensor) -> 
 def run_dry_run() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dynamic = torch.randn(4, 2, 1000, device=device)
-    static = torch.randn(4, 8, device=device)
+    static = torch.randn(4, 4, device=device)
     target = torch.randn(4, 1, device=device)
 
     for encoder_name in ENCODERS:
@@ -65,6 +65,11 @@ def run_dry_run() -> None:
 
         static_embed = model.get_tcm_internal_features(static)
         assert static_embed.shape == (4, 128), f"TCM internal feature shape mismatch: {static_embed.shape}"
+        tcm_internal, tcm_probs = model.tcm_encoder.extract_features_and_probs(static)
+        assert tcm_internal.shape == (4, 128), f"TCM internal shape mismatch: {tcm_internal.shape}"
+        assert tcm_probs.shape == (4, 9), f"TCM probs shape mismatch: {tcm_probs.shape}"
+        probs_sum = tcm_probs.sum(dim=1)
+        assert torch.allclose(probs_sum, torch.ones_like(probs_sum), atol=1e-4), "TCM probs must sum to 1"
 
         _single_step(model, pred, target)
 

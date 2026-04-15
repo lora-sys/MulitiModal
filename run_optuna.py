@@ -51,6 +51,7 @@ def main() -> None:
         model = DualGatingModel(
             encoder_name="tcn",
             tcm_checkpoint_path=Path(args.tcm_checkpoint),
+            tcm_scaler_path=Path(args.tcm_scaler),
             freeze_tcm=True,
             use_tcm=True,
             use_gate_a=True,
@@ -89,4 +90,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

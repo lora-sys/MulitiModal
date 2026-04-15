@@ -17,10 +17,17 @@ def run_epoch(model: nn.Module, loader: DataLoader, optimizer, device: str) -> f
     loss_fn = nn.MSELoss()
     total = 0.0
     count = 0
-    for dynamic, static, target in loader:
+    for dynamic, second, third in loader:
         dynamic = dynamic.to(device)
-        static = static.to(device)
-        target = target.to(device)
+        # 兼容两种返回顺序:
+        # old: (dynamic, static, target)
+        # new: (dynamic, target, static)
+        if second.dim() >= 2 and second.shape[-1] in (4, 8):
+            static = second.to(device)
+            target = third.to(device)
+        else:
+            target = second.to(device)
+            static = third.to(device)
 
         pred = model(dynamic, static)
         loss = loss_fn(pred, target)
@@ -38,10 +45,14 @@ def run_epoch(model: nn.Module, loader: DataLoader, optimizer, device: str) -> f
 def evaluate(model: nn.Module, loader: DataLoader, device: str) -> Dict[str, float]:
     model.eval()
     ys, ps = [], []
-    for dynamic, static, target in loader:
+    for dynamic, second, third in loader:
         dynamic = dynamic.to(device)
-        static = static.to(device)
-        target = target.to(device)
+        if second.dim() >= 2 and second.shape[-1] in (4, 8):
+            static = second.to(device)
+            target = third.to(device)
+        else:
+            target = second.to(device)
+            static = third.to(device)
         pred = model(dynamic, static)
         ys.append(to_numpy(target))
         ps.append(to_numpy(pred))

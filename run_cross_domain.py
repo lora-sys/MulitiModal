@@ -106,6 +106,7 @@ def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
     model = DualGatingModel(
         encoder_name=best_encoder,
         tcm_checkpoint_path=Path(args.tcm_checkpoint),
+        tcm_scaler_path=Path(args.tcm_scaler),
         freeze_tcm=True,
         use_gate_a=True,
         use_gate_b=True,
@@ -174,6 +175,7 @@ def run_but_tcm_feature_correlation(paths: Paths, args: argparse.Namespace, devi
     model = DualGatingModel(
         encoder_name=best_encoder,
         tcm_checkpoint_path=Path(args.tcm_checkpoint),
+        tcm_scaler_path=Path(args.tcm_scaler),
         freeze_tcm=True,
         use_tcm=True,
         use_gate_a=True,

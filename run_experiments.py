@@ -91,6 +91,7 @@ def instantiate_model(encoder: str, args: argparse.Namespace, *, use_tcm: bool, 
     model = DualGatingModel(
         encoder_name=encoder,
         tcm_checkpoint_path=Path(args.tcm_checkpoint),
+        tcm_scaler_path=Path(args.tcm_scaler),
         freeze_tcm=True,
         use_tcm=use_tcm,
         use_gate_a=use_gate_a,
