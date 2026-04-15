@@ -13,8 +13,12 @@ ENCODERS = ["inceptiontime", "os-cnn", "xcm", "1d-resnet", "tcn"]
 
 def _assert_no_nan_grad(model: nn.Module) -> None:
     for name, p in model.named_parameters():
+        # Some parameters may be unused in a given forward (e.g., TCM classifier head
+        # when we only extract internal features). Only validate gradients that exist.
+        if not p.requires_grad:
+            continue
         if p.grad is None:
-            raise AssertionError(f"Gradient is None for parameter: {name}")
+            continue
         if torch.isnan(p.grad).any():
             raise AssertionError(f"NaN gradient detected: {name}")
 
