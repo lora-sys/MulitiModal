@@ -52,9 +52,13 @@ class TCMEncoderAdapter(nn.Module):
 
     def _load_checkpoint(self, ckpt: Path) -> None:
         if not ckpt.exists():
-            warnings.warn(f"TCM checkpoint not found: {ckpt}. Use Xavier init fallback.")
-            self._xavier_init()
-            return
+            alt = ckpt.with_name("best_tcm_model.pth") if ckpt.name != "best_tcm_model.pth" else ckpt.with_name("best_model.pth")
+            if alt.exists():
+                ckpt = alt
+            else:
+                warnings.warn(f"TCM checkpoint not found: {ckpt}. Use Xavier init fallback.")
+                self._xavier_init()
+                return
         try:
             loaded = torch.load(ckpt, map_location="cpu", weights_only=True)
             state_dict = loaded["model_state_dict"] if isinstance(loaded, dict) and "model_state_dict" in loaded else loaded
@@ -104,10 +108,18 @@ class TCMEncoderAdapter(nn.Module):
         elif isinstance(self.scaler, dict) and "mean" in self.scaler and "std" in self.scaler:
             mean = np.asarray(self.scaler["mean"], dtype=np.float32)
             std = np.asarray(self.scaler["std"], dtype=np.float32)
+            # Backward compatibility: old 8-d scaler -> use first 4 dims [Age, Gender, BMI, HR].
+            if mean.ndim == 1 and mean.shape[0] >= 4:
+                mean = mean[:4]
+            if std.ndim == 1 and std.shape[0] >= 4:
+                std = std[:4]
             std = np.where(std == 0, 1.0, std)
             scaled = (x - mean) / std
         else:
             scaled = self.scaler.transform(x)
+            scaled = np.asarray(scaled, dtype=np.float32)
+            if scaled.ndim == 2 and scaled.shape[1] >= 4:
+                scaled = scaled[:, :4]
         return torch.from_numpy(np.asarray(scaled, dtype=np.float32)).to(static_4d.device)
 
     def _extract_cls(self, scaled_static_4d: torch.Tensor) -> torch.Tensor:
