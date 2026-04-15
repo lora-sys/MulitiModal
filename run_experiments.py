@@ -44,6 +44,7 @@ def clear_cuda_cache() -> None:
         torch.cuda.empty_cache()
 
 def run_single_experiment(name: str, model, train_loader, val_loader, cfg: TrainConfig, result_dir: Path):
+    print(f"[{timestamp()}] >>> run_single_experiment: {name} (epochs={cfg.epochs})")
     model, train_metrics, val_metrics, val_mse_history, best_epoch = fit_regression_model_with_history(
         model,
         train_loader,
@@ -54,6 +55,8 @@ def run_single_experiment(name: str, model, train_loader, val_loader, cfg: Train
         device=cfg.device,
         patience=EARLY_STOPPING_PATIENCE,
     )
+    print(f"[{timestamp()}] >>> run_single_experiment completed: {name}")
+    return model, val_metrics, val_mse_history, best_epoch
     payload = {
         "name": name,
         "train": train_metrics,
@@ -83,7 +86,9 @@ def run_single_experiment(name: str, model, train_loader, val_loader, cfg: Train
 
 
 def instantiate_model(encoder: str, args: argparse.Namespace, *, use_tcm: bool, use_gate_a: bool, use_gate_b: bool):
-    return DualGatingModel(
+    print(f"[{timestamp()}] >>> instantiate_model: encoder={encoder}, use_tcm={use_tcm}, gate_a={use_gate_a}, gate_b={use_gate_b}")
+    print(f"[{timestamp()}] >>> Creating DualGatingModel...")
+    model = DualGatingModel(
         encoder_name=encoder,
         tcm_checkpoint_path=Path(args.tcm_checkpoint),
         freeze_tcm=True,
@@ -91,6 +96,8 @@ def instantiate_model(encoder: str, args: argparse.Namespace, *, use_tcm: bool, 
         use_gate_a=use_gate_a,
         use_gate_b=use_gate_b,
     )
+    print(f"[{timestamp()} >>> DualGatingModel created successfully")
+    return model
 
 
 def run_step(
@@ -111,6 +118,7 @@ def run_step(
         f"(encoder={encoder}, use_tcm={use_tcm}, gate_a={use_gate_a}, gate_b={use_gate_b})",
         flush=True,
     )
+    print(f"[{timestamp()}] >>> Instantiating model...")
     model = instantiate_model(
         encoder=encoder,
         args=args,
@@ -118,6 +126,7 @@ def run_step(
         use_gate_a=use_gate_a,
         use_gate_b=use_gate_b,
     )
+    print(f"[{timestamp()}] >>> Model instantiated, starting training...")
     model, metrics, val_mse_history, best_epoch = run_single_experiment(
         step_name, model, train_loader, val_loader, cfg, result_dir
     )
@@ -131,7 +140,11 @@ def main() -> None:
         paths.wesad_dir = Path(args.wesad_dir)
     ensure_dirs(paths)
 
+    print(f"[{timestamp()}] >>> Loading best parameters from Optuna...")
     best_params = load_json(paths.checkpoints / "optuna_best_params.json", default={})
+    print(f"[{timestamp()}] >>> Best params: {best_params}")
+    
+    print(f"[{timestamp()}] >>> Creating TrainConfig with best parameters...")
     cfg = TrainConfig(
         batch_size=int(best_params.get("batch_size", 64)),
         lr=float(best_params.get("lr", 1e-3)),
@@ -139,6 +152,7 @@ def main() -> None:
         epochs=3 if args.dry_run else args.epochs,
         device=resolve_device(args.device),
     )
+    print(f"[{timestamp()}] >>> TrainConfig: batch_size={cfg.batch_size}, lr={cfg.lr}, epochs={cfg.epochs}, device={cfg.device}")
     set_seed(cfg.seed)
 
     print(f"[{timestamp()}] >>> Loading WESAD dataset from {paths.wesad_dir} ...", flush=True)
@@ -155,6 +169,7 @@ def main() -> None:
     experiment_logs = []  # Must end with exactly 9 step-level logs.
 
     # Step 1
+    print(f"[{timestamp()}] >>> Starting Step 1: Baseline A (Weak)")
     model, metrics, hist, best_epoch = run_step(
         step_name="Step1-BaselineA-Weak",
         result_dir=paths.results / "step1_baseline_a_weak",

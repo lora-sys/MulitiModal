@@ -265,7 +265,7 @@ if __name__ == "__main__":
     print("测试 Optuna 搜索...")
     
     # 创建虚拟数据
-    X = np.random.randn(1000, 8).astype(np.float32)
+    X = np.random.randn(1000, 4).astype(np.float32)
     y = np.random.dirichlet(np.ones(9), size=1000).astype(np.float32)
     
     # 运行搜索（减少试验次数以加快测试）

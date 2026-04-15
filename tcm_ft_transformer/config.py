@@ -23,8 +23,8 @@ for dir_path in [DATA_DIR, CHECKPOINT_DIR, LOG_DIR, RESULT_DIR]:
 # =========================================================================
 DATA_CONFIG = {
     "input_path": os.path.join(PROJECT_ROOT, "data", "vital_signs_dataset_final.csv"),
-    "n_features": 8,  # 输入特征维度
-    "n_classes": 9, 
+    "n_features": 4,  # 输入特征维度（Age, Gender, Derived_BMI, Heart Rate）
+    "n_classes": 9,
     "test_split": 0.1,  # 测试集比例
     "random_state": 42,  # 随机种子
     "epsilon": 0.01,  # 标签平滑参数

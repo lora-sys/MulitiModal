@@ -230,9 +230,9 @@ def run_full_pipeline(
         if not os.path.exists(checkpoint_path):
             print(f"警告: 未找到 Fold {fold_idx + 1} 的模型检查点: {checkpoint_path}")
             continue
-        
+
         model = get_model(
-            n_features=8,
+            n_features=4,
             n_classes=9,
             **final_model_params
         )
@@ -383,7 +383,7 @@ def run_full_pipeline(
 
     # 创建最终模型
     final_model = get_model(
-        n_features=8,
+        n_features=4,
         n_classes=9,
         **final_model_params
     )

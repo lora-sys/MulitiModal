@@ -475,7 +475,7 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
 
             # 创建新模型
             model = get_model(
-                n_features=8,
+                n_features=4,
                 n_classes=9,
                 **final_model_params
             )
@@ -555,7 +555,7 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
     
     # 加载最佳模型
     best_model = get_model(
-        n_features=8,
+        n_features=4,
         n_classes=9,
         **final_model_params
     )

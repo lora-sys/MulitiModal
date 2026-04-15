@@ -45,7 +45,7 @@ class TCM_Encoder(nn.Module):
         self.std = torch.tensor(self.scaler_params['std'], dtype=torch.float32).to(device)
         
         # 加载训练好的模型
-        self.model = get_model(n_features=8, n_classes=9)
+        self.model = get_model(n_features=4, n_classes=9)
         checkpoint = torch.load(model_path, map_location=device, weights_only=True)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.to(device)
@@ -265,7 +265,7 @@ if __name__ == "__main__":
     
     # 测试数据
     batch_size = 4
-    x = torch.randn(batch_size, 8).to(encoder.device)
+    x = torch.randn(batch_size, 4).to(encoder.device)
     
     print(f"\n输入形状: {x.shape}")
     print(f"输入样本: {x[0].cpu().numpy()}")
