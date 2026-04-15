@@ -12,12 +12,7 @@ from src.models.encoders import get_dynamic_encoder
 
 
 class TCMEncoderAdapter(nn.Module):
-    """Adapter over pre-trained FT-Transformer.
-
-    Outputs:
-      - static_embedding: [B, 128]
-      - tcm_probs: [B, 9]
-    """
+    """Adapter over pre-trained FT-Transformer internal features."""
 
     def __init__(self, checkpoint_path: Path | str = TCM_CHECKPOINT_PATH, freeze: bool = True):
         super().__init__()
@@ -27,7 +22,12 @@ class TCMEncoderAdapter(nn.Module):
         from ft_transformer import get_model  # pylint: disable=import-error
 
         self.model = get_model(n_features=8, n_classes=9)
-        self.static_proj = nn.Linear(9, 128)
+        self.static_proj = nn.Sequential(
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 128),
+        )
         self._load_checkpoint(Path(checkpoint_path))
 
         if freeze:
@@ -54,10 +54,24 @@ class TCMEncoderAdapter(nn.Module):
             warnings.warn(f"Failed to load TCM checkpoint ({exc}); fallback to Xavier init.")
             self._xavier_init()
 
+    def get_tcm_internal_features(self, static_8d: torch.Tensor) -> torch.Tensor:
+        """Extract internal transformer features without classifier head.
+
+        Returns:
+          - internal_features: [B, 128]
+        """
+        batch_size = static_8d.size(0)
+        tokens = self.model.feature_tokenizer(static_8d)  # [B, n_features, d_token]
+        cls_token = self.model.cls_token(batch_size)  # [B, 1, d_token]
+        tokens = torch.cat([cls_token, tokens], dim=1)  # [B, n_features+1, d_token]
+        tokens = self.model.dropout_layer(tokens)
+        encoded = self.model.transformer_encoder(tokens)  # [B, n_features+1, d_token]
+        cls_encoded = encoded[:, 0, :]  # [B, d_token]
+        cls_encoded = self.model.layer_norm(cls_encoded)  # [B, d_token]
+        return self.static_proj(cls_encoded)  # [B, 128]
+
     def forward(self, static_8d: torch.Tensor):
-        probs = self.model(static_8d)  # [B, 9], softmax probs
-        static_embedding = self.static_proj(probs)  # [B, 128]
-        return static_embedding, probs
+        return self.get_tcm_internal_features(static_8d)
 
 
 class BaselineSignalRegressor(nn.Module):
@@ -95,7 +109,7 @@ class DualGatingModel(nn.Module):
         if use_tcm_encoder is not None:
             use_tcm = bool(use_tcm_encoder)
         self.use_tcm = use_tcm
-        # Gate A is undefined without TCM probabilities.
+        # Gate A is undefined without TCM internal features.
         self.use_gate_a = bool(use_gate_a) if self.use_tcm else False
         self.use_gate_b = bool(use_gate_b)
 
@@ -106,9 +120,10 @@ class DualGatingModel(nn.Module):
             self.tcm_encoder = None
             self.static_proj = nn.Linear(8, 128)
 
-        # strict dimensions required by spec
-        self.gate_a_linear = nn.Linear(9, 128)
+        # Gate A now consumes 128-dim internal TCM features.
+        self.gate_a_linear = nn.Linear(128, 128)
         self.gate_b_linear = nn.Linear(128, 128)
+        self.fusion_norm = nn.LayerNorm(256)
 
         self.reg_head = nn.Sequential(
             nn.Linear(256, 128),
@@ -121,13 +136,14 @@ class DualGatingModel(nn.Module):
         pressure_embedding = self.dynamic_encoder(dynamic)  # [B, 128]
 
         if self.use_tcm:
-            static_embedding, tcm_probs = self.tcm_encoder(static_8d)
+            tcm_internal = self.tcm_encoder.get_tcm_internal_features(static_8d)
+            static_embedding = tcm_internal
         else:
             static_embedding = self.static_proj(static_8d)
-            tcm_probs = None
+            tcm_internal = None
 
         if self.use_gate_a:
-            gate_a = torch.sigmoid(self.gate_a_linear(tcm_probs))  # [B, 128]
+            gate_a = torch.sigmoid(self.gate_a_linear(tcm_internal))  # [B, 128]
             modulated_pressure = pressure_embedding * gate_a
         else:
             modulated_pressure = pressure_embedding
@@ -138,7 +154,13 @@ class DualGatingModel(nn.Module):
         else:
             modulated_static = static_embedding
 
-        return torch.cat([modulated_pressure, modulated_static], dim=1)  # [B, 256]
+        fused = torch.cat([modulated_pressure, modulated_static], dim=1)  # [B, 256]
+        return self.fusion_norm(fused)
+
+    def get_tcm_internal_features(self, static_8d: torch.Tensor) -> torch.Tensor:
+        if not self.use_tcm or self.tcm_encoder is None:
+            raise RuntimeError("TCM branch disabled; internal features unavailable.")
+        return self.tcm_encoder.get_tcm_internal_features(static_8d)
 
     def forward(self, dynamic: torch.Tensor, static_8d: torch.Tensor):
         fused = self.extract_fused_features(dynamic, static_8d)

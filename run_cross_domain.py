@@ -11,9 +11,9 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, random_split
 
-from src.config import CONSTITUTION_NAMES, Paths, TCM_CHECKPOINT_PATH, TCM_SCALER_PATH, TrainConfig, ensure_dirs, override_from_env, resolve_device
+from src.config import Paths, TCM_CHECKPOINT_PATH, TCM_SCALER_PATH, TrainConfig, ensure_dirs, override_from_env, resolve_device
 from src.data_loader import BUTPPGDataset, MIMICStaticDataset
-from src.models.fusion import DualGatingModel, TCMEncoderAdapter
+from src.models.fusion import DualGatingModel
 from src.utils import regression_metrics, save_json, timestamp
 
 
@@ -154,36 +154,52 @@ def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
     }
 
 
-def _spearman(x: np.ndarray, y: np.ndarray) -> float:
-    try:
-        from scipy.stats import spearmanr
-
-        return float(spearmanr(x, y).correlation)
-    except Exception:
-        xr = np.argsort(np.argsort(x))
-        yr = np.argsort(np.argsort(y))
-        return float(np.corrcoef(xr, yr)[0, 1])
+def _pearson_1d(a: np.ndarray, b: np.ndarray) -> float:
+    aa = a.reshape(-1)
+    bb = b.reshape(-1)
+    if len(aa) < 2 or np.std(aa) == 0 or np.std(bb) == 0:
+        return 0.0
+    return float(np.corrcoef(aa, bb)[0, 1])
 
 
-def run_mimic_validation(paths: Paths, args: argparse.Namespace, device: str):
-    ds = MIMICStaticDataset(paths.mimic_csv, Path(args.tcm_scaler))
-    loader = DataLoader(ds, batch_size=256, shuffle=False)
-    tcm = TCMEncoderAdapter(Path(args.tcm_checkpoint), freeze=True).to(device)
-    tcm.eval()
+@torch.no_grad()
+def run_but_tcm_feature_correlation(paths: Paths, args: argparse.Namespace, device: str):
+    """Mechanism probe: correlate internal TCM features with physiological target (HR)."""
+    scaler_path = Path(args.tcm_scaler)
+    dataset = BUTPPGDataset(paths.but_ppg_dir, scaler_path=scaler_path)
+    loader = DataLoader(dataset, batch_size=128, shuffle=False)
 
-    all_probs, all_sbp = [], []
-    with torch.no_grad():
-        for static_8d, sbp in loader:
-            static_8d = static_8d.to(device)
-            _, probs = tcm(static_8d)
-            all_probs.append(probs.cpu().numpy())
-            all_sbp.append(sbp.numpy())
+    ckpt = torch.load(paths.checkpoints / "best_model.pth", map_location="cpu", weights_only=True)
+    best_encoder = ckpt.get("best_encoder", "inceptiontime")
+    model = DualGatingModel(
+        encoder_name=best_encoder,
+        tcm_checkpoint_path=Path(args.tcm_checkpoint),
+        freeze_tcm=True,
+        use_tcm=True,
+        use_gate_a=True,
+        use_gate_b=True,
+    ).to(device)
+    model.load_state_dict(ckpt["model_state_dict"], strict=False)
+    model.eval()
 
-    probs = np.concatenate(all_probs, axis=0)
-    sbp = np.concatenate(all_sbp, axis=0).reshape(-1)
-    tan_shi_idx = CONSTITUTION_NAMES.index("痰湿质")
-    corr = _spearman(probs[:, tan_shi_idx], sbp)
-    return {"spearman_tanshizhi_vs_sbp": corr}
+    feats, targets = [], []
+    for _, static, target in loader:
+        static = static.to(device)
+        internal = model.get_tcm_internal_features(static)  # [B, 128]
+        feats.append(internal.cpu().numpy())
+        targets.append(target.numpy())
+
+    x = np.concatenate(feats, axis=0)  # [N,128]
+    y = np.concatenate(targets, axis=0).reshape(-1)  # HR
+    per_dim_corr = np.array([_pearson_1d(x[:, i], y) for i in range(x.shape[1])], dtype=np.float32)
+    feat_norm_corr = _pearson_1d(np.linalg.norm(x, axis=1), y)
+    max_abs_idx = int(np.argmax(np.abs(per_dim_corr)))
+    return {
+        "tcm_internal_mean_abs_pearson": float(np.mean(np.abs(per_dim_corr))),
+        "tcm_internal_max_abs_pearson": float(np.max(np.abs(per_dim_corr))),
+        "tcm_internal_max_abs_dim": max_abs_idx,
+        "tcm_internal_norm_pearson": feat_norm_corr,
+    }
 
 
 def main() -> None:
@@ -217,12 +233,12 @@ def main() -> None:
         },
     )
 
-    # print(f"[{timestamp()}] >>> Cross-domain B: MIMIC static")
-    # mimic_metrics = run_mimic_validation(paths, args, device)
-    # print(f"[{timestamp()}] MIMIC metrics: {mimic_metrics}")
-    print("[INFO] Mechanism Validation (Cross-Domain B) is temporarily skipped as per MVP strategy.")
-    mimic_metrics = {"skipped": True}
-    save_json({"but": but_metrics, "mimic": mimic_metrics}, paths.results / "cross_domain_results.json")
+    print(f"[{timestamp()}] >>> Cross-domain B: TCM internal feature mechanism probe")
+    mechanism_metrics = run_but_tcm_feature_correlation(paths, args, device)
+    print(f"[{timestamp()}] TCM feature mean|r|: {mechanism_metrics['tcm_internal_mean_abs_pearson']:.4f}")
+    print(f"[{timestamp()}] TCM feature max|r|: {mechanism_metrics['tcm_internal_max_abs_pearson']:.4f}")
+    print(f"[{timestamp()}] TCM feature norm r: {mechanism_metrics['tcm_internal_norm_pearson']:.4f}")
+    save_json({"but": but_metrics, "mechanism": mechanism_metrics}, paths.results / "cross_domain_results.json")
 
 
 if __name__ == "__main__":

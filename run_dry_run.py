@@ -59,14 +59,8 @@ def run_dry_run() -> None:
         pred = model(dynamic, static)
         assert pred.shape == (4, 1), f"DualGating pred shape mismatch: {pred.shape}"
 
-        static_embed, probs = model.tcm_encoder(static)
-        assert static_embed.shape == (4, 128), f"TCM static embedding shape mismatch: {static_embed.shape}"
-        assert probs.shape == (4, 9), f"TCM probs shape mismatch: {probs.shape}"
-        assert torch.allclose(
-            probs.sum(dim=1),
-            torch.ones(4, device=device),
-            atol=1e-4,
-        ), "TCM probs do not sum to 1.0"
+        static_embed = model.get_tcm_internal_features(static)
+        assert static_embed.shape == (4, 128), f"TCM internal feature shape mismatch: {static_embed.shape}"
 
         _single_step(model, pred, target)
 
@@ -78,4 +72,3 @@ if __name__ == "__main__":
         run_dry_run()
     except Exception as exc:
         raise RuntimeError("Dry Run Failed! 请勿启动正式训练！") from exc
-
