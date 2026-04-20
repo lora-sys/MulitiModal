@@ -29,10 +29,12 @@ ENCODERS = ["inceptiontime", "os-cnn", "xcm", "1d-resnet", "tcn"]
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Run 9-step WESAD experiment matrix")
+    p = argparse.ArgumentParser(description="Run 9-step experiment matrix (WESAD/POPANE)")
     p.add_argument("--epochs", type=int, default=MAX_EPOCHS)
     p.add_argument("--device", type=str, default="cuda")
+    p.add_argument("--dataset", type=str, default="wesad", choices=["wesad", "popane"])
     p.add_argument("--wesad-dir", type=str, default=None)
+    p.add_argument("--popane-dir", type=str, default="data/popane/study1")
     p.add_argument("--tcm-checkpoint", type=str, default=str(TCM_CHECKPOINT_PATH))
     p.add_argument("--tcm-scaler", type=str, default=str(TCM_SCALER_PATH))
     p.add_argument("--dry-run", action="store_true")
@@ -56,7 +58,6 @@ def run_single_experiment(name: str, model, train_loader, val_loader, cfg: Train
         patience=EARLY_STOPPING_PATIENCE,
     )
     print(f"[{timestamp()}] >>> run_single_experiment completed: {name}")
-    return model, val_metrics, val_mse_history, best_epoch
     payload = {
         "name": name,
         "train": train_metrics,
@@ -97,7 +98,7 @@ def instantiate_model(encoder: str, args: argparse.Namespace, *, use_tcm: bool, 
         use_gate_a=use_gate_a,
         use_gate_b=use_gate_b,
     )
-    print(f"[{timestamp()} >>> DualGatingModel created successfully")
+    print(f"[{timestamp()}] >>> DualGatingModel created successfully")
     return model
 
 
@@ -156,9 +157,30 @@ def main() -> None:
     print(f"[{timestamp()}] >>> TrainConfig: batch_size={cfg.batch_size}, lr={cfg.lr}, epochs={cfg.epochs}, device={cfg.device}")
     set_seed(cfg.seed)
 
-    print(f"[{timestamp()}] >>> Loading WESAD dataset from {paths.wesad_dir} ...", flush=True)
-    dataset = WESADDataset(paths.wesad_dir, Path(args.tcm_scaler), window_size=cfg.window_size, overlap=cfg.window_overlap)
-    print(f"[{timestamp()}] >>> WESAD loaded. total_windows={len(dataset)}", flush=True)
+    if args.dataset == "wesad":
+        print(f"[{timestamp()}] >>> Loading WESAD dataset from {paths.wesad_dir} ...", flush=True)
+        dataset = WESADDataset(
+            paths.wesad_dir,
+            Path(args.tcm_scaler),
+            window_size=cfg.window_size,
+            overlap=cfg.window_overlap,
+        )
+        print(f"[{timestamp()}] >>> WESAD loaded. total_windows={len(dataset)}", flush=True)
+    else:
+        from src.dataset_popane import POPANEDataset
+
+        popane_dir = Path(args.popane_dir)
+        print(f"[{timestamp()}] >>> Loading POPANE dataset from {popane_dir} ...", flush=True)
+        # Keep 5s stride in dry-run for speed, 10/5 default otherwise.
+        dataset = POPANEDataset(
+            root_dir=popane_dir,
+            tcm_scaler_path=Path(args.tcm_scaler),
+            target_sr=64,
+            window_sec=5 if args.dry_run else 10,
+            stride_sec=5,
+            include_baseline_segments=False,
+        )
+        print(f"[{timestamp()}] >>> POPANE loaded. total_windows={len(dataset)}", flush=True)
     train_loader, val_loader = make_train_val_loaders(dataset, batch_size=cfg.batch_size, seed=cfg.seed)
     print(
         f"[{timestamp()}] >>> DataLoader ready. train_batches={len(train_loader)} val_batches={len(val_loader)} "

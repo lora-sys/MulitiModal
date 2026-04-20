@@ -8,8 +8,6 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from run_dry_run import run_dry_run
-
 
 def ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -47,6 +45,8 @@ def main() -> None:
 
     # Hard gate: run dry-run checks in-process before any subprocess call.
     try:
+        from run_dry_run import run_dry_run
+
         print(f"[{ts()}] >>> Running in-process Dry Run gate ...", flush=True)
         run_dry_run()
         print(f"[{ts()}] >>> Dry Run gate passed", flush=True)
@@ -62,7 +62,7 @@ def main() -> None:
     else:
         run_step(["python3", "-u", "run_optuna.py"], "Optuna")
 
-    run_step(["python3", "-u", "run_experiments.py"], "Experiments")
+    run_step(["python3", "-u", "run_experiments.py", "--dataset", "wesad"], "Experiments")
     run_step(["python3", "-u", "run_cross_domain.py"], "Cross-domain Validation")
 
 
