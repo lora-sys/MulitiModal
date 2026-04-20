@@ -62,7 +62,7 @@ def main() -> None:
     else:
         run_step(["python3", "-u", "run_optuna.py"], "Optuna")
 
-    run_step(["python3", "-u", "run_experiments.py", "--dataset", "wesad"], "Experiments")
+    run_step(["python3", "-u", "run_experiments.py"], "Experiments")
     run_step(["python3", "-u", "run_cross_domain.py"], "Cross-domain Validation")
 
 

@@ -2,11 +2,20 @@
 from __future__ import annotations
 
 import argparse
+import json
+import pickle
+import random
+import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
 
+from model import OPLRIRegressor
 from src.config import (
     EARLY_STOPPING_PATIENCE,
     MAX_EPOCHS,
@@ -19,24 +28,118 @@ from src.config import (
     resolve_device,
 )
 from src.data_loader import WESADDataset, make_train_val_loaders
-from src.models.fusion import DualGatingModel
-from src.training import fit_regression_model_with_history, save_checkpoint
-from src.utils import load_json, save_json, set_seed, timestamp
+from src.utils import regression_metrics, save_json, set_seed, timestamp, to_numpy
 from src.utils.plotting import plot_ablation, plot_comparison, plot_selection
 
 
-ENCODERS = ["inceptiontime", "os-cnn", "xcm", "1d-resnet", "tcn"]
+ENCODERS = ["tcn", "inceptiontime", "os-cnn", "xcm", "1d-resnet"]
+
+
+@dataclass
+class HyperParams:
+    lr: float
+    weight_decay: float
+    batch_size: int
+
+
+class FrozenTCMPrior:
+    """Script-side TCM inference: 4D -> scaler -> frozen FT-Transformer -> 9D probs."""
+
+    def __init__(self, checkpoint_path: Path, scaler_path: Path, device: str):
+        self.device = device
+        self.model = self._load_tcm_model(checkpoint_path).to(device)
+        self.scaler = self._load_scaler(scaler_path, checkpoint_path)
+
+        # 铁律: 永久冻结
+        self.model.eval()
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+    def _load_tcm_model(self, checkpoint_path: Path) -> nn.Module:
+        repo_root = Path(__file__).resolve().parent
+        sys.path.insert(0, str(repo_root / "tcm_ft_transformer"))
+        from ft_transformer import get_model  # pylint: disable=import-error
+
+        model = get_model(n_features=4, n_classes=9)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"TCM checkpoint not found: {checkpoint_path}")
+
+        loaded = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+        state_dict = loaded["model_state_dict"] if isinstance(loaded, dict) and "model_state_dict" in loaded else loaded
+        model.load_state_dict(state_dict, strict=False)
+        return model
+
+    def _load_scaler(self, scaler_path: Path, checkpoint_path: Path):
+        candidates = [scaler_path]
+        sibling = checkpoint_path.parent / "tcm_scaler.pkl"
+        if sibling not in candidates:
+            candidates.append(sibling)
+        npz_sibling = checkpoint_path.parent / "scaler_params.npz"
+        if npz_sibling not in candidates:
+            candidates.append(npz_sibling)
+
+        for path in candidates:
+            if not path.exists():
+                continue
+            try:
+                import joblib  # type: ignore
+
+                scaler = joblib.load(path)
+                if hasattr(scaler, "transform"):
+                    return scaler
+            except Exception:
+                pass
+            try:
+                with open(path, "rb") as f:
+                    scaler = pickle.load(f)
+                if hasattr(scaler, "transform"):
+                    return scaler
+            except Exception:
+                pass
+            try:
+                arr = np.load(path)
+                if "mean" in arr and "std" in arr:
+                    return {"mean": arr["mean"].astype(np.float32), "std": arr["std"].astype(np.float32)}
+            except Exception:
+                pass
+
+        raise FileNotFoundError(f"No valid TCM scaler found from: {candidates}")
+
+    @torch.no_grad()
+    def infer_probs(self, static_4d: torch.Tensor) -> torch.Tensor:
+        x = static_4d[:, :4].detach().cpu().numpy().astype(np.float32)
+        if isinstance(self.scaler, dict):
+            mean = np.asarray(self.scaler["mean"], dtype=np.float32)
+            std = np.asarray(self.scaler["std"], dtype=np.float32)
+            if mean.shape[0] >= 4:
+                mean = mean[:4]
+            if std.shape[0] >= 4:
+                std = std[:4]
+            std = np.where(std == 0, 1.0, std)
+            x_scaled = (x - mean) / std
+        else:
+            x_scaled = self.scaler.transform(x).astype(np.float32)
+            if x_scaled.shape[1] >= 4:
+                x_scaled = x_scaled[:, :4]
+
+        x_scaled_t = torch.from_numpy(x_scaled.astype(np.float32)).to(self.device)
+        self.model.eval()
+        probs = self.model(x_scaled_t)  # [B, 9]
+        return probs
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Run 9-step experiment matrix (WESAD/POPANE)")
+    p = argparse.ArgumentParser(description="3-stage experiment flow with late reinjection (WESAD only)")
     p.add_argument("--epochs", type=int, default=MAX_EPOCHS)
+    p.add_argument("--selection-epochs", type=int, default=15)
+    p.add_argument("--search-epochs", type=int, default=15)
+    p.add_argument("--search-trials", type=int, default=15)
     p.add_argument("--device", type=str, default="cuda")
-    p.add_argument("--dataset", type=str, default="wesad", choices=["wesad", "popane"])
     p.add_argument("--wesad-dir", type=str, default=None)
-    p.add_argument("--popane-dir", type=str, default="data/popane/study1")
     p.add_argument("--tcm-checkpoint", type=str, default=str(TCM_CHECKPOINT_PATH))
     p.add_argument("--tcm-scaler", type=str, default=str(TCM_SCALER_PATH))
+    p.add_argument("--override-params", type=str, default="")
+    p.add_argument("--skip-fast-search", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -45,94 +148,244 @@ def clear_cuda_cache() -> None:
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-def run_single_experiment(name: str, model, train_loader, val_loader, cfg: TrainConfig, result_dir: Path):
-    print(f"[{timestamp()}] >>> run_single_experiment: {name} (epochs={cfg.epochs})")
-    model, train_metrics, val_metrics, val_mse_history, best_epoch = fit_regression_model_with_history(
-        model,
-        train_loader,
-        val_loader,
-        epochs=cfg.epochs,
-        lr=cfg.lr,
-        weight_decay=cfg.weight_decay,
-        device=cfg.device,
-        patience=EARLY_STOPPING_PATIENCE,
-    )
-    print(f"[{timestamp()}] >>> run_single_experiment completed: {name}")
-    payload = {
-        "name": name,
-        "train": train_metrics,
-        "val": val_metrics,
-        "val_mse_history": val_mse_history,
-        "recommended_best_epoch": best_epoch,
-    }
-    save_json(payload, result_dir / "metrics.json")
-    save_checkpoint(
-        model,
-        result_dir / "model_best.pth",
-        extra={
-            "name": name,
-            "val_metrics": val_metrics,
-            "recommended_best_epoch": best_epoch,
-            "val_mse_history": val_mse_history,
-        },
-    )
-    print(
-        f"[{timestamp()}] {name} | "
-        f"MSE={val_metrics['mse']:.6f} RMSE={val_metrics['rmse']:.6f} "
-        f"MAE={val_metrics['mae']:.6f} Pearson={val_metrics['pearson']:.6f} "
-        f"[推荐最佳 Epoch: {best_epoch}]",
-        flush=True,
-    )
-    return model, val_metrics, val_mse_history, best_epoch
+
+def _unpack_batch(batch, device: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    dynamic, second, third = batch
+    dynamic = dynamic.to(device)
+    # WESAD now returns (dynamic, target, static), keep compatibility fallback.
+    if second.dim() >= 2 and second.shape[-1] in (4, 8):
+        static = second.to(device)
+        target = third.to(device)
+    else:
+        target = second.to(device)
+        static = third.to(device)
+    return dynamic, static, target
 
 
-def instantiate_model(encoder: str, args: argparse.Namespace, *, use_tcm: bool, use_gate_a: bool, use_gate_b: bool):
-    print(f"[{timestamp()}] >>> instantiate_model: encoder={encoder}, use_tcm={use_tcm}, gate_a={use_gate_a}, gate_b={use_gate_b}")
-    print(f"[{timestamp()}] >>> Creating DualGatingModel...")
-    model = DualGatingModel(
-        encoder_name=encoder,
-        tcm_checkpoint_path=Path(args.tcm_checkpoint),
-        tcm_scaler_path=Path(args.tcm_scaler),
-        freeze_tcm=True,
-        use_tcm=use_tcm,
-        use_gate_a=use_gate_a,
-        use_gate_b=use_gate_b,
-    )
-    print(f"[{timestamp()}] >>> DualGatingModel created successfully")
-    return model
+def _run_forward(
+    model: OPLRIRegressor,
+    tcm_prior: FrozenTCMPrior,
+    dynamic_x: torch.Tensor,
+    static_x: torch.Tensor,
+    *,
+    use_tcm: bool,
+    use_gate_a: bool,
+    use_gate_b: bool,
+) -> torch.Tensor:
+    if use_tcm:
+        tcm_probs = tcm_prior.infer_probs(static_x)  # [B, 9]
+    else:
+        tcm_probs = torch.zeros(dynamic_x.size(0), 9, device=dynamic_x.device, dtype=torch.float32)
+
+    z_raw = model.dynamic_encoder(dynamic_x)  # [B,128]
+    if use_gate_a and use_tcm:
+        gate_a = torch.sigmoid(model.gate_a_linear(tcm_probs))
+        z_modulated = z_raw * gate_a
+    else:
+        z_modulated = z_raw
+
+    if use_gate_b:
+        gate_b = torch.sigmoid(model.gate_b_linear(z_modulated))
+        z_pure_dynamic = z_modulated * (1.0 - gate_b)
+    else:
+        z_pure_dynamic = z_modulated
+
+    # OP-LRI anti-pollution: dynamic branch detached before late reinjection.
+    z_pure_dynamic = z_pure_dynamic.detach()
+    final_input = torch.cat([z_pure_dynamic, tcm_probs], dim=-1)  # [B,137]
+    pred = model.forward_from_final_input(final_input)
+    return pred
 
 
-def run_step(
+def _freeze_non_head(model: OPLRIRegressor) -> None:
+    for p in model.dynamic_encoder.parameters():
+        p.requires_grad = False
+    for p in model.gate_a_linear.parameters():
+        p.requires_grad = False
+    for p in model.gate_b_linear.parameters():
+        p.requires_grad = False
+    for p in model.reg_head.parameters():
+        p.requires_grad = True
+
+
+def train_eval_step(
     *,
     step_name: str,
-    result_dir: Path,
     encoder: str,
     use_tcm: bool,
     use_gate_a: bool,
     use_gate_b: bool,
-    args: argparse.Namespace,
-    cfg: TrainConfig,
-    train_loader,
-    val_loader,
-):
+    hparams: HyperParams,
+    epochs: int,
+    patience: int,
+    dataset: WESADDataset,
+    seed: int,
+    device: str,
+    tcm_prior: FrozenTCMPrior,
+) -> Dict:
+    train_loader, val_loader = make_train_val_loaders(dataset, batch_size=hparams.batch_size, seed=seed)
+    model = OPLRIRegressor(encoder_name=encoder, use_gate_a=True, use_gate_b=True).to(device)
+    _freeze_non_head(model)
+    optimizer = torch.optim.AdamW(model.reg_head.parameters(), lr=hparams.lr, weight_decay=hparams.weight_decay)
+    loss_fn = nn.MSELoss()
+
+    best_val_mse = float("inf")
+    best_epoch = 1
+    best_state = None
+    counter = 0
+    val_mse_history: List[float] = []
+
+    for epoch in range(1, max(1, epochs) + 1):
+        model.train()
+        total_loss = 0.0
+        n_items = 0
+        for batch in train_loader:
+            dynamic_x, static_x, target = _unpack_batch(batch, device)
+            pred = _run_forward(
+                model,
+                tcm_prior,
+                dynamic_x,
+                static_x,
+                use_tcm=use_tcm,
+                use_gate_a=use_gate_a,
+                use_gate_b=use_gate_b,
+            )
+            loss = loss_fn(pred, target)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += float(loss.item()) * len(dynamic_x)
+            n_items += len(dynamic_x)
+        train_loss = total_loss / max(n_items, 1)
+
+        model.eval()
+        ys, ps = [], []
+        with torch.no_grad():
+            for batch in val_loader:
+                dynamic_x, static_x, target = _unpack_batch(batch, device)
+                pred = _run_forward(
+                    model,
+                    tcm_prior,
+                    dynamic_x,
+                    static_x,
+                    use_tcm=use_tcm,
+                    use_gate_a=use_gate_a,
+                    use_gate_b=use_gate_b,
+                )
+                ys.append(to_numpy(target))
+                ps.append(to_numpy(pred))
+
+        val_metrics = regression_metrics(np.concatenate(ys, axis=0), np.concatenate(ps, axis=0))
+        val_mse = float(val_metrics["mse"])
+        val_mse_history.append(val_mse)
+
+        if val_mse < best_val_mse:
+            best_val_mse = val_mse
+            best_epoch = epoch
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            counter = 0
+        else:
+            counter += 1
+
+        print(
+            f"[{timestamp()}] {step_name} | Epoch {epoch}/{epochs} "
+            f"train_loss={train_loss:.6f} val_mse={val_mse:.6f} "
+            f"best_val={best_val_mse:.6f} patience={counter}/{patience}",
+            flush=True,
+        )
+
+        if counter >= max(1, patience):
+            print(f"[{timestamp()}] {step_name} | Early stop at epoch {epoch}, best={best_epoch}", flush=True)
+            break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+    # Final metrics on val using best state.
+    model.eval()
+    ys, ps = [], []
+    with torch.no_grad():
+        for batch in val_loader:
+            dynamic_x, static_x, target = _unpack_batch(batch, device)
+            pred = _run_forward(
+                model,
+                tcm_prior,
+                dynamic_x,
+                static_x,
+                use_tcm=use_tcm,
+                use_gate_a=use_gate_a,
+                use_gate_b=use_gate_b,
+            )
+            ys.append(to_numpy(target))
+            ps.append(to_numpy(pred))
+    final_metrics = regression_metrics(np.concatenate(ys, axis=0), np.concatenate(ps, axis=0))
+
     print(
-        f"[{timestamp()}] >>> {step_name}: re-instantiate model "
-        f"(encoder={encoder}, use_tcm={use_tcm}, gate_a={use_gate_a}, gate_b={use_gate_b})",
+        f"[{timestamp()}] {step_name} DONE | MSE={final_metrics['mse']:.6f} "
+        f"RMSE={final_metrics['rmse']:.6f} MAE={final_metrics['mae']:.6f} "
+        f"Pearson={final_metrics['pearson']:.6f} [best_epoch={best_epoch}]",
         flush=True,
     )
-    print(f"[{timestamp()}] >>> Instantiating model...")
-    model = instantiate_model(
-        encoder=encoder,
-        args=args,
-        use_tcm=use_tcm,
-        use_gate_a=use_gate_a,
-        use_gate_b=use_gate_b,
+
+    out = {
+        "step_name": step_name,
+        "encoder": encoder,
+        "use_tcm": use_tcm,
+        "use_gate_a": use_gate_a,
+        "use_gate_b": use_gate_b,
+        "hparams": {"lr": hparams.lr, "weight_decay": hparams.weight_decay, "batch_size": hparams.batch_size},
+        "best_epoch": best_epoch,
+        "val_mse_history": val_mse_history,
+        "metrics": final_metrics,
+        "model_state_dict": model.state_dict(),
+    }
+    del model
+    clear_cuda_cache()
+    return out
+
+
+def _parse_override_params(text: str) -> HyperParams | None:
+    s = (text or "").strip()
+    if not s:
+        return None
+    if s.startswith("{"):
+        obj = json.loads(s)
+        return HyperParams(
+            lr=float(obj.get("lr", 5e-4)),
+            weight_decay=float(obj.get("weight_decay", 1e-5)),
+            batch_size=int(obj.get("batch_size", 32)),
+        )
+    kv = {}
+    for part in s.split(","):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        kv[k.strip()] = v.strip()
+    if not kv:
+        return None
+    return HyperParams(
+        lr=float(kv.get("lr", 5e-4)),
+        weight_decay=float(kv.get("weight_decay", 1e-5)),
+        batch_size=int(kv.get("batch_size", 32)),
     )
-    print(f"[{timestamp()}] >>> Model instantiated, starting training...")
-    model, metrics, val_mse_history, best_epoch = run_single_experiment(
-        step_name, model, train_loader, val_loader, cfg, result_dir
-    )
-    return model, metrics, val_mse_history, best_epoch
+
+
+def _sample_hparams(rng: random.Random) -> HyperParams:
+    # Conservative quick-search region for late reinjection.
+    lr = 10 ** rng.uniform(np.log10(2e-4), np.log10(1e-3))
+    weight_decay = 10 ** rng.uniform(np.log10(1e-6), np.log10(1e-4))
+    batch_size = rng.choice([32, 64])
+    return HyperParams(lr=float(lr), weight_decay=float(weight_decay), batch_size=int(batch_size))
+
+
+def _print_selection_table(selection_rows: List[Dict]) -> None:
+    print("\n===== Stage1 Backbone Selection (late reinjection, full gates) =====")
+    print(f"{'Encoder':<15} {'BestValMSE':>12} {'RMSE':>10} {'MAE':>10} {'Pearson':>10}")
+    for r in selection_rows:
+        m = r["metrics"]
+        print(f"{r['encoder']:<15} {m['mse']:>12.6f} {m['rmse']:>10.6f} {m['mae']:>10.6f} {m['pearson']:>10.6f}")
+    print("=====================================================================\n")
 
 
 def main() -> None:
@@ -142,264 +395,297 @@ def main() -> None:
         paths.wesad_dir = Path(args.wesad_dir)
     ensure_dirs(paths)
 
-    print(f"[{timestamp()}] >>> Loading best parameters from Optuna...")
-    best_params = load_json(paths.checkpoints / "optuna_best_params.json", default={})
-    print(f"[{timestamp()}] >>> Best params: {best_params}")
-    
-    print(f"[{timestamp()}] >>> Creating TrainConfig with best parameters...")
-    cfg = TrainConfig(
-        batch_size=int(best_params.get("batch_size", 64)),
-        lr=float(best_params.get("lr", 1e-3)),
-        weight_decay=float(best_params.get("weight_decay", 1e-4)),
-        epochs=3 if args.dry_run else args.epochs,
-        device=resolve_device(args.device),
-    )
-    print(f"[{timestamp()}] >>> TrainConfig: batch_size={cfg.batch_size}, lr={cfg.lr}, epochs={cfg.epochs}, device={cfg.device}")
+    device = resolve_device(args.device)
+    cfg = TrainConfig(device=device, epochs=(3 if args.dry_run else args.epochs))
     set_seed(cfg.seed)
 
-    if args.dataset == "wesad":
-        print(f"[{timestamp()}] >>> Loading WESAD dataset from {paths.wesad_dir} ...", flush=True)
-        dataset = WESADDataset(
-            paths.wesad_dir,
-            Path(args.tcm_scaler),
-            window_size=cfg.window_size,
-            overlap=cfg.window_overlap,
-        )
-        print(f"[{timestamp()}] >>> WESAD loaded. total_windows={len(dataset)}", flush=True)
-    else:
-        from src.dataset_popane import POPANEDataset
-
-        popane_dir = Path(args.popane_dir)
-        print(f"[{timestamp()}] >>> Loading POPANE dataset from {popane_dir} ...", flush=True)
-        # Keep 5s stride in dry-run for speed, 10/5 default otherwise.
-        dataset = POPANEDataset(
-            root_dir=popane_dir,
-            tcm_scaler_path=Path(args.tcm_scaler),
-            target_sr=64,
-            window_sec=5 if args.dry_run else 10,
-            stride_sec=5,
-            include_baseline_segments=False,
-        )
-        print(f"[{timestamp()}] >>> POPANE loaded. total_windows={len(dataset)}", flush=True)
-    train_loader, val_loader = make_train_val_loaders(dataset, batch_size=cfg.batch_size, seed=cfg.seed)
-    print(
-        f"[{timestamp()}] >>> DataLoader ready. train_batches={len(train_loader)} val_batches={len(val_loader)} "
-        f"batch_size={cfg.batch_size} epochs={cfg.epochs}",
-        flush=True,
+    print(f"[{timestamp()}] >>> Loading WESAD dataset from {paths.wesad_dir}", flush=True)
+    dataset = WESADDataset(
+        paths.wesad_dir,
+        Path(args.tcm_scaler),
+        window_size=cfg.window_size,
+        overlap=cfg.window_overlap,
     )
+    print(f"[{timestamp()}] >>> WESAD loaded. total_windows={len(dataset)}", flush=True)
 
-    detailed_logs = []
-    experiment_logs = []  # Must end with exactly 9 step-level logs.
+    tcm_prior = FrozenTCMPrior(Path(args.tcm_checkpoint), Path(args.tcm_scaler), device)
 
-    # Step 1
-    print(f"[{timestamp()}] >>> Starting Step 1: Baseline A (Weak)")
-    model, metrics, hist, best_epoch = run_step(
-        step_name="Step1-BaselineA-Weak",
-        result_dir=paths.results / "step1_baseline_a_weak",
-        encoder="tcn",
-        use_tcm=False,
-        use_gate_a=False,
-        use_gate_b=False,
-        args=args,
-        cfg=cfg,
-        train_loader=train_loader,
-        val_loader=val_loader,
-    )
-    detailed_logs.append({"step": 1, "name": "Baseline A", "encoder": "tcn", "metrics": metrics, "val_mse_history": hist, "best_epoch": best_epoch})
-    experiment_logs.append({"step": 1, "name": "Baseline A", "mse": metrics["mse"]})
-    del model
-    clear_cuda_cache()
-
-    # Step 2
-    model, metrics, hist, best_epoch = run_step(
-        step_name="Step2-BaselineB-Strong",
-        result_dir=paths.results / "step2_baseline_b_strong",
-        encoder="tcn",
-        use_tcm=False,
-        use_gate_a=False,
-        use_gate_b=True,
-        args=args,
-        cfg=cfg,
-        train_loader=train_loader,
-        val_loader=val_loader,
-    )
-    detailed_logs.append({"step": 2, "name": "Baseline B", "encoder": "tcn", "metrics": metrics, "val_mse_history": hist, "best_epoch": best_epoch})
-    experiment_logs.append({"step": 2, "name": "Baseline B", "mse": metrics["mse"]})
-    del model
-    clear_cuda_cache()
-
-    # Step 3
-    model, metrics, hist, best_epoch = run_step(
-        step_name="Step3-Ours-TCN",
-        result_dir=paths.results / "step3_ours_tcn",
-        encoder="tcn",
-        use_tcm=True,
-        use_gate_a=True,
-        use_gate_b=True,
-        args=args,
-        cfg=cfg,
-        train_loader=train_loader,
-        val_loader=val_loader,
-    )
-    detailed_logs.append({"step": 3, "name": "Ours", "encoder": "tcn", "metrics": metrics, "val_mse_history": hist, "best_epoch": best_epoch})
-    experiment_logs.append({"step": 3, "name": "Ours", "mse": metrics["mse"]})
-    del model
-    clear_cuda_cache()
-
-    # Step 4 (encoder selection loop)
-    encoder_selection_results = []
+    # ---------------- Stage 1: force re-selection ----------------
+    stage1_epochs = 3 if args.dry_run else args.selection_epochs
+    base_hparams = HyperParams(lr=5e-4, weight_decay=1e-5, batch_size=32)
+    selection_rows: List[Dict] = []
     best_encoder = None
     best_encoder_mse = float("inf")
-    for enc in ENCODERS:
-        model, metrics, hist, best_epoch = run_step(
-            step_name=f"Step4-EncoderSelection-{enc}",
-            result_dir=paths.results / f"step4_encoder_{enc}",
-            encoder=enc,
+
+    print(f"[{timestamp()}] >>> Stage 1: backbone reselection on new architecture", flush=True)
+    for encoder in ENCODERS:
+        row = train_eval_step(
+            step_name=f"Stage1-Select-{encoder}",
+            encoder=encoder,
             use_tcm=True,
             use_gate_a=True,
             use_gate_b=True,
-            args=args,
-            cfg=cfg,
-            train_loader=train_loader,
-            val_loader=val_loader,
+            hparams=base_hparams,
+            epochs=stage1_epochs,
+            patience=EARLY_STOPPING_PATIENCE,
+            dataset=dataset,
+            seed=cfg.seed,
+            device=device,
+            tcm_prior=tcm_prior,
         )
-        encoder_selection_results.append({"name": enc, "encoder": enc, "metrics": metrics, "val_mse_history": hist, "best_epoch": best_epoch})
-        if metrics["mse"] < best_encoder_mse:
-            best_encoder_mse = metrics["mse"]
-            best_encoder = enc
-        del model
-        clear_cuda_cache()
+        selection_rows.append(row)
+        mse = row["metrics"]["mse"]
+        if mse < best_encoder_mse:
+            best_encoder_mse = mse
+            best_encoder = encoder
 
     assert best_encoder is not None
-    print(f"[{timestamp()}] Step4 best encoder: {best_encoder} (MSE={best_encoder_mse:.6f})", flush=True)
-    detailed_logs.append(
-        {
-            "step": 4,
-            "name": "Encoder Selection",
-            "best_encoder": best_encoder,
-            "best_mse": best_encoder_mse,
-            "encoders": encoder_selection_results,
-        }
-    )
-    experiment_logs.append({"step": 4, "name": "Encoder Selection", "best_encoder": best_encoder, "best_mse": best_encoder_mse})
+    _print_selection_table(selection_rows)
+    print(f"[{timestamp()}] >>> Stage 1 winner: {best_encoder} (best_val_mse={best_encoder_mse:.6f})", flush=True)
 
-    # Step 5
-    model, metrics, hist, best_epoch = run_step(
-        step_name="Step5-Ablation1-woDualGating",
-        result_dir=paths.results / "step5_ablation_wo_dual_gating",
-        encoder=best_encoder,
-        use_tcm=True,
-        use_gate_a=False,
-        use_gate_b=False,
-        args=args,
-        cfg=cfg,
-        train_loader=train_loader,
-        val_loader=val_loader,
-    )
-    detailed_logs.append({"step": 5, "name": "w/o Dual Gating", "encoder": best_encoder, "metrics": metrics, "val_mse_history": hist, "best_epoch": best_epoch})
-    experiment_logs.append({"step": 5, "name": "w/o Dual Gating", "mse": metrics["mse"]})
-    del model
-    clear_cuda_cache()
-
-    # Step 6
-    model, metrics, hist, best_epoch = run_step(
-        step_name="Step6-Ablation2-woTCMPrior",
-        result_dir=paths.results / "step6_ablation_wo_tcm_prior",
-        encoder=best_encoder,
-        use_tcm=False,
-        use_gate_a=False,
-        use_gate_b=True,
-        args=args,
-        cfg=cfg,
-        train_loader=train_loader,
-        val_loader=val_loader,
-    )
-    detailed_logs.append({"step": 6, "name": "w/o TCM Prior", "encoder": best_encoder, "metrics": metrics, "val_mse_history": hist, "best_epoch": best_epoch})
-    experiment_logs.append({"step": 6, "name": "w/o TCM Prior", "mse": metrics["mse"]})
-    del model
-    clear_cuda_cache()
-
-    # Step 7
-    model, metrics, hist, best_epoch = run_step(
-        step_name="Step7-Ablation3-woTCMGate",
-        result_dir=paths.results / "step7_ablation_wo_tcm_gate",
-        encoder=best_encoder,
-        use_tcm=True,
-        use_gate_a=False,
-        use_gate_b=True,
-        args=args,
-        cfg=cfg,
-        train_loader=train_loader,
-        val_loader=val_loader,
-    )
-    detailed_logs.append({"step": 7, "name": "w/o TCM_Gate", "encoder": best_encoder, "metrics": metrics, "val_mse_history": hist, "best_epoch": best_epoch})
-    experiment_logs.append({"step": 7, "name": "w/o TCM_Gate", "mse": metrics["mse"]})
-    del model
-    clear_cuda_cache()
-
-    # Step 8
-    model, metrics, hist, best_epoch = run_step(
-        step_name="Step8-FinalOurs",
-        result_dir=paths.results / "step8_final_ours",
-        encoder=best_encoder,
-        use_tcm=True,
-        use_gate_a=True,
-        use_gate_b=True,
-        args=args,
-        cfg=cfg,
-        train_loader=train_loader,
-        val_loader=val_loader,
-    )
-    detailed_logs.append({"step": 8, "name": "Full Model", "encoder": best_encoder, "metrics": metrics, "val_mse_history": hist, "best_epoch": best_epoch})
-    experiment_logs.append({"step": 8, "name": "Final Ours", "mse": metrics["mse"]})
-    save_checkpoint(
-        model,
-        paths.checkpoints / "best_model.pth",
-        extra={
-            "best_encoder": best_encoder,
-            "metrics": metrics,
-            "use_tcm": True,
-            "use_gate_a": True,
-            "use_gate_b": True,
-        },
-    )
-    del model
-    clear_cuda_cache()
-
-    # Step 9 plotting call
-    comparison_data = [
-        {"name": "Baseline A", "metrics": detailed_logs[0]["metrics"]},
-        {"name": "Baseline B", "metrics": detailed_logs[1]["metrics"]},
-        {"name": "Ours", "metrics": detailed_logs[2]["metrics"]},
-    ]
-    selection_data = [
-        {"name": e["name"], "metrics": e["metrics"]}
-        for e in detailed_logs[3]["encoders"]
-    ]
-    ablation_data = [
-        {"name": "Full Model", "metrics": detailed_logs[7]["metrics"]},
-        {"name": "w/o Dual Gating", "metrics": detailed_logs[4]["metrics"]},
-        {"name": "w/o TCM Prior", "metrics": detailed_logs[5]["metrics"]},
-        {"name": "w/o TCM_Gate", "metrics": detailed_logs[6]["metrics"]},
-    ]
-    fig1 = plot_comparison(comparison_data)
-    fig2 = plot_selection(selection_data)
-    fig3 = plot_ablation(ablation_data)
-    print(f"[{timestamp()}] >>> Figures saved: {fig1}, {fig2}, {fig3}", flush=True)
-    experiment_logs.append({"step": 9, "name": "Plotting", "figures": [str(fig1), str(fig2), str(fig3)]})
-
-    assert len(experiment_logs) == 9, f"Expected 9 experiment steps, got {len(experiment_logs)}"
+    # ---------------- Stage 2: reset/tune params ----------------
+    print(f"[{timestamp()}] >>> Stage 2: hyper-parameter reset/tuning for encoder={best_encoder}", flush=True)
+    override_hp = _parse_override_params(args.override_params)
+    if override_hp is not None:
+        best_hp = override_hp
+        tune_logs = [{"trial": 0, "hparams": best_hp.__dict__, "mse": None, "note": "override_params"}]
+        print(f"[{timestamp()}] >>> Using override params: {best_hp}", flush=True)
+    elif args.skip_fast_search:
+        best_hp = base_hparams
+        tune_logs = [{"trial": 0, "hparams": best_hp.__dict__, "mse": None, "note": "conservative_default"}]
+        print(f"[{timestamp()}] >>> Using conservative default params: {best_hp}", flush=True)
+    else:
+        rng = random.Random(cfg.seed + 7)
+        trials = max(1, args.search_trials if not args.dry_run else 3)
+        search_epochs = 3 if args.dry_run else args.search_epochs
+        best_tune_mse = float("inf")
+        best_hp = base_hparams
+        tune_logs = []
+        for t in range(1, trials + 1):
+            hp = _sample_hparams(rng)
+            res = train_eval_step(
+                step_name=f"Stage2-Tune-T{t}",
+                encoder=best_encoder,
+                use_tcm=True,
+                use_gate_a=True,
+                use_gate_b=True,
+                hparams=hp,
+                epochs=search_epochs,
+                patience=EARLY_STOPPING_PATIENCE,
+                dataset=dataset,
+                seed=cfg.seed + t,
+                device=device,
+                tcm_prior=tcm_prior,
+            )
+            mse = float(res["metrics"]["mse"])
+            tune_logs.append({"trial": t, "hparams": hp.__dict__, "mse": mse})
+            if mse < best_tune_mse:
+                best_tune_mse = mse
+                best_hp = hp
+        print(f"[{timestamp()}] >>> Stage 2 best params: {best_hp} (best_val_mse={best_tune_mse:.6f})", flush=True)
 
     save_json(
         {
             "best_encoder": best_encoder,
-            "experiment_logs": experiment_logs,
-            "detailed_logs": detailed_logs,
+            "best_params": best_hp.__dict__,
+            "selection_results": [
+                {"encoder": r["encoder"], "metrics": r["metrics"], "best_epoch": r["best_epoch"]}
+                for r in selection_rows
+            ],
+            "tuning_logs": tune_logs,
+        },
+        paths.checkpoints / "reinjection_best_setup.json",
+    )
+
+    # ---------------- Stage 3: 9-step matrix ----------------
+    print(f"[{timestamp()}] >>> Stage 3: running 9-step matrix with fixed best params", flush=True)
+    matrix_logs: List[Dict] = []
+
+    step1 = train_eval_step(
+        step_name="Step1-BaselineA-Weak",
+        encoder="tcn",
+        use_tcm=False,
+        use_gate_a=False,
+        use_gate_b=False,
+        hparams=best_hp,
+        epochs=cfg.epochs,
+        patience=EARLY_STOPPING_PATIENCE,
+        dataset=dataset,
+        seed=cfg.seed,
+        device=device,
+        tcm_prior=tcm_prior,
+    )
+    matrix_logs.append({"step": 1, "name": "Baseline A", "mse": step1["metrics"]["mse"], "full": step1})
+
+    step2 = train_eval_step(
+        step_name="Step2-BaselineB-Strong",
+        encoder="tcn",
+        use_tcm=False,
+        use_gate_a=False,
+        use_gate_b=True,
+        hparams=best_hp,
+        epochs=cfg.epochs,
+        patience=EARLY_STOPPING_PATIENCE,
+        dataset=dataset,
+        seed=cfg.seed + 1,
+        device=device,
+        tcm_prior=tcm_prior,
+    )
+    matrix_logs.append({"step": 2, "name": "Baseline B", "mse": step2["metrics"]["mse"], "full": step2})
+
+    step3 = train_eval_step(
+        step_name="Step3-Ours-TCN",
+        encoder="tcn",
+        use_tcm=True,
+        use_gate_a=True,
+        use_gate_b=True,
+        hparams=best_hp,
+        epochs=cfg.epochs,
+        patience=EARLY_STOPPING_PATIENCE,
+        dataset=dataset,
+        seed=cfg.seed + 2,
+        device=device,
+        tcm_prior=tcm_prior,
+    )
+    matrix_logs.append({"step": 3, "name": "Ours-TCN", "mse": step3["metrics"]["mse"], "full": step3})
+
+    # Step4 uses Stage1 selection outcome.
+    matrix_logs.append(
+        {
+            "step": 4,
+            "name": "Encoder Selection",
+            "mse": best_encoder_mse,
+            "best_encoder": best_encoder,
+            "selection_rows": [{"encoder": r["encoder"], "mse": r["metrics"]["mse"]} for r in selection_rows],
+        }
+    )
+
+    step5 = train_eval_step(
+        step_name="Step5-Ablation1-woDualGating",
+        encoder=best_encoder,
+        use_tcm=True,
+        use_gate_a=False,
+        use_gate_b=False,
+        hparams=best_hp,
+        epochs=cfg.epochs,
+        patience=EARLY_STOPPING_PATIENCE,
+        dataset=dataset,
+        seed=cfg.seed + 3,
+        device=device,
+        tcm_prior=tcm_prior,
+    )
+    matrix_logs.append({"step": 5, "name": "w/o Dual Gating", "mse": step5["metrics"]["mse"], "full": step5})
+
+    step6 = train_eval_step(
+        step_name="Step6-Ablation2-woTCMPrior",
+        encoder=best_encoder,
+        use_tcm=False,
+        use_gate_a=False,
+        use_gate_b=True,
+        hparams=best_hp,
+        epochs=cfg.epochs,
+        patience=EARLY_STOPPING_PATIENCE,
+        dataset=dataset,
+        seed=cfg.seed + 4,
+        device=device,
+        tcm_prior=tcm_prior,
+    )
+    matrix_logs.append({"step": 6, "name": "w/o TCM Prior", "mse": step6["metrics"]["mse"], "full": step6})
+
+    step7 = train_eval_step(
+        step_name="Step7-Ablation3-woTCMGate",
+        encoder=best_encoder,
+        use_tcm=True,
+        use_gate_a=False,
+        use_gate_b=True,
+        hparams=best_hp,
+        epochs=cfg.epochs,
+        patience=EARLY_STOPPING_PATIENCE,
+        dataset=dataset,
+        seed=cfg.seed + 5,
+        device=device,
+        tcm_prior=tcm_prior,
+    )
+    matrix_logs.append({"step": 7, "name": "w/o TCM_Gate", "mse": step7["metrics"]["mse"], "full": step7})
+
+    step8 = train_eval_step(
+        step_name="Step8-FinalOurs",
+        encoder=best_encoder,
+        use_tcm=True,
+        use_gate_a=True,
+        use_gate_b=True,
+        hparams=best_hp,
+        epochs=cfg.epochs,
+        patience=EARLY_STOPPING_PATIENCE,
+        dataset=dataset,
+        seed=cfg.seed + 6,
+        device=device,
+        tcm_prior=tcm_prior,
+    )
+    matrix_logs.append({"step": 8, "name": "Final Ours", "mse": step8["metrics"]["mse"], "full": step8})
+
+    # Save final best model for downstream cross-domain.
+    best_model_path = paths.checkpoints / "best_model.pth"
+    best_model_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(
+        {
+            "model_state_dict": step8["model_state_dict"],
+            "best_encoder": best_encoder,
+            "metrics": step8["metrics"],
+            "hparams": best_hp.__dict__,
+            "architecture": "late_reinjection",
+        },
+        best_model_path,
+    )
+    print(f"[{timestamp()}] >>> Saved final model to {best_model_path}", flush=True)
+
+    # Step 9 plotting
+    comparison_data = [
+        {"name": "Baseline A", "metrics": step1["metrics"]},
+        {"name": "Baseline B", "metrics": step2["metrics"]},
+        {"name": "Ours", "metrics": step3["metrics"]},
+    ]
+    selection_data = [{"name": r["encoder"], "metrics": r["metrics"]} for r in selection_rows]
+    ablation_data = [
+        {"name": "Full Model", "metrics": step8["metrics"]},
+        {"name": "w/o Dual Gating", "metrics": step5["metrics"]},
+        {"name": "w/o TCM Prior", "metrics": step6["metrics"]},
+        {"name": "w/o TCM_Gate", "metrics": step7["metrics"]},
+    ]
+    fig1 = plot_comparison(comparison_data)
+    fig2 = plot_selection(selection_data)
+    fig3 = plot_ablation(ablation_data)
+    matrix_logs.append({"step": 9, "name": "Plotting", "mse": None, "figures": [str(fig1), str(fig2), str(fig3)]})
+    assert len(matrix_logs) == 9, f"Expected 9 matrix steps, got {len(matrix_logs)}"
+
+    # Required outputs
+    print("\n===== Stage 2 Chosen Hyper-Parameters =====")
+    print(best_hp)
+    print("===========================================\n")
+
+    print("===== Final 9-Step best_val_mse List =====")
+    for row in matrix_logs:
+        print(f"Step {row['step']}: {row['name']} -> best_val_mse={row['mse']}")
+    print("===========================================")
+
+    save_json(
+        {
+            "stage1_selection_table": [
+                {"encoder": r["encoder"], "metrics": r["metrics"], "best_epoch": r["best_epoch"]}
+                for r in selection_rows
+            ],
+            "stage2_best_params": best_hp.__dict__,
+            "stage3_matrix_best_val_mse": [
+                {"step": r["step"], "name": r["name"], "best_val_mse": r["mse"]}
+                for r in matrix_logs
+            ],
+            "matrix_logs": matrix_logs,
         },
         paths.results / "experiments_summary.json",
     )
-    print(f"[{timestamp()}] >>> 9-step experiment matrix completed.", flush=True)
+    print(f"[{timestamp()}] >>> Experiment flow completed. Summary saved to {paths.results / 'experiments_summary.json'}")
 
 
 if __name__ == "__main__":
     main()
+
