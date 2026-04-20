@@ -178,6 +178,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tcm-scaler", type=str, default=str(TCM_SCALER_PATH))
     p.add_argument("--override-params", type=str, default="")
     p.add_argument("--skip-fast-search", action="store_true")
+    p.add_argument("--gate-a-scale", type=float, default=0.6)
+    p.add_argument("--gate-b-scale", type=float, default=0.35)
+    p.add_argument("--final-lr-mult", type=float, default=0.7)
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -209,6 +212,8 @@ def _run_forward(
     use_tcm: bool,
     use_gate_a: bool,
     use_gate_b: bool,
+    gate_a_scale: float,
+    gate_b_scale: float,
 ) -> torch.Tensor:
     if use_tcm:
         tcm_probs = tcm_prior.infer_probs(static_x)  # [B, 9]
@@ -218,13 +223,13 @@ def _run_forward(
     z_raw = model.dynamic_encoder(dynamic_x)  # [B,128]
     if use_gate_a and use_tcm:
         gate_a = torch.sigmoid(model.gate_a_linear(tcm_probs))
-        z_modulated = z_raw * gate_a
+        z_modulated = z_raw * ((1.0 - gate_a_scale) + gate_a_scale * gate_a)
     else:
         z_modulated = z_raw
 
     if use_gate_b:
         gate_b = torch.sigmoid(model.gate_b_linear(z_modulated))
-        z_pure_dynamic = z_modulated * (1.0 - gate_b)
+        z_pure_dynamic = z_modulated * (1.0 - gate_b_scale * gate_b)
     else:
         z_pure_dynamic = z_modulated
 
@@ -260,6 +265,8 @@ def train_eval_step(
     seed: int,
     device: str,
     tcm_prior: FrozenTCMPrior,
+    gate_a_scale: float,
+    gate_b_scale: float,
 ) -> Dict:
     train_loader, val_loader = make_train_val_loaders(dataset, batch_size=hparams.batch_size, seed=seed)
     model = OPLRIRegressor(encoder_name=encoder, use_gate_a=True, use_gate_b=True).to(device)
@@ -287,6 +294,8 @@ def train_eval_step(
                 use_tcm=use_tcm,
                 use_gate_a=use_gate_a,
                 use_gate_b=use_gate_b,
+                gate_a_scale=gate_a_scale,
+                gate_b_scale=gate_b_scale,
             )
             loss = loss_fn(pred, target)
             optimizer.zero_grad()
@@ -310,6 +319,8 @@ def train_eval_step(
                     use_tcm=use_tcm,
                     use_gate_a=use_gate_a,
                     use_gate_b=use_gate_b,
+                    gate_a_scale=gate_a_scale,
+                    gate_b_scale=gate_b_scale,
                 )
                 ys.append(to_numpy(target))
                 ps.append(to_numpy(pred))
@@ -354,6 +365,8 @@ def train_eval_step(
                 use_tcm=use_tcm,
                 use_gate_a=use_gate_a,
                 use_gate_b=use_gate_b,
+                gate_a_scale=gate_a_scale,
+                gate_b_scale=gate_b_scale,
             )
             ys.append(to_numpy(target))
             ps.append(to_numpy(pred))
@@ -381,6 +394,13 @@ def train_eval_step(
     del model
     clear_cuda_cache()
     return out
+
+
+def _strip_for_json(step: Dict) -> Dict:
+    """Remove non-JSON fields such as tensors/state_dict before summary dump."""
+    safe = dict(step)
+    safe.pop("model_state_dict", None)
+    return safe
 
 
 def _parse_override_params(text: str) -> HyperParams | None:
@@ -411,9 +431,9 @@ def _parse_override_params(text: str) -> HyperParams | None:
 
 def _sample_hparams(rng: random.Random) -> HyperParams:
     # Conservative quick-search region for late reinjection.
-    lr = 10 ** rng.uniform(np.log10(2e-4), np.log10(1e-3))
+    lr = 10 ** rng.uniform(np.log10(2.5e-4), np.log10(8e-4))
     weight_decay = 10 ** rng.uniform(np.log10(1e-6), np.log10(1e-4))
-    batch_size = rng.choice([32, 64])
+    batch_size = 32
     return HyperParams(lr=float(lr), weight_decay=float(weight_decay), batch_size=int(batch_size))
 
 
@@ -445,6 +465,10 @@ def main() -> None:
         overlap=cfg.window_overlap,
     )
     print(f"[{timestamp()}] >>> WESAD loaded. total_windows={len(dataset)}", flush=True)
+    print(
+        f"[{timestamp()}] >>> Gate scales: gate_a_scale={args.gate_a_scale:.3f}, gate_b_scale={args.gate_b_scale:.3f}",
+        flush=True,
+    )
 
     tcm_prior = FrozenTCMPrior(Path(args.tcm_checkpoint), Path(args.tcm_scaler), device)
 
@@ -470,6 +494,8 @@ def main() -> None:
             seed=cfg.seed,
             device=device,
             tcm_prior=tcm_prior,
+            gate_a_scale=args.gate_a_scale,
+            gate_b_scale=args.gate_b_scale,
         )
         selection_rows.append(row)
         mse = row["metrics"]["mse"]
@@ -514,6 +540,8 @@ def main() -> None:
                 seed=cfg.seed + t,
                 device=device,
                 tcm_prior=tcm_prior,
+                gate_a_scale=args.gate_a_scale,
+                gate_b_scale=args.gate_b_scale,
             )
             mse = float(res["metrics"]["mse"])
             tune_logs.append({"trial": t, "hparams": hp.__dict__, "mse": mse})
@@ -552,8 +580,10 @@ def main() -> None:
         seed=cfg.seed,
         device=device,
         tcm_prior=tcm_prior,
+        gate_a_scale=args.gate_a_scale,
+        gate_b_scale=args.gate_b_scale,
     )
-    matrix_logs.append({"step": 1, "name": "Baseline A", "mse": step1["metrics"]["mse"], "full": step1})
+    matrix_logs.append({"step": 1, "name": "Baseline A", "mse": step1["metrics"]["mse"], "full": _strip_for_json(step1)})
 
     step2 = train_eval_step(
         step_name="Step2-BaselineB-Strong",
@@ -568,8 +598,10 @@ def main() -> None:
         seed=cfg.seed + 1,
         device=device,
         tcm_prior=tcm_prior,
+        gate_a_scale=args.gate_a_scale,
+        gate_b_scale=args.gate_b_scale,
     )
-    matrix_logs.append({"step": 2, "name": "Baseline B", "mse": step2["metrics"]["mse"], "full": step2})
+    matrix_logs.append({"step": 2, "name": "Baseline B", "mse": step2["metrics"]["mse"], "full": _strip_for_json(step2)})
 
     step3 = train_eval_step(
         step_name="Step3-Ours-TCN",
@@ -584,8 +616,10 @@ def main() -> None:
         seed=cfg.seed + 2,
         device=device,
         tcm_prior=tcm_prior,
+        gate_a_scale=args.gate_a_scale,
+        gate_b_scale=args.gate_b_scale,
     )
-    matrix_logs.append({"step": 3, "name": "Ours-TCN", "mse": step3["metrics"]["mse"], "full": step3})
+    matrix_logs.append({"step": 3, "name": "Ours-TCN", "mse": step3["metrics"]["mse"], "full": _strip_for_json(step3)})
 
     # Step4 uses Stage1 selection outcome.
     matrix_logs.append(
@@ -611,8 +645,10 @@ def main() -> None:
         seed=cfg.seed + 3,
         device=device,
         tcm_prior=tcm_prior,
+        gate_a_scale=args.gate_a_scale,
+        gate_b_scale=args.gate_b_scale,
     )
-    matrix_logs.append({"step": 5, "name": "w/o Dual Gating", "mse": step5["metrics"]["mse"], "full": step5})
+    matrix_logs.append({"step": 5, "name": "w/o Dual Gating", "mse": step5["metrics"]["mse"], "full": _strip_for_json(step5)})
 
     step6 = train_eval_step(
         step_name="Step6-Ablation2-woTCMPrior",
@@ -627,8 +663,10 @@ def main() -> None:
         seed=cfg.seed + 4,
         device=device,
         tcm_prior=tcm_prior,
+        gate_a_scale=args.gate_a_scale,
+        gate_b_scale=args.gate_b_scale,
     )
-    matrix_logs.append({"step": 6, "name": "w/o TCM Prior", "mse": step6["metrics"]["mse"], "full": step6})
+    matrix_logs.append({"step": 6, "name": "w/o TCM Prior", "mse": step6["metrics"]["mse"], "full": _strip_for_json(step6)})
 
     step7 = train_eval_step(
         step_name="Step7-Ablation3-woTCMGate",
@@ -643,8 +681,17 @@ def main() -> None:
         seed=cfg.seed + 5,
         device=device,
         tcm_prior=tcm_prior,
+        gate_a_scale=args.gate_a_scale,
+        gate_b_scale=args.gate_b_scale,
     )
-    matrix_logs.append({"step": 7, "name": "w/o TCM_Gate", "mse": step7["metrics"]["mse"], "full": step7})
+    matrix_logs.append({"step": 7, "name": "w/o TCM_Gate", "mse": step7["metrics"]["mse"], "full": _strip_for_json(step7)})
+
+    final_hp = HyperParams(
+        lr=float(best_hp.lr * max(0.1, args.final_lr_mult)),
+        weight_decay=float(best_hp.weight_decay),
+        batch_size=int(best_hp.batch_size),
+    )
+    print(f"[{timestamp()}] >>> Final Ours stabilized hparams: {final_hp}", flush=True)
 
     step8 = train_eval_step(
         step_name="Step8-FinalOurs",
@@ -652,15 +699,17 @@ def main() -> None:
         use_tcm=True,
         use_gate_a=True,
         use_gate_b=True,
-        hparams=best_hp,
+        hparams=final_hp,
         epochs=cfg.epochs,
         patience=EARLY_STOPPING_PATIENCE,
         dataset=dataset,
         seed=cfg.seed + 6,
         device=device,
         tcm_prior=tcm_prior,
+        gate_a_scale=args.gate_a_scale,
+        gate_b_scale=args.gate_b_scale,
     )
-    matrix_logs.append({"step": 8, "name": "Final Ours", "mse": step8["metrics"]["mse"], "full": step8})
+    matrix_logs.append({"step": 8, "name": "Final Ours", "mse": step8["metrics"]["mse"], "full": _strip_for_json(step8)})
 
     # Save final best model for downstream cross-domain.
     best_model_path = paths.checkpoints / "best_model.pth"
