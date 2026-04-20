@@ -47,13 +47,66 @@ class FrozenTCMPrior:
 
     def __init__(self, checkpoint_path: Path, scaler_path: Path, device: str):
         self.device = device
-        self.model = self._load_tcm_model(checkpoint_path).to(device)
-        self.scaler = self._load_scaler(scaler_path, checkpoint_path)
+        resolved_ckpt = self._resolve_checkpoint_path(checkpoint_path)
+        resolved_scaler = self._resolve_scaler_path(scaler_path, resolved_ckpt)
+        print(f"[{timestamp()}] >>> TCM checkpoint resolved to: {resolved_ckpt}", flush=True)
+        print(f"[{timestamp()}] >>> TCM scaler resolved to: {resolved_scaler}", flush=True)
+
+        self.model = self._load_tcm_model(resolved_ckpt).to(device)
+        self.scaler = self._load_scaler(resolved_scaler)
 
         # 铁律: 永久冻结
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad = False
+
+    def _resolve_checkpoint_path(self, checkpoint_path: Path) -> Path:
+        candidates = [
+            checkpoint_path,
+            checkpoint_path.parent / "best_model.pth",
+            checkpoint_path.parent / "best_tcm_model.pth",
+            Path("/root/work/MulitiModal/checkpoints/best_model.pth"),
+            Path("/root/work/MulitiModal/checkpoints/best_tcm_model.pth"),
+            Path("/root/work/MulitiModal/tcm_ft_transformer/checkpoints/best_model.pth"),
+            Path("/root/work/MulitiModal/tcm_ft_transformer/checkpoints/best_tcm_model.pth"),
+        ]
+        seen = set()
+        ordered = []
+        for c in candidates:
+            s = str(c)
+            if s not in seen:
+                seen.add(s)
+                ordered.append(c)
+        for c in ordered:
+            if c.exists():
+                return c
+        raise FileNotFoundError(
+            "TCM checkpoint not found. Searched:\n" + "\n".join(str(p) for p in ordered)
+        )
+
+    def _resolve_scaler_path(self, scaler_path: Path, resolved_ckpt: Path) -> Path:
+        candidates = [
+            scaler_path,
+            resolved_ckpt.parent / "tcm_scaler.pkl",
+            resolved_ckpt.parent / "scaler_params.npz",
+            Path("/root/work/MulitiModal/checkpoints/tcm_scaler.pkl"),
+            Path("/root/work/MulitiModal/checkpoints/scaler_params.npz"),
+            Path("/root/work/MulitiModal/tcm_ft_transformer/scaler_params.npz"),
+            Path("/root/work/MulitiModal/tcm_ft_transformer/checkpoints/scaler_params.npz"),
+        ]
+        seen = set()
+        ordered = []
+        for c in candidates:
+            s = str(c)
+            if s not in seen:
+                seen.add(s)
+                ordered.append(c)
+        for c in ordered:
+            if c.exists():
+                return c
+        raise FileNotFoundError(
+            "TCM scaler not found. Searched:\n" + "\n".join(str(p) for p in ordered)
+        )
 
     def _load_tcm_model(self, checkpoint_path: Path) -> nn.Module:
         repo_root = Path(__file__).resolve().parent
@@ -61,49 +114,34 @@ class FrozenTCMPrior:
         from ft_transformer import get_model  # pylint: disable=import-error
 
         model = get_model(n_features=4, n_classes=9)
-        if not checkpoint_path.exists():
-            raise FileNotFoundError(f"TCM checkpoint not found: {checkpoint_path}")
-
         loaded = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
         state_dict = loaded["model_state_dict"] if isinstance(loaded, dict) and "model_state_dict" in loaded else loaded
         model.load_state_dict(state_dict, strict=False)
         return model
 
-    def _load_scaler(self, scaler_path: Path, checkpoint_path: Path):
-        candidates = [scaler_path]
-        sibling = checkpoint_path.parent / "tcm_scaler.pkl"
-        if sibling not in candidates:
-            candidates.append(sibling)
-        npz_sibling = checkpoint_path.parent / "scaler_params.npz"
-        if npz_sibling not in candidates:
-            candidates.append(npz_sibling)
+    def _load_scaler(self, scaler_path: Path):
+        try:
+            import joblib  # type: ignore
 
-        for path in candidates:
-            if not path.exists():
-                continue
-            try:
-                import joblib  # type: ignore
-
-                scaler = joblib.load(path)
-                if hasattr(scaler, "transform"):
-                    return scaler
-            except Exception:
-                pass
-            try:
-                with open(path, "rb") as f:
-                    scaler = pickle.load(f)
-                if hasattr(scaler, "transform"):
-                    return scaler
-            except Exception:
-                pass
-            try:
-                arr = np.load(path)
-                if "mean" in arr and "std" in arr:
-                    return {"mean": arr["mean"].astype(np.float32), "std": arr["std"].astype(np.float32)}
-            except Exception:
-                pass
-
-        raise FileNotFoundError(f"No valid TCM scaler found from: {candidates}")
+            scaler = joblib.load(scaler_path)
+            if hasattr(scaler, "transform"):
+                return scaler
+        except Exception:
+            pass
+        try:
+            with open(scaler_path, "rb") as f:
+                scaler = pickle.load(f)
+            if hasattr(scaler, "transform"):
+                return scaler
+        except Exception:
+            pass
+        try:
+            arr = np.load(scaler_path)
+            if "mean" in arr and "std" in arr:
+                return {"mean": arr["mean"].astype(np.float32), "std": arr["std"].astype(np.float32)}
+        except Exception:
+            pass
+        raise RuntimeError(f"Failed to load scaler content from: {scaler_path}")
 
     @torch.no_grad()
     def infer_probs(self, static_4d: torch.Tensor) -> torch.Tensor:
@@ -688,4 +726,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
