@@ -181,6 +181,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gate-a-scale", type=float, default=0.6)
     p.add_argument("--gate-b-scale", type=float, default=0.35)
     p.add_argument("--final-lr-mult", type=float, default=0.7)
+    p.add_argument("--gate-b-sweep", type=str, default="", help="Comma-separated gate_b_scale values, e.g. 0.1,0.2,0.3")
+    p.add_argument("--final-lr-mult-sweep", type=str, default="", help="Comma-separated final_lr_mult values, e.g. 0.5,0.7")
+    p.add_argument("--sweep-epochs", type=int, default=20, help="Epochs used by quick sweep trials")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -429,6 +432,19 @@ def _parse_override_params(text: str) -> HyperParams | None:
     )
 
 
+def _parse_float_list(text: str) -> List[float]:
+    s = (text or "").strip()
+    if not s:
+        return []
+    vals = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        vals.append(float(part))
+    return vals
+
+
 def _sample_hparams(rng: random.Random) -> HyperParams:
     # Conservative quick-search region for late reinjection.
     lr = 10 ** rng.uniform(np.log10(2.5e-4), np.log10(8e-4))
@@ -563,6 +579,59 @@ def main() -> None:
         paths.checkpoints / "reinjection_best_setup.json",
     )
 
+    # Optional focused sweep for Step8 stability:
+    # - gate_b_scale in a small range
+    # - final_lr_mult for head-only late stage
+    sweep_gate_b = _parse_float_list(args.gate_b_sweep)
+    sweep_lr_mult = _parse_float_list(args.final_lr_mult_sweep)
+    selected_gate_b_scale = float(args.gate_b_scale)
+    selected_final_lr_mult = float(args.final_lr_mult)
+    sweep_results: List[Dict] = []
+    if sweep_gate_b or sweep_lr_mult:
+        if not sweep_gate_b:
+            sweep_gate_b = [selected_gate_b_scale]
+        if not sweep_lr_mult:
+            sweep_lr_mult = [selected_final_lr_mult]
+        sweep_epochs = 3 if args.dry_run else max(1, int(args.sweep_epochs))
+        best_sweep_mse = float("inf")
+        print(f"[{timestamp()}] >>> Running Step8-focused sweep (epochs={sweep_epochs})", flush=True)
+        for gb in sweep_gate_b:
+            for lm in sweep_lr_mult:
+                hp = HyperParams(
+                    lr=float(best_hp.lr * max(0.1, lm)),
+                    weight_decay=float(best_hp.weight_decay),
+                    batch_size=int(best_hp.batch_size),
+                )
+                res = train_eval_step(
+                    step_name=f"Sweep-Step8-gb{gb:.3f}-lm{lm:.3f}",
+                    encoder=best_encoder,
+                    use_tcm=True,
+                    use_gate_a=True,
+                    use_gate_b=True,
+                    hparams=hp,
+                    epochs=sweep_epochs,
+                    patience=EARLY_STOPPING_PATIENCE,
+                    dataset=dataset,
+                    seed=cfg.seed + 100 + int(gb * 1000) + int(lm * 1000),
+                    device=device,
+                    tcm_prior=tcm_prior,
+                    gate_a_scale=args.gate_a_scale,
+                    gate_b_scale=float(gb),
+                )
+                mse = float(res["metrics"]["mse"])
+                sweep_results.append(
+                    {"gate_b_scale": float(gb), "final_lr_mult": float(lm), "mse": mse}
+                )
+                if mse < best_sweep_mse:
+                    best_sweep_mse = mse
+                    selected_gate_b_scale = float(gb)
+                    selected_final_lr_mult = float(lm)
+        print(
+            f"[{timestamp()}] >>> Sweep best: gate_b_scale={selected_gate_b_scale:.3f}, "
+            f"final_lr_mult={selected_final_lr_mult:.3f}, mse={best_sweep_mse:.6f}",
+            flush=True,
+        )
+
     # ---------------- Stage 3: 9-step matrix ----------------
     print(f"[{timestamp()}] >>> Stage 3: running 9-step matrix with fixed best params", flush=True)
     matrix_logs: List[Dict] = []
@@ -687,7 +756,7 @@ def main() -> None:
     matrix_logs.append({"step": 7, "name": "w/o TCM_Gate", "mse": step7["metrics"]["mse"], "full": _strip_for_json(step7)})
 
     final_hp = HyperParams(
-        lr=float(best_hp.lr * max(0.1, args.final_lr_mult)),
+        lr=float(best_hp.lr * max(0.1, selected_final_lr_mult)),
         weight_decay=float(best_hp.weight_decay),
         batch_size=int(best_hp.batch_size),
     )
@@ -707,7 +776,7 @@ def main() -> None:
         device=device,
         tcm_prior=tcm_prior,
         gate_a_scale=args.gate_a_scale,
-        gate_b_scale=args.gate_b_scale,
+        gate_b_scale=selected_gate_b_scale,
     )
     matrix_logs.append({"step": 8, "name": "Final Ours", "mse": step8["metrics"]["mse"], "full": _strip_for_json(step8)})
 
@@ -749,6 +818,10 @@ def main() -> None:
     print("\n===== Stage 2 Chosen Hyper-Parameters =====")
     print(best_hp)
     print("===========================================\n")
+    print(
+        f"Step8 tuned controls: gate_b_scale={selected_gate_b_scale:.3f}, "
+        f"final_lr_mult={selected_final_lr_mult:.3f}"
+    )
 
     print("===== Final 9-Step best_val_mse List =====")
     for row in matrix_logs:
@@ -762,6 +835,12 @@ def main() -> None:
                 for r in selection_rows
             ],
             "stage2_best_params": best_hp.__dict__,
+            "step8_controls": {
+                "gate_a_scale": args.gate_a_scale,
+                "gate_b_scale": selected_gate_b_scale,
+                "final_lr_mult": selected_final_lr_mult,
+            },
+            "step8_sweep_results": sweep_results,
             "stage3_matrix_best_val_mse": [
                 {"step": r["step"], "name": r["name"], "best_val_mse": r["mse"]}
                 for r in matrix_logs
