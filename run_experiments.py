@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
+from datetime import datetime
 
 import numpy as np
 import torch
@@ -38,6 +39,7 @@ from src.utils.plotting import plot_ablation, plot_comparison, plot_selection
 
 
 ENCODERS = ["tcn", "inceptiontime", "os-cnn", "xcm", "1d-resnet"]
+RUN_EXPERIMENTS_SIGNATURE = "RUN_EXPERIMENTS_V2_LOSO_GUARDED"
 
 
 @dataclass
@@ -188,7 +190,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--final-lr-mult", type=float, default=0.7)
     p.add_argument("--gate-b-sweep", type=str, default="", help="Comma-separated gate_b_scale values, e.g. 0.1,0.2,0.3")
     p.add_argument("--final-lr-mult-sweep", type=str, default="", help="Comma-separated final_lr_mult values, e.g. 0.5,0.7")
-    p.add_argument("--sweep-epochs", type=int, default=20, help="Epochs used by quick sweep trials")
+    p.add_argument("--sweep-epochs", type=int, default=-1, help="Epochs used by Step8 sweep; <=0 means use --epochs")
     p.add_argument("--protocol", type=str, default="loso", choices=["loso", "subject_split"])
     p.add_argument("--loso-subject", type=str, default="", help="Internal: run only one LOSO fold with this held-out subject")
     p.add_argument("--output-json", type=str, default="", help="Optional override path for fold summary json")
@@ -513,6 +515,13 @@ def _print_selection_table(selection_rows: List[Dict]) -> None:
 
 def main() -> None:
     args = parse_args()
+    runner_file = Path(__file__).resolve()
+    runner_mtime = datetime.fromtimestamp(runner_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    print(
+        f"[{timestamp()}] >>> Runner signature: {RUN_EXPERIMENTS_SIGNATURE} | "
+        f"file={runner_file} | mtime={runner_mtime}",
+        flush=True,
+    )
     paths = override_from_env(Paths())
     if args.wesad_dir:
         paths.wesad_dir = Path(args.wesad_dir)
@@ -596,6 +605,11 @@ def main() -> None:
         loso_summary["protocol"] = "loso"
         loso_summary["n_folds"] = len(fold_payloads)
         loso_summary["fold_subjects"] = unique_subjects
+        loso_summary["runner"] = {
+            "signature": RUN_EXPERIMENTS_SIGNATURE,
+            "file": str(runner_file),
+            "mtime": runner_mtime,
+        }
         out_path = Path(args.output_json) if args.output_json else (paths.results / "experiments_summary_loso.json")
         save_json(loso_summary, out_path)
         print(f"[{timestamp()}] >>> LOSO summary saved to {out_path}", flush=True)
@@ -734,7 +748,10 @@ def main() -> None:
             sweep_gate_b = [selected_gate_b_scale]
         if not sweep_lr_mult:
             sweep_lr_mult = [selected_final_lr_mult]
-        sweep_epochs = 3 if args.dry_run else max(1, int(args.sweep_epochs))
+        if args.dry_run:
+            sweep_epochs = 3
+        else:
+            sweep_epochs = cfg.epochs if int(args.sweep_epochs) <= 0 else max(1, int(args.sweep_epochs))
         best_sweep_mse = float("inf")
         print(f"[{timestamp()}] >>> Running Step8-focused sweep (epochs={sweep_epochs})", flush=True)
         for gb in sweep_gate_b:
@@ -991,6 +1008,11 @@ def main() -> None:
                 {"encoder": r["encoder"], "metrics": r["metrics"], "best_epoch": r["best_epoch"]}
                 for r in selection_rows
             ],
+            "runner": {
+                "signature": RUN_EXPERIMENTS_SIGNATURE,
+                "file": str(runner_file),
+                "mtime": runner_mtime,
+            },
             "protocol": args.protocol,
             "holdout_subject": args.loso_subject or None,
             "stage2_best_params": best_hp.__dict__,

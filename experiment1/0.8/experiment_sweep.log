@@ -1,0 +1,491 @@
+nohup: ignoring input
+[2026-04-21 13:23:22] >>> Loading WESAD dataset from /root/work/MulitiModal/data/wesad
+Subject S10: Age=28.0, Gender=1, BMI=24.0, HR=64.2
+Subject S11: Age=26.0, Gender=0, BMI=18.5, HR=63.9
+Subject S13: Age=28.0, Gender=1, BMI=25.0, HR=65.6
+Subject S14: Age=27.0, Gender=1, BMI=24.7, HR=64.9
+Subject S15: Age=28.0, Gender=1, BMI=24.0, HR=66.7
+Subject S16: Age=24.0, Gender=1, BMI=20.4, HR=63.5
+Subject S17: Age=29.0, Gender=0, BMI=20.2, HR=61.3
+Subject S2: Age=27.0, Gender=1, BMI=26.1, HR=64.6
+Subject S3: Age=27.0, Gender=1, BMI=23.1, HR=58.7
+Subject S4: Age=25.0, Gender=1, BMI=29.4, HR=60.0
+Subject S5: Age=35.0, Gender=1, BMI=22.4, HR=62.6
+Subject S6: Age=27.0, Gender=1, BMI=22.8, HR=62.9
+Subject S7: Age=28.0, Gender=1, BMI=21.9, HR=62.3
+Subject S8: Age=27.0, Gender=0, BMI=21.6, HR=64.3
+Subject S9: Age=26.0, Gender=1, BMI=22.9, HR=68.1
+[2026-04-21 13:25:03] >>> WESAD loaded. total_windows=46324
+[2026-04-21 13:25:03] >>> Gate scales: gate_a_scale=0.600, gate_b_scale=0.350
+[2026-04-21 13:25:03] >>> LOSO driver mode: 15 folds
+[2026-04-21 13:25:03] >>> LOSO fold holdout=S10
+[2026-04-21 13:25:06] >>> Loading WESAD dataset from /root/work/MulitiModal/data/wesad
+Subject S10: Age=28.0, Gender=1, BMI=24.0, HR=64.2
+Subject S11: Age=26.0, Gender=0, BMI=18.5, HR=63.9
+Subject S13: Age=28.0, Gender=1, BMI=25.0, HR=65.6
+Subject S14: Age=27.0, Gender=1, BMI=24.7, HR=64.9
+Subject S15: Age=28.0, Gender=1, BMI=24.0, HR=66.7
+Subject S16: Age=24.0, Gender=1, BMI=20.4, HR=63.5
+Subject S17: Age=29.0, Gender=0, BMI=20.2, HR=61.3
+Subject S2: Age=27.0, Gender=1, BMI=26.1, HR=64.6
+Subject S3: Age=27.0, Gender=1, BMI=23.1, HR=58.7
+Subject S4: Age=25.0, Gender=1, BMI=29.4, HR=60.0
+Subject S5: Age=35.0, Gender=1, BMI=22.4, HR=62.6
+Subject S6: Age=27.0, Gender=1, BMI=22.8, HR=62.9
+Subject S7: Age=28.0, Gender=1, BMI=21.9, HR=62.3
+Subject S8: Age=27.0, Gender=0, BMI=21.6, HR=64.3
+Subject S9: Age=26.0, Gender=1, BMI=22.9, HR=68.1
+[2026-04-21 13:25:58] >>> WESAD loaded. total_windows=46324
+[2026-04-21 13:25:58] >>> Gate scales: gate_a_scale=0.600, gate_b_scale=0.350
+[2026-04-21 13:25:58] >>> Split ready (protocol=loso): train_windows=43141 val_windows=3183 train_subjects=14 val_subjects=1
+[2026-04-21 13:25:58] >>> TCM checkpoint resolved to: /root/work/MulitiModal/checkpoints/best_model.pth
+[2026-04-21 13:25:58] >>> TCM scaler resolved to: /root/work/MulitiModal/tcm_ft_transformer/scaler_params.npz
+/usr/local/miniconda3/envs/py312/lib/python3.12/site-packages/torch/nn/modules/transformer.py:392: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+[2026-04-21 13:25:58] >>> Stage 1: backbone reselection on new architecture
+[2026-04-21 13:26:09] Stage1-Select-tcn | Epoch 1/15 train_loss=0.183736 val_mse=0.223951 best_val=0.223951 patience=0/10
+[2026-04-21 13:26:15] Stage1-Select-tcn | Epoch 2/15 train_loss=0.171463 val_mse=0.252660 best_val=0.223951 patience=1/10
+[2026-04-21 13:26:21] Stage1-Select-tcn | Epoch 3/15 train_loss=0.169029 val_mse=0.266682 best_val=0.223951 patience=2/10
+[2026-04-21 13:26:27] Stage1-Select-tcn | Epoch 4/15 train_loss=0.166483 val_mse=0.297846 best_val=0.223951 patience=3/10
+[2026-04-21 13:26:32] Stage1-Select-tcn | Epoch 5/15 train_loss=0.165669 val_mse=0.325091 best_val=0.223951 patience=4/10
+[2026-04-21 13:26:38] Stage1-Select-tcn | Epoch 6/15 train_loss=0.164982 val_mse=0.291196 best_val=0.223951 patience=5/10
+[2026-04-21 13:26:44] Stage1-Select-tcn | Epoch 7/15 train_loss=0.164231 val_mse=0.311372 best_val=0.223951 patience=6/10
+[2026-04-21 13:26:50] Stage1-Select-tcn | Epoch 8/15 train_loss=0.163700 val_mse=0.297342 best_val=0.223951 patience=7/10
+[2026-04-21 13:26:56] Stage1-Select-tcn | Epoch 9/15 train_loss=0.162575 val_mse=0.269346 best_val=0.223951 patience=8/10
+[2026-04-21 13:27:02] Stage1-Select-tcn | Epoch 10/15 train_loss=0.162148 val_mse=0.315032 best_val=0.223951 patience=9/10
+[2026-04-21 13:27:08] Stage1-Select-tcn | Epoch 11/15 train_loss=0.161544 val_mse=0.297051 best_val=0.223951 patience=10/10
+[2026-04-21 13:27:08] Stage1-Select-tcn | Early stop at epoch 11, best=1
+[2026-04-21 13:27:08] Stage1-Select-tcn DONE | MSE=0.223951 RMSE=0.473235 MAE=0.349764 Pearson=0.915422 [best_epoch=1]
+[2026-04-21 13:27:14] Stage1-Select-inceptiontime | Epoch 1/15 train_loss=0.153009 val_mse=0.270439 best_val=0.270439 patience=0/10
+[2026-04-21 13:27:21] Stage1-Select-inceptiontime | Epoch 2/15 train_loss=0.134192 val_mse=0.243973 best_val=0.243973 patience=0/10
+[2026-04-21 13:27:27] Stage1-Select-inceptiontime | Epoch 3/15 train_loss=0.127643 val_mse=0.244160 best_val=0.243973 patience=1/10
+[2026-04-21 13:27:33] Stage1-Select-inceptiontime | Epoch 4/15 train_loss=0.124441 val_mse=0.246769 best_val=0.243973 patience=2/10
+[2026-04-21 13:27:39] Stage1-Select-inceptiontime | Epoch 5/15 train_loss=0.121544 val_mse=0.202658 best_val=0.202658 patience=0/10
+[2026-04-21 13:27:45] Stage1-Select-inceptiontime | Epoch 6/15 train_loss=0.118440 val_mse=0.222347 best_val=0.202658 patience=1/10
+[2026-04-21 13:27:51] Stage1-Select-inceptiontime | Epoch 7/15 train_loss=0.115054 val_mse=0.198376 best_val=0.198376 patience=0/10
+[2026-04-21 13:27:57] Stage1-Select-inceptiontime | Epoch 8/15 train_loss=0.113987 val_mse=0.184465 best_val=0.184465 patience=0/10
+[2026-04-21 13:28:03] Stage1-Select-inceptiontime | Epoch 9/15 train_loss=0.110257 val_mse=0.181303 best_val=0.181303 patience=0/10
+[2026-04-21 13:28:09] Stage1-Select-inceptiontime | Epoch 10/15 train_loss=0.109276 val_mse=0.196425 best_val=0.181303 patience=1/10
+[2026-04-21 13:28:15] Stage1-Select-inceptiontime | Epoch 11/15 train_loss=0.105977 val_mse=0.195891 best_val=0.181303 patience=2/10
+[2026-04-21 13:28:21] Stage1-Select-inceptiontime | Epoch 12/15 train_loss=0.104855 val_mse=0.211887 best_val=0.181303 patience=3/10
+[2026-04-21 13:28:27] Stage1-Select-inceptiontime | Epoch 13/15 train_loss=0.103475 val_mse=0.230155 best_val=0.181303 patience=4/10
+[2026-04-21 13:28:33] Stage1-Select-inceptiontime | Epoch 14/15 train_loss=0.099763 val_mse=0.178107 best_val=0.178107 patience=0/10
+[2026-04-21 13:28:39] Stage1-Select-inceptiontime | Epoch 15/15 train_loss=0.099819 val_mse=0.206063 best_val=0.178107 patience=1/10
+[2026-04-21 13:28:39] Stage1-Select-inceptiontime DONE | MSE=0.178107 RMSE=0.422027 MAE=0.318991 Pearson=0.647940 [best_epoch=14]
+[2026-04-21 13:28:45] Stage1-Select-os-cnn | Epoch 1/15 train_loss=0.186322 val_mse=0.220132 best_val=0.220132 patience=0/10
+[2026-04-21 13:28:50] Stage1-Select-os-cnn | Epoch 2/15 train_loss=0.173408 val_mse=0.215791 best_val=0.215791 patience=0/10
+[2026-04-21 13:28:55] Stage1-Select-os-cnn | Epoch 3/15 train_loss=0.171603 val_mse=0.220467 best_val=0.215791 patience=1/10
+[2026-04-21 13:29:00] Stage1-Select-os-cnn | Epoch 4/15 train_loss=0.169766 val_mse=0.231559 best_val=0.215791 patience=2/10
+[2026-04-21 13:29:06] Stage1-Select-os-cnn | Epoch 5/15 train_loss=0.168548 val_mse=0.225793 best_val=0.215791 patience=3/10
+[2026-04-21 13:29:11] Stage1-Select-os-cnn | Epoch 6/15 train_loss=0.167603 val_mse=0.239139 best_val=0.215791 patience=4/10
+[2026-04-21 13:29:16] Stage1-Select-os-cnn | Epoch 7/15 train_loss=0.166934 val_mse=0.241475 best_val=0.215791 patience=5/10
+[2026-04-21 13:29:21] Stage1-Select-os-cnn | Epoch 8/15 train_loss=0.166214 val_mse=0.239960 best_val=0.215791 patience=6/10
+[2026-04-21 13:29:26] Stage1-Select-os-cnn | Epoch 9/15 train_loss=0.165020 val_mse=0.263059 best_val=0.215791 patience=7/10
+[2026-04-21 13:29:32] Stage1-Select-os-cnn | Epoch 10/15 train_loss=0.163818 val_mse=0.271446 best_val=0.215791 patience=8/10
+[2026-04-21 13:29:37] Stage1-Select-os-cnn | Epoch 11/15 train_loss=0.162565 val_mse=0.261861 best_val=0.215791 patience=9/10
+[2026-04-21 13:29:42] Stage1-Select-os-cnn | Epoch 12/15 train_loss=0.161484 val_mse=0.291691 best_val=0.215791 patience=10/10
+[2026-04-21 13:29:42] Stage1-Select-os-cnn | Early stop at epoch 12, best=2
+[2026-04-21 13:29:42] Stage1-Select-os-cnn DONE | MSE=0.215791 RMSE=0.464534 MAE=0.333364 Pearson=0.948685 [best_epoch=2]
+[2026-04-21 13:29:48] Stage1-Select-xcm | Epoch 1/15 train_loss=0.189591 val_mse=0.209337 best_val=0.209337 patience=0/10
+[2026-04-21 13:29:53] Stage1-Select-xcm | Epoch 2/15 train_loss=0.174590 val_mse=0.221854 best_val=0.209337 patience=1/10
+[2026-04-21 13:29:58] Stage1-Select-xcm | Epoch 3/15 train_loss=0.172777 val_mse=0.237114 best_val=0.209337 patience=2/10
+[2026-04-21 13:30:04] Stage1-Select-xcm | Epoch 4/15 train_loss=0.169862 val_mse=0.257755 best_val=0.209337 patience=3/10
+[2026-04-21 13:30:09] Stage1-Select-xcm | Epoch 5/15 train_loss=0.166520 val_mse=0.265222 best_val=0.209337 patience=4/10
+[2026-04-21 13:30:15] Stage1-Select-xcm | Epoch 6/15 train_loss=0.164268 val_mse=0.279723 best_val=0.209337 patience=5/10
+[2026-04-21 13:30:20] Stage1-Select-xcm | Epoch 7/15 train_loss=0.162436 val_mse=0.293495 best_val=0.209337 patience=6/10
+[2026-04-21 13:30:25] Stage1-Select-xcm | Epoch 8/15 train_loss=0.160440 val_mse=0.284394 best_val=0.209337 patience=7/10
+[2026-04-21 13:30:31] Stage1-Select-xcm | Epoch 9/15 train_loss=0.157884 val_mse=0.297479 best_val=0.209337 patience=8/10
+[2026-04-21 13:30:36] Stage1-Select-xcm | Epoch 10/15 train_loss=0.154574 val_mse=0.328222 best_val=0.209337 patience=9/10
+[2026-04-21 13:30:41] Stage1-Select-xcm | Epoch 11/15 train_loss=0.151347 val_mse=0.302097 best_val=0.209337 patience=10/10
+[2026-04-21 13:30:41] Stage1-Select-xcm | Early stop at epoch 11, best=1
+[2026-04-21 13:30:41] Stage1-Select-xcm DONE | MSE=0.209337 RMSE=0.457534 MAE=0.355041 Pearson=0.930428 [best_epoch=1]
+[2026-04-21 13:30:47] Stage1-Select-1d-resnet | Epoch 1/15 train_loss=0.164844 val_mse=0.282414 best_val=0.282414 patience=0/10
+[2026-04-21 13:30:53] Stage1-Select-1d-resnet | Epoch 2/15 train_loss=0.132760 val_mse=0.281721 best_val=0.281721 patience=0/10
+[2026-04-21 13:30:59] Stage1-Select-1d-resnet | Epoch 3/15 train_loss=0.123013 val_mse=0.277582 best_val=0.277582 patience=0/10
+[2026-04-21 13:31:05] Stage1-Select-1d-resnet | Epoch 4/15 train_loss=0.118339 val_mse=0.308223 best_val=0.277582 patience=1/10
+[2026-04-21 13:31:10] Stage1-Select-1d-resnet | Epoch 5/15 train_loss=0.114265 val_mse=0.274962 best_val=0.274962 patience=0/10
+[2026-04-21 13:31:16] Stage1-Select-1d-resnet | Epoch 6/15 train_loss=0.112380 val_mse=0.243836 best_val=0.243836 patience=0/10
+[2026-04-21 13:31:22] Stage1-Select-1d-resnet | Epoch 7/15 train_loss=0.108377 val_mse=0.231677 best_val=0.231677 patience=0/10
+[2026-04-21 13:31:28] Stage1-Select-1d-resnet | Epoch 8/15 train_loss=0.107156 val_mse=0.248168 best_val=0.231677 patience=1/10
+[2026-04-21 13:31:34] Stage1-Select-1d-resnet | Epoch 9/15 train_loss=0.104258 val_mse=0.225137 best_val=0.225137 patience=0/10
+[2026-04-21 13:31:39] Stage1-Select-1d-resnet | Epoch 10/15 train_loss=0.103319 val_mse=0.235565 best_val=0.225137 patience=1/10
+[2026-04-21 13:31:45] Stage1-Select-1d-resnet | Epoch 11/15 train_loss=0.100224 val_mse=0.211785 best_val=0.211785 patience=0/10
+[2026-04-21 13:31:51] Stage1-Select-1d-resnet | Epoch 12/15 train_loss=0.100252 val_mse=0.242447 best_val=0.211785 patience=1/10
+[2026-04-21 13:31:57] Stage1-Select-1d-resnet | Epoch 13/15 train_loss=0.097545 val_mse=0.227822 best_val=0.211785 patience=2/10
+[2026-04-21 13:32:03] Stage1-Select-1d-resnet | Epoch 14/15 train_loss=0.095687 val_mse=0.256339 best_val=0.211785 patience=3/10
+[2026-04-21 13:32:08] Stage1-Select-1d-resnet | Epoch 15/15 train_loss=0.095360 val_mse=0.198156 best_val=0.198156 patience=0/10
+[2026-04-21 13:32:09] Stage1-Select-1d-resnet DONE | MSE=0.198156 RMSE=0.445148 MAE=0.350304 Pearson=0.272200 [best_epoch=15]
+
+===== Stage1 Backbone Selection (late reinjection, full gates) =====
+Encoder           BestValMSE       RMSE        MAE    Pearson
+tcn                 0.223951   0.473235   0.349764   0.915422
+inceptiontime       0.178107   0.422027   0.318991   0.647940
+os-cnn              0.215791   0.464534   0.333364   0.948685
+xcm                 0.209337   0.457534   0.355041   0.930428
+1d-resnet           0.198156   0.445148   0.350304   0.272200
+=====================================================================
+
+[2026-04-21 13:32:09] >>> Stage 1 winner: inceptiontime (best_val_mse=0.178107)
+[2026-04-21 13:32:09] >>> Stage 2: hyper-parameter reset/tuning for encoder=inceptiontime
+[2026-04-21 13:32:09] >>> Using override params: HyperParams(lr=0.0005, weight_decay=1e-05, batch_size=32)
+[2026-04-21 13:32:09] >>> Running Step8-focused sweep (epochs=20)
+[2026-04-21 13:32:15] Sweep-Step8-gb0.100-lm0.500 | Epoch 1/20 train_loss=0.173127 val_mse=0.244604 best_val=0.244604 patience=0/10
+[2026-04-21 13:32:21] Sweep-Step8-gb0.100-lm0.500 | Epoch 2/20 train_loss=0.141818 val_mse=0.282764 best_val=0.244604 patience=1/10
+[2026-04-21 13:32:27] Sweep-Step8-gb0.100-lm0.500 | Epoch 3/20 train_loss=0.136223 val_mse=0.261649 best_val=0.244604 patience=2/10
+[2026-04-21 13:32:33] Sweep-Step8-gb0.100-lm0.500 | Epoch 4/20 train_loss=0.132227 val_mse=0.237688 best_val=0.237688 patience=0/10
+[2026-04-21 13:32:39] Sweep-Step8-gb0.100-lm0.500 | Epoch 5/20 train_loss=0.129799 val_mse=0.243890 best_val=0.237688 patience=1/10
+[2026-04-21 13:32:45] Sweep-Step8-gb0.100-lm0.500 | Epoch 6/20 train_loss=0.128537 val_mse=0.248734 best_val=0.237688 patience=2/10
+[2026-04-21 13:32:51] Sweep-Step8-gb0.100-lm0.500 | Epoch 7/20 train_loss=0.124798 val_mse=0.237478 best_val=0.237478 patience=0/10
+[2026-04-21 13:32:57] Sweep-Step8-gb0.100-lm0.500 | Epoch 8/20 train_loss=0.123330 val_mse=0.239560 best_val=0.237478 patience=1/10
+[2026-04-21 13:33:03] Sweep-Step8-gb0.100-lm0.500 | Epoch 9/20 train_loss=0.121571 val_mse=0.229822 best_val=0.229822 patience=0/10
+[2026-04-21 13:33:09] Sweep-Step8-gb0.100-lm0.500 | Epoch 10/20 train_loss=0.119686 val_mse=0.241674 best_val=0.229822 patience=1/10
+[2026-04-21 13:33:15] Sweep-Step8-gb0.100-lm0.500 | Epoch 11/20 train_loss=0.118664 val_mse=0.241093 best_val=0.229822 patience=2/10
+[2026-04-21 13:33:21] Sweep-Step8-gb0.100-lm0.500 | Epoch 12/20 train_loss=0.117094 val_mse=0.246377 best_val=0.229822 patience=3/10
+[2026-04-21 13:33:27] Sweep-Step8-gb0.100-lm0.500 | Epoch 13/20 train_loss=0.115302 val_mse=0.239547 best_val=0.229822 patience=4/10
+[2026-04-21 13:33:33] Sweep-Step8-gb0.100-lm0.500 | Epoch 14/20 train_loss=0.112821 val_mse=0.240050 best_val=0.229822 patience=5/10
+[2026-04-21 13:33:39] Sweep-Step8-gb0.100-lm0.500 | Epoch 15/20 train_loss=0.112935 val_mse=0.221657 best_val=0.221657 patience=0/10
+[2026-04-21 13:33:45] Sweep-Step8-gb0.100-lm0.500 | Epoch 16/20 train_loss=0.111698 val_mse=0.219197 best_val=0.219197 patience=0/10
+[2026-04-21 13:33:51] Sweep-Step8-gb0.100-lm0.500 | Epoch 17/20 train_loss=0.110796 val_mse=0.239678 best_val=0.219197 patience=1/10
+[2026-04-21 13:33:57] Sweep-Step8-gb0.100-lm0.500 | Epoch 18/20 train_loss=0.109985 val_mse=0.220128 best_val=0.219197 patience=2/10
+[2026-04-21 13:34:03] Sweep-Step8-gb0.100-lm0.500 | Epoch 19/20 train_loss=0.108539 val_mse=0.225810 best_val=0.219197 patience=3/10
+[2026-04-21 13:34:09] Sweep-Step8-gb0.100-lm0.500 | Epoch 20/20 train_loss=0.108728 val_mse=0.235017 best_val=0.219197 patience=4/10
+[2026-04-21 13:34:10] Sweep-Step8-gb0.100-lm0.500 DONE | MSE=0.219197 RMSE=0.468184 MAE=0.383766 Pearson=0.033997 [best_epoch=16]
+[2026-04-21 13:34:16] Sweep-Step8-gb0.100-lm0.700 | Epoch 1/20 train_loss=0.161200 val_mse=0.246502 best_val=0.246502 patience=0/10
+[2026-04-21 13:34:22] Sweep-Step8-gb0.100-lm0.700 | Epoch 2/20 train_loss=0.133417 val_mse=0.243906 best_val=0.243906 patience=0/10
+[2026-04-21 13:34:28] Sweep-Step8-gb0.100-lm0.700 | Epoch 3/20 train_loss=0.128490 val_mse=0.254660 best_val=0.243906 patience=1/10
+[2026-04-21 13:34:34] Sweep-Step8-gb0.100-lm0.700 | Epoch 4/20 train_loss=0.124530 val_mse=0.228787 best_val=0.228787 patience=0/10
+[2026-04-21 13:34:40] Sweep-Step8-gb0.100-lm0.700 | Epoch 5/20 train_loss=0.122387 val_mse=0.240831 best_val=0.228787 patience=1/10
+[2026-04-21 13:34:46] Sweep-Step8-gb0.100-lm0.700 | Epoch 6/20 train_loss=0.120564 val_mse=0.250058 best_val=0.228787 patience=2/10
+[2026-04-21 13:34:52] Sweep-Step8-gb0.100-lm0.700 | Epoch 7/20 train_loss=0.118377 val_mse=0.261659 best_val=0.228787 patience=3/10
+[2026-04-21 13:34:58] Sweep-Step8-gb0.100-lm0.700 | Epoch 8/20 train_loss=0.115444 val_mse=0.225709 best_val=0.225709 patience=0/10
+[2026-04-21 13:35:04] Sweep-Step8-gb0.100-lm0.700 | Epoch 9/20 train_loss=0.113857 val_mse=0.233871 best_val=0.225709 patience=1/10
+[2026-04-21 13:35:10] Sweep-Step8-gb0.100-lm0.700 | Epoch 10/20 train_loss=0.110702 val_mse=0.222651 best_val=0.222651 patience=0/10
+[2026-04-21 13:35:16] Sweep-Step8-gb0.100-lm0.700 | Epoch 11/20 train_loss=0.110154 val_mse=0.238207 best_val=0.222651 patience=1/10
+[2026-04-21 13:35:22] Sweep-Step8-gb0.100-lm0.700 | Epoch 12/20 train_loss=0.106985 val_mse=0.222485 best_val=0.222485 patience=0/10
+[2026-04-21 13:35:28] Sweep-Step8-gb0.100-lm0.700 | Epoch 13/20 train_loss=0.106430 val_mse=0.215835 best_val=0.215835 patience=0/10
+[2026-04-21 13:35:34] Sweep-Step8-gb0.100-lm0.700 | Epoch 14/20 train_loss=0.104388 val_mse=0.215823 best_val=0.215823 patience=0/10
+[2026-04-21 13:35:40] Sweep-Step8-gb0.100-lm0.700 | Epoch 15/20 train_loss=0.102326 val_mse=0.222787 best_val=0.215823 patience=1/10
+[2026-04-21 13:35:46] Sweep-Step8-gb0.100-lm0.700 | Epoch 16/20 train_loss=0.101283 val_mse=0.206456 best_val=0.206456 patience=0/10
+[2026-04-21 13:35:52] Sweep-Step8-gb0.100-lm0.700 | Epoch 17/20 train_loss=0.098449 val_mse=0.224276 best_val=0.206456 patience=1/10
+[2026-04-21 13:35:58] Sweep-Step8-gb0.100-lm0.700 | Epoch 18/20 train_loss=0.098254 val_mse=0.220805 best_val=0.206456 patience=2/10
+[2026-04-21 13:36:04] Sweep-Step8-gb0.100-lm0.700 | Epoch 19/20 train_loss=0.097944 val_mse=0.192005 best_val=0.192005 patience=0/10
+[2026-04-21 13:36:10] Sweep-Step8-gb0.100-lm0.700 | Epoch 20/20 train_loss=0.096342 val_mse=0.259535 best_val=0.192005 patience=1/10
+[2026-04-21 13:36:10] Sweep-Step8-gb0.100-lm0.700 DONE | MSE=0.192005 RMSE=0.438184 MAE=0.353575 Pearson=0.271685 [best_epoch=19]
+[2026-04-21 13:36:16] Sweep-Step8-gb0.200-lm0.500 | Epoch 1/20 train_loss=0.168707 val_mse=0.263498 best_val=0.263498 patience=0/10
+[2026-04-21 13:36:22] Sweep-Step8-gb0.200-lm0.500 | Epoch 2/20 train_loss=0.138058 val_mse=0.284506 best_val=0.263498 patience=1/10
+[2026-04-21 13:36:28] Sweep-Step8-gb0.200-lm0.500 | Epoch 3/20 train_loss=0.131888 val_mse=0.260671 best_val=0.260671 patience=0/10
+[2026-04-21 13:36:34] Sweep-Step8-gb0.200-lm0.500 | Epoch 4/20 train_loss=0.127481 val_mse=0.234239 best_val=0.234239 patience=0/10
+[2026-04-21 13:36:40] Sweep-Step8-gb0.200-lm0.500 | Epoch 5/20 train_loss=0.123699 val_mse=0.224337 best_val=0.224337 patience=0/10
+[2026-04-21 13:36:46] Sweep-Step8-gb0.200-lm0.500 | Epoch 6/20 train_loss=0.121634 val_mse=0.220730 best_val=0.220730 patience=0/10
+[2026-04-21 13:36:52] Sweep-Step8-gb0.200-lm0.500 | Epoch 7/20 train_loss=0.119137 val_mse=0.223731 best_val=0.220730 patience=1/10
+[2026-04-21 13:36:59] Sweep-Step8-gb0.200-lm0.500 | Epoch 8/20 train_loss=0.114809 val_mse=0.233599 best_val=0.220730 patience=2/10
+[2026-04-21 13:37:05] Sweep-Step8-gb0.200-lm0.500 | Epoch 9/20 train_loss=0.113913 val_mse=0.222594 best_val=0.220730 patience=3/10
+[2026-04-21 13:37:11] Sweep-Step8-gb0.200-lm0.500 | Epoch 10/20 train_loss=0.112617 val_mse=0.243546 best_val=0.220730 patience=4/10
+[2026-04-21 13:37:16] Sweep-Step8-gb0.200-lm0.500 | Epoch 11/20 train_loss=0.110474 val_mse=0.221143 best_val=0.220730 patience=5/10
+[2026-04-21 13:37:22] Sweep-Step8-gb0.200-lm0.500 | Epoch 12/20 train_loss=0.108056 val_mse=0.230471 best_val=0.220730 patience=6/10
+[2026-04-21 13:37:28] Sweep-Step8-gb0.200-lm0.500 | Epoch 13/20 train_loss=0.106605 val_mse=0.243331 best_val=0.220730 patience=7/10
+[2026-04-21 13:37:34] Sweep-Step8-gb0.200-lm0.500 | Epoch 14/20 train_loss=0.105625 val_mse=0.227227 best_val=0.220730 patience=8/10
+[2026-04-21 13:37:40] Sweep-Step8-gb0.200-lm0.500 | Epoch 15/20 train_loss=0.104191 val_mse=0.224725 best_val=0.220730 patience=9/10
+[2026-04-21 13:37:46] Sweep-Step8-gb0.200-lm0.500 | Epoch 16/20 train_loss=0.102761 val_mse=0.216675 best_val=0.216675 patience=0/10
+[2026-04-21 13:37:52] Sweep-Step8-gb0.200-lm0.500 | Epoch 17/20 train_loss=0.100515 val_mse=0.240786 best_val=0.216675 patience=1/10
+[2026-04-21 13:37:59] Sweep-Step8-gb0.200-lm0.500 | Epoch 18/20 train_loss=0.098463 val_mse=0.223597 best_val=0.216675 patience=2/10
+[2026-04-21 13:38:05] Sweep-Step8-gb0.200-lm0.500 | Epoch 19/20 train_loss=0.098294 val_mse=0.237605 best_val=0.216675 patience=3/10
+[2026-04-21 13:38:11] Sweep-Step8-gb0.200-lm0.500 | Epoch 20/20 train_loss=0.098204 val_mse=0.230259 best_val=0.216675 patience=4/10
+[2026-04-21 13:38:11] Sweep-Step8-gb0.200-lm0.500 DONE | MSE=0.216675 RMSE=0.465483 MAE=0.367115 Pearson=0.237299 [best_epoch=16]
+[2026-04-21 13:38:17] Sweep-Step8-gb0.200-lm0.700 | Epoch 1/20 train_loss=0.168209 val_mse=0.246590 best_val=0.246590 patience=0/10
+[2026-04-21 13:38:23] Sweep-Step8-gb0.200-lm0.700 | Epoch 2/20 train_loss=0.142968 val_mse=0.273875 best_val=0.246590 patience=1/10
+[2026-04-21 13:38:29] Sweep-Step8-gb0.200-lm0.700 | Epoch 3/20 train_loss=0.136542 val_mse=0.265228 best_val=0.246590 patience=2/10
+[2026-04-21 13:38:35] Sweep-Step8-gb0.200-lm0.700 | Epoch 4/20 train_loss=0.132594 val_mse=0.254773 best_val=0.246590 patience=3/10
+[2026-04-21 13:38:41] Sweep-Step8-gb0.200-lm0.700 | Epoch 5/20 train_loss=0.127732 val_mse=0.240425 best_val=0.240425 patience=0/10
+[2026-04-21 13:38:47] Sweep-Step8-gb0.200-lm0.700 | Epoch 6/20 train_loss=0.125562 val_mse=0.249602 best_val=0.240425 patience=1/10
+[2026-04-21 13:38:53] Sweep-Step8-gb0.200-lm0.700 | Epoch 7/20 train_loss=0.121196 val_mse=0.264071 best_val=0.240425 patience=2/10
+[2026-04-21 13:38:59] Sweep-Step8-gb0.200-lm0.700 | Epoch 8/20 train_loss=0.119885 val_mse=0.242579 best_val=0.240425 patience=3/10
+[2026-04-21 13:39:05] Sweep-Step8-gb0.200-lm0.700 | Epoch 9/20 train_loss=0.118607 val_mse=0.283848 best_val=0.240425 patience=4/10
+[2026-04-21 13:39:11] Sweep-Step8-gb0.200-lm0.700 | Epoch 10/20 train_loss=0.114576 val_mse=0.247875 best_val=0.240425 patience=5/10
+[2026-04-21 13:39:17] Sweep-Step8-gb0.200-lm0.700 | Epoch 11/20 train_loss=0.114415 val_mse=0.272855 best_val=0.240425 patience=6/10
+[2026-04-21 13:39:23] Sweep-Step8-gb0.200-lm0.700 | Epoch 12/20 train_loss=0.113661 val_mse=0.221220 best_val=0.221220 patience=0/10
+[2026-04-21 13:39:29] Sweep-Step8-gb0.200-lm0.700 | Epoch 13/20 train_loss=0.111278 val_mse=0.260228 best_val=0.221220 patience=1/10
+[2026-04-21 13:39:35] Sweep-Step8-gb0.200-lm0.700 | Epoch 14/20 train_loss=0.109846 val_mse=0.262438 best_val=0.221220 patience=2/10
+[2026-04-21 13:39:41] Sweep-Step8-gb0.200-lm0.700 | Epoch 15/20 train_loss=0.108184 val_mse=0.289529 best_val=0.221220 patience=3/10
+[2026-04-21 13:39:47] Sweep-Step8-gb0.200-lm0.700 | Epoch 16/20 train_loss=0.107766 val_mse=0.238735 best_val=0.221220 patience=4/10
+[2026-04-21 13:39:53] Sweep-Step8-gb0.200-lm0.700 | Epoch 17/20 train_loss=0.106705 val_mse=0.279157 best_val=0.221220 patience=5/10
+[2026-04-21 13:39:59] Sweep-Step8-gb0.200-lm0.700 | Epoch 18/20 train_loss=0.105143 val_mse=0.322521 best_val=0.221220 patience=6/10
+[2026-04-21 13:40:05] Sweep-Step8-gb0.200-lm0.700 | Epoch 19/20 train_loss=0.104330 val_mse=0.235665 best_val=0.221220 patience=7/10
+[2026-04-21 13:40:11] Sweep-Step8-gb0.200-lm0.700 | Epoch 20/20 train_loss=0.103328 val_mse=0.254073 best_val=0.221220 patience=8/10
+[2026-04-21 13:40:11] Sweep-Step8-gb0.200-lm0.700 DONE | MSE=0.221220 RMSE=0.470341 MAE=0.365283 Pearson=0.447374 [best_epoch=12]
+[2026-04-21 13:40:17] Sweep-Step8-gb0.300-lm0.500 | Epoch 1/20 train_loss=0.171132 val_mse=0.260830 best_val=0.260830 patience=0/10
+[2026-04-21 13:40:23] Sweep-Step8-gb0.300-lm0.500 | Epoch 2/20 train_loss=0.143228 val_mse=0.261232 best_val=0.260830 patience=1/10
+[2026-04-21 13:40:29] Sweep-Step8-gb0.300-lm0.500 | Epoch 3/20 train_loss=0.136443 val_mse=0.282692 best_val=0.260830 patience=2/10
+[2026-04-21 13:40:35] Sweep-Step8-gb0.300-lm0.500 | Epoch 4/20 train_loss=0.131376 val_mse=0.276286 best_val=0.260830 patience=3/10
+[2026-04-21 13:40:41] Sweep-Step8-gb0.300-lm0.500 | Epoch 5/20 train_loss=0.128652 val_mse=0.280017 best_val=0.260830 patience=4/10
+[2026-04-21 13:40:47] Sweep-Step8-gb0.300-lm0.500 | Epoch 6/20 train_loss=0.126550 val_mse=0.251642 best_val=0.251642 patience=0/10
+[2026-04-21 13:40:53] Sweep-Step8-gb0.300-lm0.500 | Epoch 7/20 train_loss=0.124603 val_mse=0.280534 best_val=0.251642 patience=1/10
+[2026-04-21 13:40:59] Sweep-Step8-gb0.300-lm0.500 | Epoch 8/20 train_loss=0.121430 val_mse=0.253374 best_val=0.251642 patience=2/10
+[2026-04-21 13:41:06] Sweep-Step8-gb0.300-lm0.500 | Epoch 9/20 train_loss=0.120409 val_mse=0.259873 best_val=0.251642 patience=3/10
+[2026-04-21 13:41:12] Sweep-Step8-gb0.300-lm0.500 | Epoch 10/20 train_loss=0.117370 val_mse=0.245780 best_val=0.245780 patience=0/10
+[2026-04-21 13:41:18] Sweep-Step8-gb0.300-lm0.500 | Epoch 11/20 train_loss=0.116450 val_mse=0.251578 best_val=0.245780 patience=1/10
+[2026-04-21 13:41:24] Sweep-Step8-gb0.300-lm0.500 | Epoch 12/20 train_loss=0.113978 val_mse=0.221299 best_val=0.221299 patience=0/10
+[2026-04-21 13:41:30] Sweep-Step8-gb0.300-lm0.500 | Epoch 13/20 train_loss=0.112953 val_mse=0.228670 best_val=0.221299 patience=1/10
+[2026-04-21 13:41:36] Sweep-Step8-gb0.300-lm0.500 | Epoch 14/20 train_loss=0.111144 val_mse=0.229655 best_val=0.221299 patience=2/10
+[2026-04-21 13:41:42] Sweep-Step8-gb0.300-lm0.500 | Epoch 15/20 train_loss=0.109096 val_mse=0.249936 best_val=0.221299 patience=3/10
+[2026-04-21 13:41:48] Sweep-Step8-gb0.300-lm0.500 | Epoch 16/20 train_loss=0.108442 val_mse=0.221345 best_val=0.221299 patience=4/10
+[2026-04-21 13:41:54] Sweep-Step8-gb0.300-lm0.500 | Epoch 17/20 train_loss=0.105907 val_mse=0.235780 best_val=0.221299 patience=5/10
+[2026-04-21 13:42:00] Sweep-Step8-gb0.300-lm0.500 | Epoch 18/20 train_loss=0.105438 val_mse=0.244121 best_val=0.221299 patience=6/10
+[2026-04-21 13:42:06] Sweep-Step8-gb0.300-lm0.500 | Epoch 19/20 train_loss=0.104781 val_mse=0.228096 best_val=0.221299 patience=7/10
+[2026-04-21 13:42:12] Sweep-Step8-gb0.300-lm0.500 | Epoch 20/20 train_loss=0.103391 val_mse=0.247394 best_val=0.221299 patience=8/10
+[2026-04-21 13:42:12] Sweep-Step8-gb0.300-lm0.500 DONE | MSE=0.221299 RMSE=0.470424 MAE=0.393189 Pearson=-0.201855 [best_epoch=12]
+[2026-04-21 13:42:18] Sweep-Step8-gb0.300-lm0.700 | Epoch 1/20 train_loss=0.161838 val_mse=0.274668 best_val=0.274668 patience=0/10
+[2026-04-21 13:42:24] Sweep-Step8-gb0.300-lm0.700 | Epoch 2/20 train_loss=0.138042 val_mse=0.244362 best_val=0.244362 patience=0/10
+[2026-04-21 13:42:30] Sweep-Step8-gb0.300-lm0.700 | Epoch 3/20 train_loss=0.132140 val_mse=0.273057 best_val=0.244362 patience=1/10
+[2026-04-21 13:42:37] Sweep-Step8-gb0.300-lm0.700 | Epoch 4/20 train_loss=0.127148 val_mse=0.251620 best_val=0.244362 patience=2/10
+[2026-04-21 13:42:43] Sweep-Step8-gb0.300-lm0.700 | Epoch 5/20 train_loss=0.123020 val_mse=0.224726 best_val=0.224726 patience=0/10
+[2026-04-21 13:42:49] Sweep-Step8-gb0.300-lm0.700 | Epoch 6/20 train_loss=0.120130 val_mse=0.241625 best_val=0.224726 patience=1/10
+[2026-04-21 13:42:55] Sweep-Step8-gb0.300-lm0.700 | Epoch 7/20 train_loss=0.118553 val_mse=0.218041 best_val=0.218041 patience=0/10
+[2026-04-21 13:43:01] Sweep-Step8-gb0.300-lm0.700 | Epoch 8/20 train_loss=0.115915 val_mse=0.220424 best_val=0.218041 patience=1/10
+[2026-04-21 13:43:07] Sweep-Step8-gb0.300-lm0.700 | Epoch 9/20 train_loss=0.114582 val_mse=0.249010 best_val=0.218041 patience=2/10
+[2026-04-21 13:43:13] Sweep-Step8-gb0.300-lm0.700 | Epoch 10/20 train_loss=0.111648 val_mse=0.247420 best_val=0.218041 patience=3/10
+[2026-04-21 13:43:19] Sweep-Step8-gb0.300-lm0.700 | Epoch 11/20 train_loss=0.110798 val_mse=0.215622 best_val=0.215622 patience=0/10
+[2026-04-21 13:43:25] Sweep-Step8-gb0.300-lm0.700 | Epoch 12/20 train_loss=0.109473 val_mse=0.234578 best_val=0.215622 patience=1/10
+[2026-04-21 13:43:31] Sweep-Step8-gb0.300-lm0.700 | Epoch 13/20 train_loss=0.107735 val_mse=0.214963 best_val=0.214963 patience=0/10
+[2026-04-21 13:43:37] Sweep-Step8-gb0.300-lm0.700 | Epoch 14/20 train_loss=0.105912 val_mse=0.192082 best_val=0.192082 patience=0/10
+[2026-04-21 13:43:43] Sweep-Step8-gb0.300-lm0.700 | Epoch 15/20 train_loss=0.103907 val_mse=0.255983 best_val=0.192082 patience=1/10
+[2026-04-21 13:43:49] Sweep-Step8-gb0.300-lm0.700 | Epoch 16/20 train_loss=0.102770 val_mse=0.203393 best_val=0.192082 patience=2/10
+[2026-04-21 13:43:55] Sweep-Step8-gb0.300-lm0.700 | Epoch 17/20 train_loss=0.101684 val_mse=0.240400 best_val=0.192082 patience=3/10
+[2026-04-21 13:44:01] Sweep-Step8-gb0.300-lm0.700 | Epoch 18/20 train_loss=0.099312 val_mse=0.218834 best_val=0.192082 patience=4/10
+[2026-04-21 13:44:07] Sweep-Step8-gb0.300-lm0.700 | Epoch 19/20 train_loss=0.098144 val_mse=0.216657 best_val=0.192082 patience=5/10
+[2026-04-21 13:44:13] Sweep-Step8-gb0.300-lm0.700 | Epoch 20/20 train_loss=0.098168 val_mse=0.185612 best_val=0.185612 patience=0/10
+[2026-04-21 13:44:13] Sweep-Step8-gb0.300-lm0.700 DONE | MSE=0.185612 RMSE=0.430828 MAE=0.350371 Pearson=0.383503 [best_epoch=20]
+[2026-04-21 13:44:19] Sweep-Step8-gb0.350-lm0.500 | Epoch 1/20 train_loss=0.169503 val_mse=0.233741 best_val=0.233741 patience=0/10
+[2026-04-21 13:44:25] Sweep-Step8-gb0.350-lm0.500 | Epoch 2/20 train_loss=0.139598 val_mse=0.262367 best_val=0.233741 patience=1/10
+[2026-04-21 13:44:31] Sweep-Step8-gb0.350-lm0.500 | Epoch 3/20 train_loss=0.135278 val_mse=0.270593 best_val=0.233741 patience=2/10
+[2026-04-21 13:44:37] Sweep-Step8-gb0.350-lm0.500 | Epoch 4/20 train_loss=0.132703 val_mse=0.275382 best_val=0.233741 patience=3/10
+[2026-04-21 13:44:43] Sweep-Step8-gb0.350-lm0.500 | Epoch 5/20 train_loss=0.129245 val_mse=0.263133 best_val=0.233741 patience=4/10
+[2026-04-21 13:44:49] Sweep-Step8-gb0.350-lm0.500 | Epoch 6/20 train_loss=0.128122 val_mse=0.251820 best_val=0.233741 patience=5/10
+[2026-04-21 13:44:55] Sweep-Step8-gb0.350-lm0.500 | Epoch 7/20 train_loss=0.125397 val_mse=0.266224 best_val=0.233741 patience=6/10
+[2026-04-21 13:45:01] Sweep-Step8-gb0.350-lm0.500 | Epoch 8/20 train_loss=0.123173 val_mse=0.252133 best_val=0.233741 patience=7/10
+[2026-04-21 13:45:07] Sweep-Step8-gb0.350-lm0.500 | Epoch 9/20 train_loss=0.120822 val_mse=0.240029 best_val=0.233741 patience=8/10
+[2026-04-21 13:45:13] Sweep-Step8-gb0.350-lm0.500 | Epoch 10/20 train_loss=0.119892 val_mse=0.262755 best_val=0.233741 patience=9/10
+[2026-04-21 13:45:19] Sweep-Step8-gb0.350-lm0.500 | Epoch 11/20 train_loss=0.118845 val_mse=0.225468 best_val=0.225468 patience=0/10
+[2026-04-21 13:45:25] Sweep-Step8-gb0.350-lm0.500 | Epoch 12/20 train_loss=0.118434 val_mse=0.248537 best_val=0.225468 patience=1/10
+[2026-04-21 13:45:31] Sweep-Step8-gb0.350-lm0.500 | Epoch 13/20 train_loss=0.114430 val_mse=0.232111 best_val=0.225468 patience=2/10
+[2026-04-21 13:45:37] Sweep-Step8-gb0.350-lm0.500 | Epoch 14/20 train_loss=0.113536 val_mse=0.260219 best_val=0.225468 patience=3/10
+[2026-04-21 13:45:43] Sweep-Step8-gb0.350-lm0.500 | Epoch 15/20 train_loss=0.112627 val_mse=0.268824 best_val=0.225468 patience=4/10
+[2026-04-21 13:45:49] Sweep-Step8-gb0.350-lm0.500 | Epoch 16/20 train_loss=0.111234 val_mse=0.229431 best_val=0.225468 patience=5/10
+[2026-04-21 13:45:55] Sweep-Step8-gb0.350-lm0.500 | Epoch 17/20 train_loss=0.110416 val_mse=0.219384 best_val=0.219384 patience=0/10
+[2026-04-21 13:46:01] Sweep-Step8-gb0.350-lm0.500 | Epoch 18/20 train_loss=0.109502 val_mse=0.241779 best_val=0.219384 patience=1/10
+[2026-04-21 13:46:07] Sweep-Step8-gb0.350-lm0.500 | Epoch 19/20 train_loss=0.109479 val_mse=0.247962 best_val=0.219384 patience=2/10
+[2026-04-21 13:46:13] Sweep-Step8-gb0.350-lm0.500 | Epoch 20/20 train_loss=0.108863 val_mse=0.249205 best_val=0.219384 patience=3/10
+[2026-04-21 13:46:13] Sweep-Step8-gb0.350-lm0.500 DONE | MSE=0.219384 RMSE=0.468385 MAE=0.347958 Pearson=0.404844 [best_epoch=17]
+[2026-04-21 13:46:19] Sweep-Step8-gb0.350-lm0.700 | Epoch 1/20 train_loss=0.162558 val_mse=0.257741 best_val=0.257741 patience=0/10
+[2026-04-21 13:46:25] Sweep-Step8-gb0.350-lm0.700 | Epoch 2/20 train_loss=0.135784 val_mse=0.251502 best_val=0.251502 patience=0/10
+[2026-04-21 13:46:31] Sweep-Step8-gb0.350-lm0.700 | Epoch 3/20 train_loss=0.130363 val_mse=0.241498 best_val=0.241498 patience=0/10
+[2026-04-21 13:46:37] Sweep-Step8-gb0.350-lm0.700 | Epoch 4/20 train_loss=0.126548 val_mse=0.230170 best_val=0.230170 patience=0/10
+[2026-04-21 13:46:43] Sweep-Step8-gb0.350-lm0.700 | Epoch 5/20 train_loss=0.124064 val_mse=0.246175 best_val=0.230170 patience=1/10
+[2026-04-21 13:46:49] Sweep-Step8-gb0.350-lm0.700 | Epoch 6/20 train_loss=0.122677 val_mse=0.246202 best_val=0.230170 patience=2/10
+[2026-04-21 13:46:55] Sweep-Step8-gb0.350-lm0.700 | Epoch 7/20 train_loss=0.118681 val_mse=0.232283 best_val=0.230170 patience=3/10
+[2026-04-21 13:47:01] Sweep-Step8-gb0.350-lm0.700 | Epoch 8/20 train_loss=0.118609 val_mse=0.223283 best_val=0.223283 patience=0/10
+[2026-04-21 13:47:07] Sweep-Step8-gb0.350-lm0.700 | Epoch 9/20 train_loss=0.116547 val_mse=0.231433 best_val=0.223283 patience=1/10
+[2026-04-21 13:47:13] Sweep-Step8-gb0.350-lm0.700 | Epoch 10/20 train_loss=0.114424 val_mse=0.247080 best_val=0.223283 patience=2/10
+[2026-04-21 13:47:19] Sweep-Step8-gb0.350-lm0.700 | Epoch 11/20 train_loss=0.113917 val_mse=0.300688 best_val=0.223283 patience=3/10
+[2026-04-21 13:47:25] Sweep-Step8-gb0.350-lm0.700 | Epoch 12/20 train_loss=0.112686 val_mse=0.286013 best_val=0.223283 patience=4/10
+[2026-04-21 13:47:31] Sweep-Step8-gb0.350-lm0.700 | Epoch 13/20 train_loss=0.110192 val_mse=0.263554 best_val=0.223283 patience=5/10
+[2026-04-21 13:47:37] Sweep-Step8-gb0.350-lm0.700 | Epoch 14/20 train_loss=0.109468 val_mse=0.263214 best_val=0.223283 patience=6/10
+[2026-04-21 13:47:43] Sweep-Step8-gb0.350-lm0.700 | Epoch 15/20 train_loss=0.108530 val_mse=0.273800 best_val=0.223283 patience=7/10
+[2026-04-21 13:47:49] Sweep-Step8-gb0.350-lm0.700 | Epoch 16/20 train_loss=0.107310 val_mse=0.264588 best_val=0.223283 patience=8/10
+[2026-04-21 13:47:55] Sweep-Step8-gb0.350-lm0.700 | Epoch 17/20 train_loss=0.106252 val_mse=0.284401 best_val=0.223283 patience=9/10
+[2026-04-21 13:48:02] Sweep-Step8-gb0.350-lm0.700 | Epoch 18/20 train_loss=0.103635 val_mse=0.230364 best_val=0.223283 patience=10/10
+[2026-04-21 13:48:02] Sweep-Step8-gb0.350-lm0.700 | Early stop at epoch 18, best=8
+[2026-04-21 13:48:02] Sweep-Step8-gb0.350-lm0.700 DONE | MSE=0.223283 RMSE=0.472528 MAE=0.368262 Pearson=0.398026 [best_epoch=8]
+[2026-04-21 13:48:02] >>> Sweep best: gate_b_scale=0.300, final_lr_mult=0.700, mse=0.185612
+[2026-04-21 13:48:02] >>> Stage 3: running 9-step matrix with fixed best params
+[2026-04-21 13:48:05] Step1-BaselineA-Weak | Epoch 1/50 train_loss=0.187263 val_mse=0.230672 best_val=0.230672 patience=0/10
+[2026-04-21 13:48:09] Step1-BaselineA-Weak | Epoch 2/50 train_loss=0.172119 val_mse=0.253716 best_val=0.230672 patience=1/10
+[2026-04-21 13:48:13] Step1-BaselineA-Weak | Epoch 3/50 train_loss=0.170123 val_mse=0.281593 best_val=0.230672 patience=2/10
+[2026-04-21 13:48:16] Step1-BaselineA-Weak | Epoch 4/50 train_loss=0.168734 val_mse=0.302144 best_val=0.230672 patience=3/10
+[2026-04-21 13:48:20] Step1-BaselineA-Weak | Epoch 5/50 train_loss=0.168397 val_mse=0.299966 best_val=0.230672 patience=4/10
+[2026-04-21 13:48:23] Step1-BaselineA-Weak | Epoch 6/50 train_loss=0.167698 val_mse=0.288222 best_val=0.230672 patience=5/10
+[2026-04-21 13:48:27] Step1-BaselineA-Weak | Epoch 7/50 train_loss=0.166554 val_mse=0.306667 best_val=0.230672 patience=6/10
+[2026-04-21 13:48:30] Step1-BaselineA-Weak | Epoch 8/50 train_loss=0.166329 val_mse=0.297086 best_val=0.230672 patience=7/10
+[2026-04-21 13:48:34] Step1-BaselineA-Weak | Epoch 9/50 train_loss=0.165545 val_mse=0.283036 best_val=0.230672 patience=8/10
+[2026-04-21 13:48:38] Step1-BaselineA-Weak | Epoch 10/50 train_loss=0.165520 val_mse=0.302065 best_val=0.230672 patience=9/10
+[2026-04-21 13:48:41] Step1-BaselineA-Weak | Epoch 11/50 train_loss=0.164963 val_mse=0.295039 best_val=0.230672 patience=10/10
+[2026-04-21 13:48:41] Step1-BaselineA-Weak | Early stop at epoch 11, best=1
+[2026-04-21 13:48:41] Step1-BaselineA-Weak DONE | MSE=0.230672 RMSE=0.480283 MAE=0.365914 Pearson=0.805124 [best_epoch=1]
+[2026-04-21 13:48:45] Step2-BaselineB-Strong | Epoch 1/50 train_loss=0.187147 val_mse=0.234955 best_val=0.234955 patience=0/10
+[2026-04-21 13:48:49] Step2-BaselineB-Strong | Epoch 2/50 train_loss=0.171524 val_mse=0.244459 best_val=0.234955 patience=1/10
+[2026-04-21 13:48:52] Step2-BaselineB-Strong | Epoch 3/50 train_loss=0.169922 val_mse=0.246951 best_val=0.234955 patience=2/10
+[2026-04-21 13:48:56] Step2-BaselineB-Strong | Epoch 4/50 train_loss=0.168394 val_mse=0.258145 best_val=0.234955 patience=3/10
+[2026-04-21 13:49:00] Step2-BaselineB-Strong | Epoch 5/50 train_loss=0.167581 val_mse=0.248393 best_val=0.234955 patience=4/10
+[2026-04-21 13:49:03] Step2-BaselineB-Strong | Epoch 6/50 train_loss=0.167210 val_mse=0.248028 best_val=0.234955 patience=5/10
+[2026-04-21 13:49:07] Step2-BaselineB-Strong | Epoch 7/50 train_loss=0.166518 val_mse=0.243825 best_val=0.234955 patience=6/10
+[2026-04-21 13:49:11] Step2-BaselineB-Strong | Epoch 8/50 train_loss=0.165736 val_mse=0.270142 best_val=0.234955 patience=7/10
+[2026-04-21 13:49:15] Step2-BaselineB-Strong | Epoch 9/50 train_loss=0.165869 val_mse=0.279029 best_val=0.234955 patience=8/10
+[2026-04-21 13:49:18] Step2-BaselineB-Strong | Epoch 10/50 train_loss=0.165047 val_mse=0.285750 best_val=0.234955 patience=9/10
+[2026-04-21 13:49:22] Step2-BaselineB-Strong | Epoch 11/50 train_loss=0.164295 val_mse=0.294316 best_val=0.234955 patience=10/10
+[2026-04-21 13:49:22] Step2-BaselineB-Strong | Early stop at epoch 11, best=1
+[2026-04-21 13:49:22] Step2-BaselineB-Strong DONE | MSE=0.234955 RMSE=0.484721 MAE=0.344617 Pearson=0.904708 [best_epoch=1]
+[2026-04-21 13:49:28] Step3-Ours-TCN | Epoch 1/50 train_loss=0.189157 val_mse=0.224937 best_val=0.224937 patience=0/10
+[2026-04-21 13:49:34] Step3-Ours-TCN | Epoch 2/50 train_loss=0.172791 val_mse=0.219196 best_val=0.219196 patience=0/10
+[2026-04-21 13:49:39] Step3-Ours-TCN | Epoch 3/50 train_loss=0.169208 val_mse=0.266269 best_val=0.219196 patience=1/10
+[2026-04-21 13:49:45] Step3-Ours-TCN | Epoch 4/50 train_loss=0.167417 val_mse=0.258567 best_val=0.219196 patience=2/10
+[2026-04-21 13:49:51] Step3-Ours-TCN | Epoch 5/50 train_loss=0.166841 val_mse=0.274902 best_val=0.219196 patience=3/10
+[2026-04-21 13:49:56] Step3-Ours-TCN | Epoch 6/50 train_loss=0.164809 val_mse=0.276053 best_val=0.219196 patience=4/10
+[2026-04-21 13:50:02] Step3-Ours-TCN | Epoch 7/50 train_loss=0.164261 val_mse=0.287978 best_val=0.219196 patience=5/10
+[2026-04-21 13:50:08] Step3-Ours-TCN | Epoch 8/50 train_loss=0.163080 val_mse=0.293617 best_val=0.219196 patience=6/10
+[2026-04-21 13:50:13] Step3-Ours-TCN | Epoch 9/50 train_loss=0.161240 val_mse=0.323110 best_val=0.219196 patience=7/10
+[2026-04-21 13:50:19] Step3-Ours-TCN | Epoch 10/50 train_loss=0.159895 val_mse=0.321423 best_val=0.219196 patience=8/10
+[2026-04-21 13:50:24] Step3-Ours-TCN | Epoch 11/50 train_loss=0.158917 val_mse=0.342846 best_val=0.219196 patience=9/10
+[2026-04-21 13:50:30] Step3-Ours-TCN | Epoch 12/50 train_loss=0.158051 val_mse=0.348193 best_val=0.219196 patience=10/10
+[2026-04-21 13:50:30] Step3-Ours-TCN | Early stop at epoch 12, best=2
+[2026-04-21 13:50:31] Step3-Ours-TCN DONE | MSE=0.219196 RMSE=0.468184 MAE=0.356649 Pearson=0.866617 [best_epoch=2]
+[2026-04-21 13:50:36] Step5-Ablation1-woDualGating | Epoch 1/50 train_loss=0.151130 val_mse=0.252226 best_val=0.252226 patience=0/10
+[2026-04-21 13:50:42] Step5-Ablation1-woDualGating | Epoch 2/50 train_loss=0.135420 val_mse=0.271777 best_val=0.252226 patience=1/10
+[2026-04-21 13:50:48] Step5-Ablation1-woDualGating | Epoch 3/50 train_loss=0.130150 val_mse=0.246524 best_val=0.246524 patience=0/10
+[2026-04-21 13:50:53] Step5-Ablation1-woDualGating | Epoch 4/50 train_loss=0.125865 val_mse=0.234189 best_val=0.234189 patience=0/10
+[2026-04-21 13:50:59] Step5-Ablation1-woDualGating | Epoch 5/50 train_loss=0.123516 val_mse=0.241868 best_val=0.234189 patience=1/10
+[2026-04-21 13:51:05] Step5-Ablation1-woDualGating | Epoch 6/50 train_loss=0.120999 val_mse=0.237686 best_val=0.234189 patience=2/10
+[2026-04-21 13:51:11] Step5-Ablation1-woDualGating | Epoch 7/50 train_loss=0.119134 val_mse=0.238911 best_val=0.234189 patience=3/10
+[2026-04-21 13:51:16] Step5-Ablation1-woDualGating | Epoch 8/50 train_loss=0.116217 val_mse=0.236385 best_val=0.234189 patience=4/10
+[2026-04-21 13:51:22] Step5-Ablation1-woDualGating | Epoch 9/50 train_loss=0.113450 val_mse=0.251621 best_val=0.234189 patience=5/10
+[2026-04-21 13:51:28] Step5-Ablation1-woDualGating | Epoch 10/50 train_loss=0.111922 val_mse=0.211539 best_val=0.211539 patience=0/10
+[2026-04-21 13:51:33] Step5-Ablation1-woDualGating | Epoch 11/50 train_loss=0.110416 val_mse=0.227758 best_val=0.211539 patience=1/10
+[2026-04-21 13:51:39] Step5-Ablation1-woDualGating | Epoch 12/50 train_loss=0.107321 val_mse=0.262086 best_val=0.211539 patience=2/10
+[2026-04-21 13:51:45] Step5-Ablation1-woDualGating | Epoch 13/50 train_loss=0.107110 val_mse=0.246473 best_val=0.211539 patience=3/10
+[2026-04-21 13:51:51] Step5-Ablation1-woDualGating | Epoch 14/50 train_loss=0.104308 val_mse=0.248066 best_val=0.211539 patience=4/10
+[2026-04-21 13:51:57] Step5-Ablation1-woDualGating | Epoch 15/50 train_loss=0.103340 val_mse=0.256440 best_val=0.211539 patience=5/10
+[2026-04-21 13:52:02] Step5-Ablation1-woDualGating | Epoch 16/50 train_loss=0.101616 val_mse=0.231644 best_val=0.211539 patience=6/10
+[2026-04-21 13:52:08] Step5-Ablation1-woDualGating | Epoch 17/50 train_loss=0.100515 val_mse=0.228314 best_val=0.211539 patience=7/10
+[2026-04-21 13:52:14] Step5-Ablation1-woDualGating | Epoch 18/50 train_loss=0.098957 val_mse=0.305135 best_val=0.211539 patience=8/10
+[2026-04-21 13:52:20] Step5-Ablation1-woDualGating | Epoch 19/50 train_loss=0.098926 val_mse=0.249113 best_val=0.211539 patience=9/10
+[2026-04-21 13:52:26] Step5-Ablation1-woDualGating | Epoch 20/50 train_loss=0.097073 val_mse=0.297190 best_val=0.211539 patience=10/10
+[2026-04-21 13:52:26] Step5-Ablation1-woDualGating | Early stop at epoch 20, best=10
+[2026-04-21 13:52:26] Step5-Ablation1-woDualGating DONE | MSE=0.211539 RMSE=0.459934 MAE=0.355794 Pearson=0.379462 [best_epoch=10]
+[2026-04-21 13:52:30] Step6-Ablation2-woTCMPrior | Epoch 1/50 train_loss=0.163911 val_mse=0.261737 best_val=0.261737 patience=0/10
+[2026-04-21 13:52:34] Step6-Ablation2-woTCMPrior | Epoch 2/50 train_loss=0.141707 val_mse=0.238629 best_val=0.238629 patience=0/10
+[2026-04-21 13:52:38] Step6-Ablation2-woTCMPrior | Epoch 3/50 train_loss=0.137024 val_mse=0.241190 best_val=0.238629 patience=1/10
+[2026-04-21 13:52:42] Step6-Ablation2-woTCMPrior | Epoch 4/50 train_loss=0.133364 val_mse=0.232090 best_val=0.232090 patience=0/10
+[2026-04-21 13:52:46] Step6-Ablation2-woTCMPrior | Epoch 5/50 train_loss=0.131161 val_mse=0.243412 best_val=0.232090 patience=1/10
+[2026-04-21 13:52:50] Step6-Ablation2-woTCMPrior | Epoch 6/50 train_loss=0.128769 val_mse=0.228086 best_val=0.228086 patience=0/10
+[2026-04-21 13:52:54] Step6-Ablation2-woTCMPrior | Epoch 7/50 train_loss=0.128121 val_mse=0.216116 best_val=0.216116 patience=0/10
+[2026-04-21 13:52:58] Step6-Ablation2-woTCMPrior | Epoch 8/50 train_loss=0.126156 val_mse=0.222938 best_val=0.216116 patience=1/10
+[2026-04-21 13:53:02] Step6-Ablation2-woTCMPrior | Epoch 9/50 train_loss=0.123791 val_mse=0.226140 best_val=0.216116 patience=2/10
+[2026-04-21 13:53:06] Step6-Ablation2-woTCMPrior | Epoch 10/50 train_loss=0.121899 val_mse=0.216092 best_val=0.216092 patience=0/10
+[2026-04-21 13:53:10] Step6-Ablation2-woTCMPrior | Epoch 11/50 train_loss=0.122381 val_mse=0.196159 best_val=0.196159 patience=0/10
+[2026-04-21 13:53:14] Step6-Ablation2-woTCMPrior | Epoch 12/50 train_loss=0.120437 val_mse=0.204170 best_val=0.196159 patience=1/10
+[2026-04-21 13:53:18] Step6-Ablation2-woTCMPrior | Epoch 13/50 train_loss=0.118268 val_mse=0.198888 best_val=0.196159 patience=2/10
+[2026-04-21 13:53:22] Step6-Ablation2-woTCMPrior | Epoch 14/50 train_loss=0.118544 val_mse=0.211070 best_val=0.196159 patience=3/10
+[2026-04-21 13:53:26] Step6-Ablation2-woTCMPrior | Epoch 15/50 train_loss=0.117657 val_mse=0.196770 best_val=0.196159 patience=4/10
+[2026-04-21 13:53:30] Step6-Ablation2-woTCMPrior | Epoch 16/50 train_loss=0.117195 val_mse=0.212747 best_val=0.196159 patience=5/10
+[2026-04-21 13:53:34] Step6-Ablation2-woTCMPrior | Epoch 17/50 train_loss=0.116838 val_mse=0.214087 best_val=0.196159 patience=6/10
+[2026-04-21 13:53:38] Step6-Ablation2-woTCMPrior | Epoch 18/50 train_loss=0.115146 val_mse=0.215496 best_val=0.196159 patience=7/10
+[2026-04-21 13:53:43] Step6-Ablation2-woTCMPrior | Epoch 19/50 train_loss=0.114728 val_mse=0.211567 best_val=0.196159 patience=8/10
+[2026-04-21 13:53:47] Step6-Ablation2-woTCMPrior | Epoch 20/50 train_loss=0.113493 val_mse=0.221678 best_val=0.196159 patience=9/10
+[2026-04-21 13:53:51] Step6-Ablation2-woTCMPrior | Epoch 21/50 train_loss=0.112301 val_mse=0.206328 best_val=0.196159 patience=10/10
+[2026-04-21 13:53:51] Step6-Ablation2-woTCMPrior | Early stop at epoch 21, best=11
+[2026-04-21 13:53:51] Step6-Ablation2-woTCMPrior DONE | MSE=0.196159 RMSE=0.442899 MAE=0.350269 Pearson=0.312959 [best_epoch=11]
+[2026-04-21 13:53:57] Step7-Ablation3-woTCMGate | Epoch 1/50 train_loss=0.158142 val_mse=0.261705 best_val=0.261705 patience=0/10
+[2026-04-21 13:54:02] Step7-Ablation3-woTCMGate | Epoch 2/50 train_loss=0.135624 val_mse=0.259399 best_val=0.259399 patience=0/10
+[2026-04-21 13:54:08] Step7-Ablation3-woTCMGate | Epoch 3/50 train_loss=0.127160 val_mse=0.271912 best_val=0.259399 patience=1/10
+[2026-04-21 13:54:14] Step7-Ablation3-woTCMGate | Epoch 4/50 train_loss=0.123252 val_mse=0.225665 best_val=0.225665 patience=0/10
+[2026-04-21 13:54:20] Step7-Ablation3-woTCMGate | Epoch 5/50 train_loss=0.120383 val_mse=0.226952 best_val=0.225665 patience=1/10
+[2026-04-21 13:54:26] Step7-Ablation3-woTCMGate | Epoch 6/50 train_loss=0.117463 val_mse=0.197906 best_val=0.197906 patience=0/10
+[2026-04-21 13:54:32] Step7-Ablation3-woTCMGate | Epoch 7/50 train_loss=0.115024 val_mse=0.198368 best_val=0.197906 patience=1/10
+[2026-04-21 13:54:38] Step7-Ablation3-woTCMGate | Epoch 8/50 train_loss=0.113146 val_mse=0.226099 best_val=0.197906 patience=2/10
+[2026-04-21 13:54:44] Step7-Ablation3-woTCMGate | Epoch 9/50 train_loss=0.110977 val_mse=0.221299 best_val=0.197906 patience=3/10
+[2026-04-21 13:54:50] Step7-Ablation3-woTCMGate | Epoch 10/50 train_loss=0.108319 val_mse=0.228172 best_val=0.197906 patience=4/10
+[2026-04-21 13:54:56] Step7-Ablation3-woTCMGate | Epoch 11/50 train_loss=0.106716 val_mse=0.240811 best_val=0.197906 patience=5/10
+[2026-04-21 13:55:01] Step7-Ablation3-woTCMGate | Epoch 12/50 train_loss=0.105352 val_mse=0.217178 best_val=0.197906 patience=6/10
+[2026-04-21 13:55:07] Step7-Ablation3-woTCMGate | Epoch 13/50 train_loss=0.103268 val_mse=0.268275 best_val=0.197906 patience=7/10
+[2026-04-21 13:55:13] Step7-Ablation3-woTCMGate | Epoch 14/50 train_loss=0.103776 val_mse=0.224683 best_val=0.197906 patience=8/10
+[2026-04-21 13:55:19] Step7-Ablation3-woTCMGate | Epoch 15/50 train_loss=0.100855 val_mse=0.196699 best_val=0.196699 patience=0/10
+[2026-04-21 13:55:25] Step7-Ablation3-woTCMGate | Epoch 16/50 train_loss=0.101523 val_mse=0.194375 best_val=0.194375 patience=0/10
+[2026-04-21 13:55:31] Step7-Ablation3-woTCMGate | Epoch 17/50 train_loss=0.098056 val_mse=0.263252 best_val=0.194375 patience=1/10
+[2026-04-21 13:55:37] Step7-Ablation3-woTCMGate | Epoch 18/50 train_loss=0.098065 val_mse=0.256167 best_val=0.194375 patience=2/10
+[2026-04-21 13:55:43] Step7-Ablation3-woTCMGate | Epoch 19/50 train_loss=0.096320 val_mse=0.243343 best_val=0.194375 patience=3/10
+[2026-04-21 13:55:49] Step7-Ablation3-woTCMGate | Epoch 20/50 train_loss=0.095936 val_mse=0.188819 best_val=0.188819 patience=0/10
+[2026-04-21 13:55:55] Step7-Ablation3-woTCMGate | Epoch 21/50 train_loss=0.095699 val_mse=0.189756 best_val=0.188819 patience=1/10
+[2026-04-21 13:56:01] Step7-Ablation3-woTCMGate | Epoch 22/50 train_loss=0.095348 val_mse=0.246804 best_val=0.188819 patience=2/10
+[2026-04-21 13:56:07] Step7-Ablation3-woTCMGate | Epoch 23/50 train_loss=0.093707 val_mse=0.211062 best_val=0.188819 patience=3/10
+[2026-04-21 13:56:13] Step7-Ablation3-woTCMGate | Epoch 24/50 train_loss=0.094359 val_mse=0.276024 best_val=0.188819 patience=4/10
+[2026-04-21 13:56:19] Step7-Ablation3-woTCMGate | Epoch 25/50 train_loss=0.091879 val_mse=0.292602 best_val=0.188819 patience=5/10
+[2026-04-21 13:56:24] Step7-Ablation3-woTCMGate | Epoch 26/50 train_loss=0.091210 val_mse=0.278275 best_val=0.188819 patience=6/10
+[2026-04-21 13:56:30] Step7-Ablation3-woTCMGate | Epoch 27/50 train_loss=0.091840 val_mse=0.248125 best_val=0.188819 patience=7/10
+[2026-04-21 13:56:36] Step7-Ablation3-woTCMGate | Epoch 28/50 train_loss=0.092264 val_mse=0.224826 best_val=0.188819 patience=8/10
+[2026-04-21 13:56:42] Step7-Ablation3-woTCMGate | Epoch 29/50 train_loss=0.090442 val_mse=0.242434 best_val=0.188819 patience=9/10
+[2026-04-21 13:56:48] Step7-Ablation3-woTCMGate | Epoch 30/50 train_loss=0.088166 val_mse=0.245410 best_val=0.188819 patience=10/10
+[2026-04-21 13:56:48] Step7-Ablation3-woTCMGate | Early stop at epoch 30, best=20
+[2026-04-21 13:56:48] Step7-Ablation3-woTCMGate DONE | MSE=0.188819 RMSE=0.434533 MAE=0.327744 Pearson=0.492836 [best_epoch=20]
+[2026-04-21 13:56:48] >>> Final Ours stabilized hparams: HyperParams(lr=0.00035, weight_decay=1e-05, batch_size=32)
+[2026-04-21 13:56:54] Step8-FinalOurs | Epoch 1/50 train_loss=0.156964 val_mse=0.235793 best_val=0.235793 patience=0/10
+[2026-04-21 13:57:00] Step8-FinalOurs | Epoch 2/50 train_loss=0.138401 val_mse=0.261369 best_val=0.235793 patience=1/10
+[2026-04-21 13:57:06] Step8-FinalOurs | Epoch 3/50 train_loss=0.133846 val_mse=0.261751 best_val=0.235793 patience=2/10
+[2026-04-21 13:57:12] Step8-FinalOurs | Epoch 4/50 train_loss=0.131284 val_mse=0.253520 best_val=0.235793 patience=3/10
+[2026-04-21 13:57:18] Step8-FinalOurs | Epoch 5/50 train_loss=0.128149 val_mse=0.256932 best_val=0.235793 patience=4/10
+[2026-04-21 13:57:24] Step8-FinalOurs | Epoch 6/50 train_loss=0.123914 val_mse=0.254808 best_val=0.235793 patience=5/10
+[2026-04-21 13:57:30] Step8-FinalOurs | Epoch 7/50 train_loss=0.122280 val_mse=0.236352 best_val=0.235793 patience=6/10
+[2026-04-21 13:57:36] Step8-FinalOurs | Epoch 8/50 train_loss=0.119272 val_mse=0.259115 best_val=0.235793 patience=7/10
+[2026-04-21 13:57:42] Step8-FinalOurs | Epoch 9/50 train_loss=0.117423 val_mse=0.240955 best_val=0.235793 patience=8/10
+[2026-04-21 13:57:48] Step8-FinalOurs | Epoch 10/50 train_loss=0.116501 val_mse=0.229712 best_val=0.229712 patience=0/10
+[2026-04-21 13:57:54] Step8-FinalOurs | Epoch 11/50 train_loss=0.113431 val_mse=0.216944 best_val=0.216944 patience=0/10
+[2026-04-21 13:58:00] Step8-FinalOurs | Epoch 12/50 train_loss=0.110444 val_mse=0.223396 best_val=0.216944 patience=1/10
+[2026-04-21 13:58:06] Step8-FinalOurs | Epoch 13/50 train_loss=0.109625 val_mse=0.293160 best_val=0.216944 patience=2/10
+[2026-04-21 13:58:12] Step8-FinalOurs | Epoch 14/50 train_loss=0.107568 val_mse=0.283224 best_val=0.216944 patience=3/10
+[2026-04-21 13:58:18] Step8-FinalOurs | Epoch 15/50 train_loss=0.106635 val_mse=0.230945 best_val=0.216944 patience=4/10
+[2026-04-21 13:58:24] Step8-FinalOurs | Epoch 16/50 train_loss=0.104642 val_mse=0.220261 best_val=0.216944 patience=5/10
+[2026-04-21 13:58:30] Step8-FinalOurs | Epoch 17/50 train_loss=0.102031 val_mse=0.231468 best_val=0.216944 patience=6/10
+[2026-04-21 13:58:37] Step8-FinalOurs | Epoch 18/50 train_loss=0.102093 val_mse=0.274318 best_val=0.216944 patience=7/10
+[2026-04-21 13:58:43] Step8-FinalOurs | Epoch 19/50 train_loss=0.099605 val_mse=0.232125 best_val=0.216944 patience=8/10
+[2026-04-21 13:58:49] Step8-FinalOurs | Epoch 20/50 train_loss=0.099824 val_mse=0.270487 best_val=0.216944 patience=9/10
+[2026-04-21 13:58:55] Step8-FinalOurs | Epoch 21/50 train_loss=0.099147 val_mse=0.265786 best_val=0.216944 patience=10/10
+[2026-04-21 13:58:55] Step8-FinalOurs | Early stop at epoch 21, best=11
+[2026-04-21 13:58:55] Step8-FinalOurs DONE | MSE=0.216944 RMSE=0.465773 MAE=0.393202 Pearson=-0.232069 [best_epoch=11]
+[2026-04-21 13:58:55] >>> Saved final model to /root/work/MulitiModal/checkpoints/best_model.pth
+
+===== Stage 2 Chosen Hyper-Parameters =====
+HyperParams(lr=0.0005, weight_decay=1e-05, batch_size=32)
+===========================================
+
+Step8 tuned controls: gate_b_scale=0.300, final_lr_mult=0.700
+===== Final 9-Step best_val_mse List =====
+Step 1: Baseline A -> best_val_mse=0.2306719571352005
+Step 2: Baseline B -> best_val_mse=0.2349548488855362
+Step 3: Ours-TCN -> best_val_mse=0.2191963493824005
+Step 4: Encoder Selection -> best_val_mse=0.17810653150081635
+Step 5: w/o Dual Gating -> best_val_mse=0.21153949201107025
+Step 6: w/o TCM Prior -> best_val_mse=0.19615916907787323
+Step 7: w/o TCM_Gate -> best_val_mse=0.18881858885288239
+Step 8: Final Ours -> best_val_mse=0.21694406867027283
+Step 9: Plotting -> best_val_mse=None
+===========================================
+[2026-04-21 13:58:56] >>> Experiment flow completed. Summary saved to /root/work/MulitiModal/results/loso_folds/experiments_summary_S10.json
+[2026-04-21 13:58:59] >>> LOSO fold holdout=S11
+[2026-04-21 13:59:03] >>> Loading WESAD dataset from /root/work/MulitiModal/data/wesad
+Subject S10: Age=28.0, Gender=1, BMI=24.0, HR=64.2
+Subject S11: Age=26.0, Gender=0, BMI=18.5, HR=63.9
+Subject S13: Age=28.0, Gender=1, BMI=25.0, HR=65.6
+Subject S14: Age=27.0, Gender=1, BMI=24.7, HR=64.9
+Subject S15: Age=28.0, Gender=1, BMI=24.0, HR=66.7
+Subject S16: Age=24.0, Gender=1, BMI=20.4, HR=63.5
+Subject S17: Age=29.0, Gender=0, BMI=20.2, HR=61.3
+Subject S2: Age=27.0, Gender=1, BMI=26.1, HR=64.6
+Subject S3: Age=27.0, Gender=1, BMI=23.1, HR=58.7
+Subject S4: Age=25.0, Gender=1, BMI=29.4, HR=60.0
+Subject S5: Age=35.0, Gender=1, BMI=22.4, HR=62.6
+Subject S6: Age=27.0, Gender=1, BMI=22.8, HR=62.9
+Subject S7: Age=28.0, Gender=1, BMI=21.9, HR=62.3
+Subject S8: Age=27.0, Gender=0, BMI=21.6, HR=64.3
+Subject S9: Age=26.0, Gender=1, BMI=22.9, HR=68.1
+[2026-04-21 13:59:56] >>> WESAD loaded. total_windows=46324
+[2026-04-21 13:59:56] >>> Gate scales: gate_a_scale=0.600, gate_b_scale=0.350
+[2026-04-21 13:59:56] >>> Split ready (protocol=loso): train_windows=43211 val_windows=3113 train_subjects=14 val_subjects=1
+[2026-04-21 13:59:56] >>> TCM checkpoint resolved to: /root/work/MulitiModal/checkpoints/best_model.pth
+[2026-04-21 13:59:56] >>> TCM scaler resolved to: /root/work/MulitiModal/tcm_ft_transformer/scaler_params.npz
+/usr/local/miniconda3/envs/py312/lib/python3.12/site-packages/torch/nn/modules/transformer.py:392: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+[2026-04-21 13:59:56] >>> Stage 1: backbone reselection on new architecture
+[2026-04-21 14:00:04] Stage1-Select-tcn | Epoch 1/15 train_loss=0.185441 val_mse=0.193521 best_val=0.193521 patience=0/10
+[2026-04-21 14:00:10] Stage1-Select-tcn | Epoch 2/15 train_loss=0.173486 val_mse=0.194551 best_val=0.193521 patience=1/10
+[2026-04-21 14:00:16] Stage1-Select-tcn | Epoch 3/15 train_loss=0.172466 val_mse=0.202926 best_val=0.193521 patience=2/10
+[2026-04-21 14:00:22] Stage1-Select-tcn | Epoch 4/15 train_loss=0.170745 val_mse=0.201090 best_val=0.193521 patience=3/10
+[2026-04-21 14:00:28] Stage1-Select-tcn | Epoch 5/15 train_loss=0.169659 val_mse=0.199894 best_val=0.193521 patience=4/10
+[2026-04-21 14:00:34] Stage1-Select-tcn | Epoch 6/15 train_loss=0.169316 val_mse=0.203125 best_val=0.193521 patience=5/10
