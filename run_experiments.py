@@ -27,7 +27,11 @@ from src.config import (
     override_from_env,
     resolve_device,
 )
-from src.data_loader import WESADDataset, make_train_val_loaders
+from src.data_loader import (
+    WESADDataset,
+    make_loaders_from_indices,
+    make_subject_level_split_indices,
+)
 from src.utils import regression_metrics, save_json, set_seed, timestamp, to_numpy
 from src.utils.plotting import plot_ablation, plot_comparison, plot_selection
 
@@ -265,13 +269,21 @@ def train_eval_step(
     epochs: int,
     patience: int,
     dataset: WESADDataset,
+    train_indices: List[int],
+    val_indices: List[int],
     seed: int,
     device: str,
     tcm_prior: FrozenTCMPrior,
     gate_a_scale: float,
     gate_b_scale: float,
 ) -> Dict:
-    train_loader, val_loader = make_train_val_loaders(dataset, batch_size=hparams.batch_size, seed=seed)
+    train_loader, val_loader = make_loaders_from_indices(
+        dataset,
+        train_indices,
+        val_indices,
+        batch_size=hparams.batch_size,
+        seed=seed,
+    )
     model = OPLRIRegressor(encoder_name=encoder, use_gate_a=True, use_gate_b=True).to(device)
     _freeze_non_head(model)
     optimizer = torch.optim.AdamW(model.reg_head.parameters(), lr=hparams.lr, weight_decay=hparams.weight_decay)
@@ -485,6 +497,18 @@ def main() -> None:
         f"[{timestamp()}] >>> Gate scales: gate_a_scale={args.gate_a_scale:.3f}, gate_b_scale={args.gate_b_scale:.3f}",
         flush=True,
     )
+    train_indices, val_indices = make_subject_level_split_indices(dataset, val_ratio=0.2, seed=cfg.seed)
+    train_subjects = {dataset.sample_subject_ids[i] for i in train_indices}
+    val_subjects = {dataset.sample_subject_ids[i] for i in val_indices}
+    overlap_subjects = train_subjects.intersection(val_subjects)
+    if overlap_subjects:
+        raise RuntimeError(f"Subject-level split leakage detected: {sorted(overlap_subjects)}")
+    print(
+        f"[{timestamp()}] >>> Subject-level split fixed: "
+        f"train_windows={len(train_indices)} val_windows={len(val_indices)} "
+        f"train_subjects={len(train_subjects)} val_subjects={len(val_subjects)}",
+        flush=True,
+    )
 
     tcm_prior = FrozenTCMPrior(Path(args.tcm_checkpoint), Path(args.tcm_scaler), device)
 
@@ -507,6 +531,8 @@ def main() -> None:
             epochs=stage1_epochs,
             patience=EARLY_STOPPING_PATIENCE,
             dataset=dataset,
+            train_indices=train_indices,
+            val_indices=val_indices,
             seed=cfg.seed,
             device=device,
             tcm_prior=tcm_prior,
@@ -553,6 +579,8 @@ def main() -> None:
                 epochs=search_epochs,
                 patience=EARLY_STOPPING_PATIENCE,
                 dataset=dataset,
+                train_indices=train_indices,
+                val_indices=val_indices,
                 seed=cfg.seed + t,
                 device=device,
                 tcm_prior=tcm_prior,
@@ -612,6 +640,8 @@ def main() -> None:
                     epochs=sweep_epochs,
                     patience=EARLY_STOPPING_PATIENCE,
                     dataset=dataset,
+                    train_indices=train_indices,
+                    val_indices=val_indices,
                     seed=cfg.seed + 100 + int(gb * 1000) + int(lm * 1000),
                     device=device,
                     tcm_prior=tcm_prior,
@@ -664,6 +694,8 @@ def main() -> None:
         epochs=cfg.epochs,
         patience=EARLY_STOPPING_PATIENCE,
         dataset=dataset,
+        train_indices=train_indices,
+        val_indices=val_indices,
         seed=cfg.seed + 1,
         device=device,
         tcm_prior=tcm_prior,
@@ -682,6 +714,8 @@ def main() -> None:
         epochs=cfg.epochs,
         patience=EARLY_STOPPING_PATIENCE,
         dataset=dataset,
+        train_indices=train_indices,
+        val_indices=val_indices,
         seed=cfg.seed + 2,
         device=device,
         tcm_prior=tcm_prior,
@@ -711,6 +745,8 @@ def main() -> None:
         epochs=cfg.epochs,
         patience=EARLY_STOPPING_PATIENCE,
         dataset=dataset,
+        train_indices=train_indices,
+        val_indices=val_indices,
         seed=cfg.seed + 3,
         device=device,
         tcm_prior=tcm_prior,
@@ -729,6 +765,8 @@ def main() -> None:
         epochs=cfg.epochs,
         patience=EARLY_STOPPING_PATIENCE,
         dataset=dataset,
+        train_indices=train_indices,
+        val_indices=val_indices,
         seed=cfg.seed + 4,
         device=device,
         tcm_prior=tcm_prior,
@@ -747,6 +785,8 @@ def main() -> None:
         epochs=cfg.epochs,
         patience=EARLY_STOPPING_PATIENCE,
         dataset=dataset,
+        train_indices=train_indices,
+        val_indices=val_indices,
         seed=cfg.seed + 5,
         device=device,
         tcm_prior=tcm_prior,
@@ -772,6 +812,8 @@ def main() -> None:
         epochs=cfg.epochs,
         patience=EARLY_STOPPING_PATIENCE,
         dataset=dataset,
+        train_indices=train_indices,
+        val_indices=val_indices,
         seed=cfg.seed + 6,
         device=device,
         tcm_prior=tcm_prior,

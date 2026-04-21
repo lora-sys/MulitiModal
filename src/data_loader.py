@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Dataset, random_split
+from torch.utils.data import DataLoader, Dataset, Subset, random_split
 
 from src.config import FEATURE_BASELINES, WESAD_LABEL_MAP
 
@@ -233,6 +233,7 @@ class Sample:
     dynamic: np.ndarray  # [2, 1000]
     static: np.ndarray  # [4] -> [Age, Gender, BMI, HeartRate]
     target: float
+    subject_id: str = ""
 
 
 class WESADDataset(Dataset):
@@ -251,6 +252,7 @@ class WESADDataset(Dataset):
         use_tcm: bool = True,
     ):
         self.samples: List[Sample] = []
+        self.sample_subject_ids: List[str] = []
         self.window_size = window_size
         self.stride = compute_stride(window_size, overlap)
         self.use_tcm = bool(use_tcm)
@@ -338,7 +340,8 @@ class WESADDataset(Dataset):
                 eda_w = eda[start:end]
                 static = static_4d.copy()
                 dyn = np.stack([ecg_w, eda_w], axis=0).astype(np.float32)
-                self.samples.append(Sample(dynamic=dyn, static=static, target=float(target)))
+                self.samples.append(Sample(dynamic=dyn, static=static, target=float(target), subject_id=subject_name))
+                self.sample_subject_ids.append(subject_name)
 
     def _build_from_mat(self, wesad_dir: Path) -> None:
         if loadmat is None:
@@ -384,7 +387,9 @@ class WESADDataset(Dataset):
                 hr = estimate_hr_from_ecg(ecg_w)
                 static = np.array([35.0, 1.0, FEATURE_BASELINES["bmi"], hr], dtype=np.float32)
                 dyn = np.stack([ecg_w, eda_w], axis=0).astype(np.float32)
-                self.samples.append(Sample(dynamic=dyn, static=static, target=float(target)))
+                subj = mat_path.stem if mat_path.stem else "mat_subject"
+                self.samples.append(Sample(dynamic=dyn, static=static, target=float(target), subject_id=subj))
+                self.sample_subject_ids.append(subj)
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -697,5 +702,58 @@ def make_train_val_loaders(dataset: Dataset, batch_size: int, val_ratio: float =
         generator=torch.Generator().manual_seed(seed),
     )
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+    return train_loader, val_loader
+
+
+def make_subject_level_split_indices(dataset: Dataset, val_ratio: float = 0.2, seed: int = 42) -> Tuple[List[int], List[int]]:
+    """
+    Subject-level split for rigor:
+    - no subject overlap between train/val
+    - deterministic by seed
+    Falls back to random window-level split when subject ids are unavailable.
+    """
+    n_total = len(dataset)
+    subject_ids = getattr(dataset, "sample_subject_ids", None)
+    if not subject_ids or len(subject_ids) != n_total:
+        all_idx = list(range(n_total))
+        rng = np.random.default_rng(seed)
+        rng.shuffle(all_idx)
+        n_val = max(1, int(n_total * val_ratio))
+        val_idx = all_idx[:n_val]
+        train_idx = all_idx[n_val:]
+        return train_idx, val_idx
+
+    unique_subjects = sorted(set(subject_ids))
+    rng = np.random.default_rng(seed)
+    rng.shuffle(unique_subjects)
+    n_val_subj = max(1, int(len(unique_subjects) * val_ratio))
+    val_subjects = set(unique_subjects[:n_val_subj])
+    train_idx, val_idx = [], []
+    for i, sid in enumerate(subject_ids):
+        if sid in val_subjects:
+            val_idx.append(i)
+        else:
+            train_idx.append(i)
+    if not train_idx or not val_idx:
+        raise RuntimeError("Subject-level split failed: empty train or val subset.")
+    return train_idx, val_idx
+
+
+def make_loaders_from_indices(
+    dataset: Dataset,
+    train_idx: List[int],
+    val_idx: List[int],
+    batch_size: int,
+    seed: int = 42,
+) -> Tuple[DataLoader, DataLoader]:
+    train_ds = Subset(dataset, train_idx)
+    val_ds = Subset(dataset, val_idx)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        generator=torch.Generator().manual_seed(seed),
+    )
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
     return train_loader, val_loader
