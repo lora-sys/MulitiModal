@@ -5,6 +5,7 @@ import argparse
 import json
 import pickle
 import random
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -188,6 +189,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gate-b-sweep", type=str, default="", help="Comma-separated gate_b_scale values, e.g. 0.1,0.2,0.3")
     p.add_argument("--final-lr-mult-sweep", type=str, default="", help="Comma-separated final_lr_mult values, e.g. 0.5,0.7")
     p.add_argument("--sweep-epochs", type=int, default=20, help="Epochs used by quick sweep trials")
+    p.add_argument("--protocol", type=str, default="loso", choices=["loso", "subject_split"])
+    p.add_argument("--loso-subject", type=str, default="", help="Internal: run only one LOSO fold with this held-out subject")
+    p.add_argument("--output-json", type=str, default="", help="Optional override path for fold summary json")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -457,6 +461,39 @@ def _parse_float_list(text: str) -> List[float]:
     return vals
 
 
+def _summarize_loso(fold_payloads: List[Dict]) -> Dict:
+    per_step: Dict[int, List[float]] = {}
+    name_map: Dict[int, str] = {}
+    for payload in fold_payloads:
+        for row in payload.get("stage3_matrix_best_val_mse", []):
+            step = int(row["step"])
+            val = row["best_val_mse"]
+            name_map[step] = row["name"]
+            if val is None:
+                continue
+            per_step.setdefault(step, []).append(float(val))
+
+    summary_rows = []
+    for step in sorted(name_map):
+        vals = per_step.get(step, [])
+        if not vals:
+            summary_rows.append(
+                {"step": step, "name": name_map[step], "mean_best_val_mse": None, "std_best_val_mse": None, "n_folds": 0}
+            )
+        else:
+            arr = np.asarray(vals, dtype=np.float64)
+            summary_rows.append(
+                {
+                    "step": step,
+                    "name": name_map[step],
+                    "mean_best_val_mse": float(arr.mean()),
+                    "std_best_val_mse": float(arr.std(ddof=0)),
+                    "n_folds": int(arr.size),
+                }
+            )
+    return {"loso_stage3_summary": summary_rows}
+
+
 def _sample_hparams(rng: random.Random) -> HyperParams:
     # Conservative quick-search region for late reinjection.
     lr = 10 ** rng.uniform(np.log10(2.5e-4), np.log10(8e-4))
@@ -497,14 +534,91 @@ def main() -> None:
         f"[{timestamp()}] >>> Gate scales: gate_a_scale={args.gate_a_scale:.3f}, gate_b_scale={args.gate_b_scale:.3f}",
         flush=True,
     )
-    train_indices, val_indices = make_subject_level_split_indices(dataset, val_ratio=0.2, seed=cfg.seed)
+    if args.protocol == "loso" and not args.loso_subject:
+        unique_subjects = sorted(set(dataset.sample_subject_ids))
+        print(f"[{timestamp()}] >>> LOSO driver mode: {len(unique_subjects)} folds", flush=True)
+        fold_dir = paths.results / "loso_folds"
+        fold_dir.mkdir(parents=True, exist_ok=True)
+        fold_payloads: List[Dict] = []
+        for sid in unique_subjects:
+            fold_out = fold_dir / f"experiments_summary_{sid}.json"
+            cmd = [
+                "python3",
+                "-u",
+                "run_experiments.py",
+                "--protocol",
+                "loso",
+                "--loso-subject",
+                sid,
+                "--output-json",
+                str(fold_out),
+                "--epochs",
+                str(args.epochs),
+                "--selection-epochs",
+                str(args.selection_epochs),
+                "--search-epochs",
+                str(args.search_epochs),
+                "--search-trials",
+                str(args.search_trials),
+                "--device",
+                str(args.device),
+                "--tcm-checkpoint",
+                str(args.tcm_checkpoint),
+                "--tcm-scaler",
+                str(args.tcm_scaler),
+                "--override-params",
+                str(args.override_params),
+                "--gate-a-scale",
+                str(args.gate_a_scale),
+                "--gate-b-scale",
+                str(args.gate_b_scale),
+                "--final-lr-mult",
+                str(args.final_lr_mult),
+                "--gate-b-sweep",
+                str(args.gate_b_sweep),
+                "--final-lr-mult-sweep",
+                str(args.final_lr_mult_sweep),
+                "--sweep-epochs",
+                str(args.sweep_epochs),
+            ]
+            if args.wesad_dir:
+                cmd.extend(["--wesad-dir", str(args.wesad_dir)])
+            if args.skip_fast_search:
+                cmd.append("--skip-fast-search")
+            if args.dry_run:
+                cmd.append("--dry-run")
+            print(f"[{timestamp()}] >>> LOSO fold holdout={sid}", flush=True)
+            subprocess.run(cmd, check=True)
+            with open(fold_out, "r", encoding="utf-8") as f:
+                fold_payloads.append(json.load(f))
+
+        loso_summary = _summarize_loso(fold_payloads)
+        loso_summary["protocol"] = "loso"
+        loso_summary["n_folds"] = len(fold_payloads)
+        loso_summary["fold_subjects"] = unique_subjects
+        out_path = Path(args.output_json) if args.output_json else (paths.results / "experiments_summary_loso.json")
+        save_json(loso_summary, out_path)
+        print(f"[{timestamp()}] >>> LOSO summary saved to {out_path}", flush=True)
+        return
+
+    if args.protocol == "loso":
+        holdout = args.loso_subject.strip()
+        if not holdout:
+            raise RuntimeError("LOSO single-fold mode requires --loso-subject")
+        train_indices = [i for i, sid in enumerate(dataset.sample_subject_ids) if sid != holdout]
+        val_indices = [i for i, sid in enumerate(dataset.sample_subject_ids) if sid == holdout]
+        if not train_indices or not val_indices:
+            raise RuntimeError(f"Invalid LOSO holdout subject: {holdout}")
+    else:
+        train_indices, val_indices = make_subject_level_split_indices(dataset, val_ratio=0.2, seed=cfg.seed)
+
     train_subjects = {dataset.sample_subject_ids[i] for i in train_indices}
     val_subjects = {dataset.sample_subject_ids[i] for i in val_indices}
     overlap_subjects = train_subjects.intersection(val_subjects)
     if overlap_subjects:
         raise RuntimeError(f"Subject-level split leakage detected: {sorted(overlap_subjects)}")
     print(
-        f"[{timestamp()}] >>> Subject-level split fixed: "
+        f"[{timestamp()}] >>> Split ready (protocol={args.protocol}): "
         f"train_windows={len(train_indices)} val_windows={len(val_indices)} "
         f"train_subjects={len(train_subjects)} val_subjects={len(val_subjects)}",
         flush=True,
@@ -676,6 +790,8 @@ def main() -> None:
         epochs=cfg.epochs,
         patience=EARLY_STOPPING_PATIENCE,
         dataset=dataset,
+        train_indices=train_indices,
+        val_indices=val_indices,
         seed=cfg.seed,
         device=device,
         tcm_prior=tcm_prior,
@@ -870,12 +986,13 @@ def main() -> None:
         print(f"Step {row['step']}: {row['name']} -> best_val_mse={row['mse']}")
     print("===========================================")
 
-    save_json(
-        {
+    summary_payload = {
             "stage1_selection_table": [
                 {"encoder": r["encoder"], "metrics": r["metrics"], "best_epoch": r["best_epoch"]}
                 for r in selection_rows
             ],
+            "protocol": args.protocol,
+            "holdout_subject": args.loso_subject or None,
             "stage2_best_params": best_hp.__dict__,
             "step8_controls": {
                 "gate_a_scale": args.gate_a_scale,
@@ -888,10 +1005,10 @@ def main() -> None:
                 for r in matrix_logs
             ],
             "matrix_logs": matrix_logs,
-        },
-        paths.results / "experiments_summary.json",
-    )
-    print(f"[{timestamp()}] >>> Experiment flow completed. Summary saved to {paths.results / 'experiments_summary.json'}")
+        }
+    summary_path = Path(args.output_json) if args.output_json else (paths.results / "experiments_summary.json")
+    save_json(summary_payload, summary_path)
+    print(f"[{timestamp()}] >>> Experiment flow completed. Summary saved to {summary_path}")
 
 
 if __name__ == "__main__":
