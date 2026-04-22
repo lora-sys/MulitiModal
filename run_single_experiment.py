@@ -33,6 +33,7 @@ class FrozenTCMPrior:
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad = False
+        self._probs_cache: Dict[bytes, torch.Tensor] = {}
 
     def _load_tcm_model(self, checkpoint_path: Path) -> nn.Module:
         repo_root = Path(__file__).resolve().parent
@@ -64,13 +65,34 @@ class FrozenTCMPrior:
     def infer_probs(self, static_4d: torch.Tensor) -> torch.Tensor:
         # 铁律 2: 特征顺序必须严格 [Age, Gender, BMI, HeartRate]
         x = static_4d[:, :4].detach().cpu().numpy().astype(np.float32)
-        x_scaled = self.scaler.transform(x).astype(np.float32)
-        x_scaled_t = torch.from_numpy(x_scaled).to(self.device)
+        x_key = np.round(x, 4).astype(np.float32)
+        cached: list[torch.Tensor | None] = [None] * x_key.shape[0]
+        miss_rows = []
+        miss_idx = []
+        for i in range(x_key.shape[0]):
+            k = x_key[i].tobytes()
+            v = self._probs_cache.get(k)
+            if v is None:
+                miss_rows.append(x[i])
+                miss_idx.append(i)
+            else:
+                cached[i] = v
 
-        # 铁律 3: TCM推理必须 no_grad + eval
-        self.model.eval()
-        probs = self.model(x_scaled_t)  # [B, 9]
-        return probs
+        if miss_rows:
+            x_miss = np.stack(miss_rows, axis=0).astype(np.float32)
+            x_scaled = self.scaler.transform(x_miss).astype(np.float32)
+            x_scaled_t = torch.from_numpy(x_scaled).to(self.device)
+            self.model.eval()
+            probs_miss = self.model(x_scaled_t)  # [M, 9]
+            for j, i in enumerate(miss_idx):
+                k = x_key[i].tobytes()
+                v = probs_miss[j].detach()
+                self._probs_cache[k] = v
+                cached[i] = v
+
+        if any(t is None for t in cached):
+            raise RuntimeError("TCM probs cache internal error: missing entries after inference.")
+        return torch.stack([t.to(self.device) for t in cached], dim=0)
 
 
 def _unpack_batch(batch, device: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:

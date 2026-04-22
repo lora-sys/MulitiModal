@@ -66,6 +66,8 @@ class FrozenTCMPrior:
         self.model.eval()
         for p in self.model.parameters():
             p.requires_grad = False
+        # Cache by static_4d (subject-level constant in WESAD) to avoid repeated TCM forward.
+        self._probs_cache: Dict[bytes, torch.Tensor] = {}
 
     def _resolve_checkpoint_path(self, checkpoint_path: Path) -> Path:
         candidates = [
@@ -153,24 +155,44 @@ class FrozenTCMPrior:
     @torch.no_grad()
     def infer_probs(self, static_4d: torch.Tensor) -> torch.Tensor:
         x = static_4d[:, :4].detach().cpu().numpy().astype(np.float32)
-        if isinstance(self.scaler, dict):
-            mean = np.asarray(self.scaler["mean"], dtype=np.float32)
-            std = np.asarray(self.scaler["std"], dtype=np.float32)
-            if mean.shape[0] >= 4:
-                mean = mean[:4]
-            if std.shape[0] >= 4:
-                std = std[:4]
-            std = np.where(std == 0, 1.0, std)
-            x_scaled = (x - mean) / std
-        else:
-            x_scaled = self.scaler.transform(x).astype(np.float32)
-            if x_scaled.shape[1] >= 4:
-                x_scaled = x_scaled[:, :4]
+        x_key = np.round(x, 4).astype(np.float32)
 
-        x_scaled_t = torch.from_numpy(x_scaled.astype(np.float32)).to(self.device)
-        self.model.eval()
-        probs = self.model(x_scaled_t)  # [B, 9]
-        return probs
+        cached: List[torch.Tensor | None] = [None] * x_key.shape[0]
+        miss_rows: List[np.ndarray] = []
+        miss_idx: List[int] = []
+        for i in range(x_key.shape[0]):
+            k = x_key[i].tobytes()
+            v = self._probs_cache.get(k)
+            if v is None:
+                miss_rows.append(x[i])
+                miss_idx.append(i)
+            else:
+                cached[i] = v
+
+        if miss_rows:
+            x_miss = np.stack(miss_rows, axis=0).astype(np.float32)
+            if isinstance(self.scaler, dict):
+                mean = np.asarray(self.scaler["mean"], dtype=np.float32)[:4]
+                std = np.asarray(self.scaler["std"], dtype=np.float32)[:4]
+                std = np.where(std == 0, 1.0, std)
+                x_scaled = (x_miss - mean) / std
+            else:
+                x_scaled = self.scaler.transform(x_miss).astype(np.float32)
+                if x_scaled.shape[1] >= 4:
+                    x_scaled = x_scaled[:, :4]
+
+            x_scaled_t = torch.from_numpy(x_scaled.astype(np.float32)).to(self.device)
+            self.model.eval()
+            probs_miss = self.model(x_scaled_t)  # [M, 9]
+            for j, i in enumerate(miss_idx):
+                k = x_key[i].tobytes()
+                v = probs_miss[j].detach()
+                self._probs_cache[k] = v
+                cached[i] = v
+
+        if any(t is None for t in cached):
+            raise RuntimeError("TCM probs cache internal error: missing entries after inference.")
+        return torch.stack([t.to(self.device) for t in cached], dim=0)
 
 
 def parse_args() -> argparse.Namespace:
@@ -195,6 +217,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--loso-subject", type=str, default="", help="Internal: run only one LOSO fold with this held-out subject")
     p.add_argument("--output-json", type=str, default="", help="Optional override path for fold summary json")
     p.add_argument("--cross-attention", action="store_true", help="Use cross-attention to replace linear Gate A")
+    p.add_argument("--fixed-encoder", type=str, default="", choices=[""] + ENCODERS, help="Fix encoder and skip Stage1 selection.")
+    p.add_argument("--no-fold-search", action="store_true", help="Disable Stage2 per-fold hyperparam search; use override/default only.")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -604,6 +628,12 @@ def main() -> None:
             ]
             if args.wesad_dir:
                 cmd.extend(["--wesad-dir", str(args.wesad_dir)])
+            if args.cross_attention:
+                cmd.append("--cross-attention")
+            if args.fixed_encoder:
+                cmd.extend(["--fixed-encoder", str(args.fixed_encoder)])
+            if args.no_fold_search:
+                cmd.append("--no-fold-search")
             if args.skip_fast_search:
                 cmd.append("--skip-fast-search")
             if args.dry_run:
@@ -657,38 +687,44 @@ def main() -> None:
     base_hparams = HyperParams(lr=5e-4, weight_decay=1e-5, batch_size=32)
     selection_rows: List[Dict] = []
     best_encoder = None
-    best_encoder_mse = float("inf")
+    best_encoder_mse: float | None = float("inf")
 
-    print(f"[{timestamp()}] >>> Stage 1: backbone reselection on new architecture", flush=True)
-    for encoder in ENCODERS:
-        row = train_eval_step(
-            step_name=f"Stage1-Select-{encoder}",
-            encoder=encoder,
-            use_tcm=True,
-            use_gate_a=True,
-            use_gate_b=True,
-            hparams=base_hparams,
-            epochs=stage1_epochs,
-            patience=EARLY_STOPPING_PATIENCE,
-            dataset=dataset,
-            train_indices=train_indices,
-            val_indices=val_indices,
-            seed=cfg.seed,
-            device=device,
-            tcm_prior=tcm_prior,
-            gate_a_scale=args.gate_a_scale,
-            gate_b_scale=args.gate_b_scale,
-            use_cross_attention=args.cross_attention,
-        )
-        selection_rows.append(row)
-        mse = row["metrics"]["mse"]
-        if mse < best_encoder_mse:
-            best_encoder_mse = mse
-            best_encoder = encoder
+    if args.fixed_encoder:
+        best_encoder = str(args.fixed_encoder)
+        best_encoder_mse = None
+        print(f"[{timestamp()}] >>> Stage 1 skipped (fixed_encoder={best_encoder})", flush=True)
+    else:
+        print(f"[{timestamp()}] >>> Stage 1: backbone reselection on new architecture", flush=True)
+        for encoder in ENCODERS:
+            row = train_eval_step(
+                step_name=f"Stage1-Select-{encoder}",
+                encoder=encoder,
+                use_tcm=True,
+                use_gate_a=True,
+                use_gate_b=True,
+                hparams=base_hparams,
+                epochs=stage1_epochs,
+                patience=EARLY_STOPPING_PATIENCE,
+                dataset=dataset,
+                train_indices=train_indices,
+                val_indices=val_indices,
+                seed=cfg.seed,
+                device=device,
+                tcm_prior=tcm_prior,
+                gate_a_scale=args.gate_a_scale,
+                gate_b_scale=args.gate_b_scale,
+                use_cross_attention=args.cross_attention,
+            )
+            selection_rows.append(row)
+            mse = row["metrics"]["mse"]
+            if mse < best_encoder_mse:
+                best_encoder_mse = mse
+                best_encoder = encoder
 
-    assert best_encoder is not None
-    _print_selection_table(selection_rows)
-    print(f"[{timestamp()}] >>> Stage 1 winner: {best_encoder} (best_val_mse={best_encoder_mse:.6f})", flush=True)
+        assert best_encoder is not None
+        _print_selection_table(selection_rows)
+        assert best_encoder_mse is not None
+        print(f"[{timestamp()}] >>> Stage 1 winner: {best_encoder} (best_val_mse={best_encoder_mse:.6f})", flush=True)
 
     # ---------------- Stage 2: reset/tune params ----------------
     print(f"[{timestamp()}] >>> Stage 2: hyper-parameter reset/tuning for encoder={best_encoder}", flush=True)
@@ -697,7 +733,7 @@ def main() -> None:
         best_hp = override_hp
         tune_logs = [{"trial": 0, "hparams": best_hp.__dict__, "mse": None, "note": "override_params"}]
         print(f"[{timestamp()}] >>> Using override params: {best_hp}", flush=True)
-    elif args.skip_fast_search:
+    elif args.no_fold_search or args.skip_fast_search:
         best_hp = base_hparams
         tune_logs = [{"trial": 0, "hparams": best_hp.__dict__, "mse": None, "note": "conservative_default"}]
         print(f"[{timestamp()}] >>> Using conservative default params: {best_hp}", flush=True)
@@ -880,7 +916,7 @@ def main() -> None:
         {
             "step": 4,
             "name": "Encoder Selection",
-            "mse": best_encoder_mse,
+            "mse": (best_encoder_mse if selection_rows else None),
             "best_encoder": best_encoder,
             "selection_rows": [{"encoder": r["encoder"], "mse": r["metrics"]["mse"]} for r in selection_rows],
         }
@@ -1055,9 +1091,11 @@ def main() -> None:
         {"name": "w/o TCM_Gate", "metrics": step7["metrics"]},
     ]
     fig1 = plot_comparison(comparison_data)
-    fig2 = plot_selection(selection_data)
+    fig2 = plot_selection(selection_data) if len(selection_data) == 5 else None
     fig3 = plot_ablation(ablation_data)
-    fig_list = [str(fig1), str(fig2), str(fig3)]
+    fig_list = [str(fig1), str(fig3)]
+    if fig2 is not None:
+        fig_list.insert(1, str(fig2))
     if attention_fig is not None:
         fig_list.append(str(attention_fig))
     matrix_logs.append({"step": 9, "name": "Plotting", "mse": None, "figures": fig_list})
