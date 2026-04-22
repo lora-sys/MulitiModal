@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import pickle
 import random
@@ -40,6 +41,31 @@ from src.utils.plotting import plot_ablation, plot_comparison, plot_selection, p
 
 ENCODERS = ["tcn", "inceptiontime", "os-cnn", "xcm", "1d-resnet"]
 RUN_EXPERIMENTS_SIGNATURE = "RUN_EXPERIMENTS_V2_LOSO_GUARDED"
+
+
+def _load_step8_controls(path: Path) -> Dict | None:
+    if not path.exists():
+        return None
+    try:
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(obj, dict):
+            return None
+        if "gate_b_scale" not in obj or "final_lr_mult" not in obj:
+            return None
+        return obj
+    except Exception:
+        return None
+
+
+def _save_step8_controls(path: Path, gate_b_scale: float, final_lr_mult: float, *, cross_attention: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "gate_b_scale": float(gate_b_scale),
+        "final_lr_mult": float(final_lr_mult),
+        "cross_attention": bool(cross_attention),
+        "signature": RUN_EXPERIMENTS_SIGNATURE,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 @dataclass
@@ -219,6 +245,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--cross-attention", action="store_true", help="Use cross-attention to replace linear Gate A")
     p.add_argument("--fixed-encoder", type=str, default="", choices=[""] + ENCODERS, help="Fix encoder and skip Stage1 selection.")
     p.add_argument("--no-fold-search", action="store_true", help="Disable Stage2 per-fold hyperparam search; use override/default only.")
+    p.add_argument("--reuse-step8-controls", action="store_true", help="Reuse Step8 controls across folds (load/save JSON).")
+    p.add_argument("--step8-controls-path", type=str, default="checkpoints/step8_controls.json", help="Path to Step8 controls JSON.")
+    p.add_argument(
+        "--force-step8-sweep",
+        action="store_true",
+        help="Force Step8 sweep even in LOSO fixed-encoder runs (not recommended for paper main results).",
+    )
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -532,6 +565,131 @@ def _summarize_loso(fold_payloads: List[Dict]) -> Dict:
     return {"loso_stage3_summary": summary_rows}
 
 
+def _collect_step_metric_from_folds(fold_payloads: List[Dict], step: int, metric: str) -> np.ndarray:
+    vals = []
+    for p in fold_payloads:
+        for row in p.get("matrix_logs", []):
+            if int(row.get("step", -1)) != step:
+                continue
+            full = row.get("full")
+            if not isinstance(full, dict):
+                continue
+            m = full.get("metrics", {})
+            if metric in m and m[metric] is not None:
+                vals.append(float(m[metric]))
+    return np.asarray(vals, dtype=np.float64)
+
+
+def _collect_step_best_mse_from_folds(fold_payloads: List[Dict], step: int) -> np.ndarray:
+    vals = []
+    for p in fold_payloads:
+        for row in p.get("stage3_matrix_best_val_mse", []):
+            if int(row.get("step", -1)) == step and row.get("best_val_mse") is not None:
+                vals.append(float(row["best_val_mse"]))
+    return np.asarray(vals, dtype=np.float64)
+
+
+def _build_loso_main_table(fold_payloads: List[Dict]) -> Dict:
+    rows = []
+    for step in range(1, 10):
+        vals = _collect_step_best_mse_from_folds(fold_payloads, step)
+        if vals.size == 0:
+            rows.append({"step": step, "name": f"Step {step}", "mean_mse": None, "std_mse": None, "n_folds": 0})
+            continue
+
+        step_name = f"Step {step}"
+        for p in fold_payloads:
+            for r in p.get("stage3_matrix_best_val_mse", []):
+                if int(r.get("step", -1)) == step:
+                    step_name = str(r.get("name", step_name))
+                    break
+
+        rows.append(
+            {
+                "step": step,
+                "name": step_name,
+                "mean_mse": float(vals.mean()),
+                "std_mse": float(vals.std(ddof=0)),
+                "n_folds": int(vals.size),
+            }
+        )
+
+    final_step = 8
+    final_mse = _collect_step_metric_from_folds(fold_payloads, final_step, "mse")
+    final_rmse = _collect_step_metric_from_folds(fold_payloads, final_step, "rmse")
+    final_mae = _collect_step_metric_from_folds(fold_payloads, final_step, "mae")
+    final_pearson = _collect_step_metric_from_folds(fold_payloads, final_step, "pearson")
+    final_stats = {
+        "step": final_step,
+        "name": "Final Ours",
+        "mse_mean": float(final_mse.mean()) if final_mse.size else None,
+        "mse_std": float(final_mse.std(ddof=0)) if final_mse.size else None,
+        "rmse_mean": float(final_rmse.mean()) if final_rmse.size else None,
+        "rmse_std": float(final_rmse.std(ddof=0)) if final_rmse.size else None,
+        "mae_mean": float(final_mae.mean()) if final_mae.size else None,
+        "mae_std": float(final_mae.std(ddof=0)) if final_mae.size else None,
+        "pearson_mean": float(final_pearson.mean()) if final_pearson.size else None,
+        "pearson_std": float(final_pearson.std(ddof=0)) if final_pearson.size else None,
+        "n_folds": int(final_mse.size),
+    }
+
+    return {
+        "n_folds": len(fold_payloads),
+        "stage3_main_table": rows,
+        "final_ours_fold_stats": final_stats,
+    }
+
+
+def _write_loso_main_table_files(main_table: Dict, out_dir: Path) -> Dict[str, str]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / "loso_main_table.json"
+    csv_path = out_dir / "loso_main_table.csv"
+    tsv_path = out_dir / "loso_main_table.tsv"
+
+    save_json(main_table, json_path)
+
+    headers = ["step", "name", "mean_mse", "std_mse", "n_folds"]
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=headers)
+        w.writeheader()
+        for r in main_table["stage3_main_table"]:
+            w.writerow(r)
+
+    with open(tsv_path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=headers, delimiter="\t")
+        w.writeheader()
+        for r in main_table["stage3_main_table"]:
+            w.writerow(r)
+
+    return {"json": str(json_path), "csv": str(csv_path), "tsv": str(tsv_path)}
+
+
+def _plot_loso_summary_figures(main_table: Dict) -> List[str]:
+    row_by_name = {r["name"]: r for r in main_table.get("stage3_main_table", [])}
+    fig_paths: List[str] = []
+
+    comp_names = ["Baseline A", "Baseline B", "Ours-TCN"]
+    if all(name in row_by_name and row_by_name[name]["mean_mse"] is not None for name in comp_names):
+        comparison_data = [{"name": "Baseline A", "metrics": {"mse": row_by_name["Baseline A"]["mean_mse"]}}]
+        comparison_data.append({"name": "Baseline B", "metrics": {"mse": row_by_name["Baseline B"]["mean_mse"]}})
+        comparison_data.append({"name": "Ours", "metrics": {"mse": row_by_name["Ours-TCN"]["mean_mse"]}})
+        fig1 = plot_comparison(comparison_data, stem="fig1_loso_comparison")
+        fig_paths.append(str(fig1))
+
+    abl_names = ["Final Ours", "w/o Dual Gating", "w/o TCM Prior", "w/o TCM_Gate"]
+    if all(name in row_by_name and row_by_name[name]["mean_mse"] is not None for name in abl_names):
+        ablation_data = [
+            {"name": "Full Model", "metrics": {"mse": row_by_name["Final Ours"]["mean_mse"]}},
+            {"name": "w/o Dual Gating", "metrics": {"mse": row_by_name["w/o Dual Gating"]["mean_mse"]}},
+            {"name": "w/o TCM Prior", "metrics": {"mse": row_by_name["w/o TCM Prior"]["mean_mse"]}},
+            {"name": "w/o TCM_Gate", "metrics": {"mse": row_by_name["w/o TCM_Gate"]["mean_mse"]}},
+        ]
+        fig3 = plot_ablation(ablation_data, stem="fig3_loso_ablation")
+        fig_paths.append(str(fig3))
+
+    return fig_paths
+
+
 def _sample_hparams(rng: random.Random) -> HyperParams:
     # Conservative quick-search region for late reinjection.
     lr = 10 ** rng.uniform(np.log10(2.5e-4), np.log10(8e-4))
@@ -619,13 +777,12 @@ def main() -> None:
                 str(args.gate_b_scale),
                 "--final-lr-mult",
                 str(args.final_lr_mult),
-                "--gate-b-sweep",
-                str(args.gate_b_sweep),
-                "--final-lr-mult-sweep",
-                str(args.final_lr_mult_sweep),
-                "--sweep-epochs",
-                str(args.sweep_epochs),
             ]
+            # Paper-safe default: when fixed-encoder is used, do NOT sweep Step8 controls across folds unless forced.
+            if (not args.fixed_encoder) or args.force_step8_sweep:
+                cmd.extend(["--gate-b-sweep", str(args.gate_b_sweep)])
+                cmd.extend(["--final-lr-mult-sweep", str(args.final_lr_mult_sweep)])
+                cmd.extend(["--sweep-epochs", str(args.sweep_epochs)])
             if args.wesad_dir:
                 cmd.extend(["--wesad-dir", str(args.wesad_dir)])
             if args.cross_attention:
@@ -634,6 +791,12 @@ def main() -> None:
                 cmd.extend(["--fixed-encoder", str(args.fixed_encoder)])
             if args.no_fold_search:
                 cmd.append("--no-fold-search")
+            if args.reuse_step8_controls and (args.force_step8_sweep or (not args.fixed_encoder)):
+                cmd.append("--reuse-step8-controls")
+            if args.step8_controls_path:
+                cmd.extend(["--step8-controls-path", str(args.step8_controls_path)])
+            if args.force_step8_sweep:
+                cmd.append("--force-step8-sweep")
             if args.skip_fast_search:
                 cmd.append("--skip-fast-search")
             if args.dry_run:
@@ -651,6 +814,27 @@ def main() -> None:
             "signature": RUN_EXPERIMENTS_SIGNATURE,
             "file": str(runner_file),
             "mtime": runner_mtime,
+        }
+        main_table = _build_loso_main_table(fold_payloads)
+        main_table["fold_files"] = [str(fold_dir / f"experiments_summary_{sid}.json") for sid in unique_subjects]
+        main_paths = _write_loso_main_table_files(main_table, fold_dir)
+        print(
+            f"[{timestamp()}] >>> LOSO main table saved: "
+            f"{main_paths['json']} | {main_paths['csv']} | {main_paths['tsv']}",
+            flush=True,
+        )
+
+        loso_figs = _plot_loso_summary_figures(main_table)
+        if loso_figs:
+            print(f"[{timestamp()}] >>> LOSO summary figures saved: {loso_figs}", flush=True)
+        else:
+            print(f"[{timestamp()}] >>> LOSO summary figures skipped (missing required rows).", flush=True)
+
+        loso_summary["auto_outputs"] = {
+            "main_table_json": main_paths["json"],
+            "main_table_csv": main_paths["csv"],
+            "main_table_tsv": main_paths["tsv"],
+            "figures": loso_figs,
         }
         out_path = Path(args.output_json) if args.output_json else (paths.results / "experiments_summary_loso.json")
         save_json(loso_summary, out_path)
@@ -785,15 +969,40 @@ def main() -> None:
         paths.checkpoints / "reinjection_best_setup.json",
     )
 
-    # Optional focused sweep for Step8 stability:
-    # - gate_b_scale in a small range
-    # - final_lr_mult for head-only late stage
+    # Step8 controls:
+    # Best practice for LOSO stability: pick once and reuse across folds to reduce sweep variance.
     sweep_gate_b = _parse_float_list(args.gate_b_sweep)
     sweep_lr_mult = _parse_float_list(args.final_lr_mult_sweep)
+    if args.protocol == "loso" and args.fixed_encoder and (not args.force_step8_sweep) and (sweep_gate_b or sweep_lr_mult):
+        print(
+            f"[{timestamp()}] >>> Step8 sweep ignored for paper-safe LOSO (fixed_encoder={args.fixed_encoder}). "
+            f"Use --force-step8-sweep to enable.",
+            flush=True,
+        )
+        sweep_gate_b = []
+        sweep_lr_mult = []
     selected_gate_b_scale = float(args.gate_b_scale)
     selected_final_lr_mult = float(args.final_lr_mult)
     sweep_results: List[Dict] = []
-    if sweep_gate_b or sweep_lr_mult:
+
+    controls_path = Path(args.step8_controls_path)
+    if args.protocol == "loso" and args.reuse_step8_controls and args.loso_subject:
+        loaded = _load_step8_controls(controls_path)
+        if loaded is not None and bool(loaded.get("cross_attention", False)) == bool(args.cross_attention):
+            selected_gate_b_scale = float(loaded["gate_b_scale"])
+            selected_final_lr_mult = float(loaded["final_lr_mult"])
+            print(
+                f"[{timestamp()}] >>> Reusing Step8 controls from {controls_path}: "
+                f"gate_b_scale={selected_gate_b_scale:.3f}, final_lr_mult={selected_final_lr_mult:.3f}",
+                flush=True,
+            )
+
+    do_sweep = bool(sweep_gate_b or sweep_lr_mult)
+    if args.protocol == "loso" and args.reuse_step8_controls and args.loso_subject:
+        # If controls were loaded, do not sweep again.
+        do_sweep = do_sweep and (_load_step8_controls(controls_path) is None)
+
+    if do_sweep:
         if not sweep_gate_b:
             sweep_gate_b = [selected_gate_b_scale]
         if not sweep_lr_mult:
@@ -831,9 +1040,7 @@ def main() -> None:
                     use_cross_attention=args.cross_attention,
                 )
                 mse = float(res["metrics"]["mse"])
-                sweep_results.append(
-                    {"gate_b_scale": float(gb), "final_lr_mult": float(lm), "mse": mse}
-                )
+                sweep_results.append({"gate_b_scale": float(gb), "final_lr_mult": float(lm), "mse": mse})
                 if mse < best_sweep_mse:
                     best_sweep_mse = mse
                     selected_gate_b_scale = float(gb)
@@ -843,6 +1050,15 @@ def main() -> None:
             f"final_lr_mult={selected_final_lr_mult:.3f}, mse={best_sweep_mse:.6f}",
             flush=True,
         )
+
+        if args.protocol == "loso" and args.reuse_step8_controls and args.loso_subject:
+            _save_step8_controls(
+                controls_path,
+                selected_gate_b_scale,
+                selected_final_lr_mult,
+                cross_attention=bool(args.cross_attention),
+            )
+            print(f"[{timestamp()}] >>> Saved reusable Step8 controls to {controls_path}", flush=True)
 
     # ---------------- Stage 3: 9-step matrix ----------------
     print(f"[{timestamp()}] >>> Stage 3: running 9-step matrix with fixed best params", flush=True)

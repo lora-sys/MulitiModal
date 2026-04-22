@@ -38,7 +38,7 @@ def _save_all_formats(fig: plt.Figure, stem: str) -> Path:
     return png
 
 
-def plot_comparison(data: List[Dict]) -> Path:
+def plot_comparison(data: List[Dict], stem: str = "fig1_comparison") -> Path:
     """1x2 figure: absolute MSE bars + relative error reduction bars."""
     fig_dir = _ensure_fig_dir()
     ordered_names = ["Baseline A", "Baseline B", "Ours"]
@@ -74,7 +74,7 @@ def plot_comparison(data: List[Dict]) -> Path:
         axes[1].text(b.get_x() + b.get_width() / 2, b.get_height(), f"{v:.2f}%", ha="center", va="bottom", fontsize=11)
 
     fig.tight_layout()
-    out = _save_all_formats(fig, "fig1_comparison")
+    out = _save_all_formats(fig, stem)
     plt.close(fig)
     return out
 
@@ -109,7 +109,7 @@ def plot_selection(data: List[Dict]) -> Path:
     return out
 
 
-def plot_ablation(data: List[Dict]) -> Path:
+def plot_ablation(data: List[Dict], stem: str = "fig3_ablation") -> Path:
     """4 bars, sorted by MSE ascending, green->red gradient."""
     fig_dir = _ensure_fig_dir()
     items = sorted(data, key=lambda d: d["metrics"]["mse"])
@@ -134,7 +134,7 @@ def plot_ablation(data: List[Dict]) -> Path:
         ax.text(b.get_x() + b.get_width() / 2, b.get_height(), f"{v:.4f}", ha="center", va="bottom", fontsize=10)
 
     fig.tight_layout()
-    out = _save_all_formats(fig, "fig3_ablation")
+    out = _save_all_formats(fig, stem)
     plt.close(fig)
     return out
 

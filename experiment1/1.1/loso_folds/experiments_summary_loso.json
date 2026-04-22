@@ -1,0 +1,91 @@
+{
+  "loso_stage3_summary": [
+    {
+      "step": 1,
+      "name": "Baseline A",
+      "mean_best_val_mse": 0.18532894005378087,
+      "std_best_val_mse": 0.06564008191118466,
+      "n_folds": 15
+    },
+    {
+      "step": 2,
+      "name": "Baseline B",
+      "mean_best_val_mse": 0.19070519556601842,
+      "std_best_val_mse": 0.062175916563229454,
+      "n_folds": 15
+    },
+    {
+      "step": 3,
+      "name": "Ours-TCN",
+      "mean_best_val_mse": 0.18938478877147039,
+      "std_best_val_mse": 0.07021599737409633,
+      "n_folds": 15
+    },
+    {
+      "step": 4,
+      "name": "Encoder Selection",
+      "mean_best_val_mse": null,
+      "std_best_val_mse": null,
+      "n_folds": 0
+    },
+    {
+      "step": 5,
+      "name": "w/o Dual Gating",
+      "mean_best_val_mse": 0.1393118226279815,
+      "std_best_val_mse": 0.11867232851530828,
+      "n_folds": 15
+    },
+    {
+      "step": 6,
+      "name": "w/o TCM Prior",
+      "mean_best_val_mse": 0.14276546041170757,
+      "std_best_val_mse": 0.10356887048608138,
+      "n_folds": 15
+    },
+    {
+      "step": 7,
+      "name": "w/o TCM_Gate",
+      "mean_best_val_mse": 0.15236592739820481,
+      "std_best_val_mse": 0.14349761498863403,
+      "n_folds": 15
+    },
+    {
+      "step": 8,
+      "name": "Final Ours",
+      "mean_best_val_mse": 0.14809238960345586,
+      "std_best_val_mse": 0.13777393935303817,
+      "n_folds": 15
+    },
+    {
+      "step": 9,
+      "name": "Plotting",
+      "mean_best_val_mse": null,
+      "std_best_val_mse": null,
+      "n_folds": 0
+    }
+  ],
+  "protocol": "loso",
+  "n_folds": 15,
+  "fold_subjects": [
+    "S10",
+    "S11",
+    "S13",
+    "S14",
+    "S15",
+    "S16",
+    "S17",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8",
+    "S9"
+  ],
+  "runner": {
+    "signature": "RUN_EXPERIMENTS_V2_LOSO_GUARDED",
+    "file": "/root/work/MulitiModal/run_experiments.py",
+    "mtime": "2026-04-22 10:20:26"
+  }
+}
