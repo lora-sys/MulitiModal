@@ -35,7 +35,7 @@ from src.data_loader import (
     make_subject_level_split_indices,
 )
 from src.utils import regression_metrics, save_json, set_seed, timestamp, to_numpy
-from src.utils.plotting import plot_ablation, plot_comparison, plot_selection
+from src.utils.plotting import plot_ablation, plot_comparison, plot_selection, plot_tcm_attention
 
 
 ENCODERS = ["tcn", "inceptiontime", "os-cnn", "xcm", "1d-resnet"]
@@ -194,6 +194,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--protocol", type=str, default="loso", choices=["loso", "subject_split"])
     p.add_argument("--loso-subject", type=str, default="", help="Internal: run only one LOSO fold with this held-out subject")
     p.add_argument("--output-json", type=str, default="", help="Optional override path for fold summary json")
+    p.add_argument("--cross-attention", action="store_true", help="Use cross-attention to replace linear Gate A")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
 
@@ -227,29 +228,30 @@ def _run_forward(
     use_gate_b: bool,
     gate_a_scale: float,
     gate_b_scale: float,
+    return_attention: bool = False,
 ) -> torch.Tensor:
     if use_tcm:
         tcm_probs = tcm_prior.infer_probs(static_x)  # [B, 9]
     else:
         tcm_probs = torch.zeros(dynamic_x.size(0), 9, device=dynamic_x.device, dtype=torch.float32)
 
-    z_raw = model.dynamic_encoder(dynamic_x)  # [B,128]
-    if use_gate_a and use_tcm:
-        gate_a = torch.sigmoid(model.gate_a_linear(tcm_probs))
-        z_modulated = z_raw * ((1.0 - gate_a_scale) + gate_a_scale * gate_a)
-    else:
-        z_modulated = z_raw
-
-    if use_gate_b:
-        gate_b = torch.sigmoid(model.gate_b_linear(z_modulated))
-        z_pure_dynamic = z_modulated * (1.0 - gate_b_scale * gate_b)
-    else:
-        z_pure_dynamic = z_modulated
-
-    # OP-LRI anti-pollution: dynamic branch detached before late reinjection.
-    z_pure_dynamic = z_pure_dynamic.detach()
+    old_gate_a = bool(model.use_gate_a)
+    old_gate_b = bool(model.use_gate_b)
+    model.use_gate_a = bool(use_gate_a and use_tcm)
+    model.use_gate_b = bool(use_gate_b)
+    z_pure_dynamic, attn_weights = model.extract_pure_dynamic(
+        dynamic_x,
+        tcm_probs,
+        gate_a_scale=gate_a_scale,
+        gate_b_scale=gate_b_scale,
+        return_attention=return_attention,
+    )
+    model.use_gate_a = old_gate_a
+    model.use_gate_b = old_gate_b
     final_input = torch.cat([z_pure_dynamic, tcm_probs], dim=-1)  # [B,137]
     pred = model.forward_from_final_input(final_input)
+    if return_attention:
+        return pred, attn_weights
     return pred
 
 
@@ -260,6 +262,9 @@ def _freeze_non_head(model: OPLRIRegressor) -> None:
         p.requires_grad = False
     for p in model.gate_b_linear.parameters():
         p.requires_grad = False
+    for p in model.cross_attention.parameters():
+        p.requires_grad = False
+    model.constitution_tokens.requires_grad = False
     for p in model.reg_head.parameters():
         p.requires_grad = True
 
@@ -282,6 +287,7 @@ def train_eval_step(
     tcm_prior: FrozenTCMPrior,
     gate_a_scale: float,
     gate_b_scale: float,
+    use_cross_attention: bool,
 ) -> Dict:
     train_loader, val_loader = make_loaders_from_indices(
         dataset,
@@ -290,7 +296,12 @@ def train_eval_step(
         batch_size=hparams.batch_size,
         seed=seed,
     )
-    model = OPLRIRegressor(encoder_name=encoder, use_gate_a=True, use_gate_b=True).to(device)
+    model = OPLRIRegressor(
+        encoder_name=encoder,
+        use_gate_a=True,
+        use_gate_b=True,
+        use_cross_attention=use_cross_attention,
+    ).to(device)
     _freeze_non_head(model)
     optimizer = torch.optim.AdamW(model.reg_head.parameters(), lr=hparams.lr, weight_decay=hparams.weight_decay)
     loss_fn = nn.MSELoss()
@@ -411,6 +422,7 @@ def train_eval_step(
         "val_mse_history": val_mse_history,
         "metrics": final_metrics,
         "model_state_dict": model.state_dict(),
+        "use_cross_attention": use_cross_attention,
     }
     del model
     clear_cuda_cache()
@@ -666,6 +678,7 @@ def main() -> None:
             tcm_prior=tcm_prior,
             gate_a_scale=args.gate_a_scale,
             gate_b_scale=args.gate_b_scale,
+            use_cross_attention=args.cross_attention,
         )
         selection_rows.append(row)
         mse = row["metrics"]["mse"]
@@ -714,6 +727,7 @@ def main() -> None:
                 tcm_prior=tcm_prior,
                 gate_a_scale=args.gate_a_scale,
                 gate_b_scale=args.gate_b_scale,
+                use_cross_attention=args.cross_attention,
             )
             mse = float(res["metrics"]["mse"])
             tune_logs.append({"trial": t, "hparams": hp.__dict__, "mse": mse})
@@ -778,6 +792,7 @@ def main() -> None:
                     tcm_prior=tcm_prior,
                     gate_a_scale=args.gate_a_scale,
                     gate_b_scale=float(gb),
+                    use_cross_attention=args.cross_attention,
                 )
                 mse = float(res["metrics"]["mse"])
                 sweep_results.append(
@@ -814,6 +829,7 @@ def main() -> None:
         tcm_prior=tcm_prior,
         gate_a_scale=args.gate_a_scale,
         gate_b_scale=args.gate_b_scale,
+        use_cross_attention=args.cross_attention,
     )
     matrix_logs.append({"step": 1, "name": "Baseline A", "mse": step1["metrics"]["mse"], "full": _strip_for_json(step1)})
 
@@ -834,6 +850,7 @@ def main() -> None:
         tcm_prior=tcm_prior,
         gate_a_scale=args.gate_a_scale,
         gate_b_scale=args.gate_b_scale,
+        use_cross_attention=args.cross_attention,
     )
     matrix_logs.append({"step": 2, "name": "Baseline B", "mse": step2["metrics"]["mse"], "full": _strip_for_json(step2)})
 
@@ -854,6 +871,7 @@ def main() -> None:
         tcm_prior=tcm_prior,
         gate_a_scale=args.gate_a_scale,
         gate_b_scale=args.gate_b_scale,
+        use_cross_attention=args.cross_attention,
     )
     matrix_logs.append({"step": 3, "name": "Ours-TCN", "mse": step3["metrics"]["mse"], "full": _strip_for_json(step3)})
 
@@ -885,6 +903,7 @@ def main() -> None:
         tcm_prior=tcm_prior,
         gate_a_scale=args.gate_a_scale,
         gate_b_scale=args.gate_b_scale,
+        use_cross_attention=args.cross_attention,
     )
     matrix_logs.append({"step": 5, "name": "w/o Dual Gating", "mse": step5["metrics"]["mse"], "full": _strip_for_json(step5)})
 
@@ -905,6 +924,7 @@ def main() -> None:
         tcm_prior=tcm_prior,
         gate_a_scale=args.gate_a_scale,
         gate_b_scale=args.gate_b_scale,
+        use_cross_attention=args.cross_attention,
     )
     matrix_logs.append({"step": 6, "name": "w/o TCM Prior", "mse": step6["metrics"]["mse"], "full": _strip_for_json(step6)})
 
@@ -925,6 +945,7 @@ def main() -> None:
         tcm_prior=tcm_prior,
         gate_a_scale=args.gate_a_scale,
         gate_b_scale=args.gate_b_scale,
+        use_cross_attention=args.cross_attention,
     )
     matrix_logs.append({"step": 7, "name": "w/o TCM_Gate", "mse": step7["metrics"]["mse"], "full": _strip_for_json(step7)})
 
@@ -952,6 +973,7 @@ def main() -> None:
         tcm_prior=tcm_prior,
         gate_a_scale=args.gate_a_scale,
         gate_b_scale=selected_gate_b_scale,
+        use_cross_attention=args.cross_attention,
     )
     matrix_logs.append({"step": 8, "name": "Final Ours", "mse": step8["metrics"]["mse"], "full": _strip_for_json(step8)})
 
@@ -970,6 +992,55 @@ def main() -> None:
     )
     print(f"[{timestamp()}] >>> Saved final model to {best_model_path}", flush=True)
 
+    # Optional attention visualization for cross-attention Gate A.
+    attention_fig = None
+    if args.cross_attention:
+        try:
+            model_vis = OPLRIRegressor(
+                encoder_name=best_encoder,
+                use_gate_a=True,
+                use_gate_b=True,
+                use_cross_attention=True,
+            ).to(device)
+            model_vis.load_state_dict(step8["model_state_dict"], strict=False)
+            model_vis.eval()
+            _, val_loader_vis = make_loaders_from_indices(
+                dataset,
+                train_indices,
+                val_indices,
+                batch_size=max(8, int(best_hp.batch_size)),
+                seed=cfg.seed,
+            )
+            attn_buf = []
+            with torch.no_grad():
+                for i, batch in enumerate(val_loader_vis):
+                    if i >= 8:
+                        break
+                    dynamic_x, static_x, _ = _unpack_batch(batch, device)
+                    _, attn = _run_forward(
+                        model_vis,
+                        tcm_prior,
+                        dynamic_x,
+                        static_x,
+                        use_tcm=True,
+                        use_gate_a=True,
+                        use_gate_b=True,
+                        gate_a_scale=args.gate_a_scale,
+                        gate_b_scale=selected_gate_b_scale,
+                        return_attention=True,
+                    )
+                    if attn is not None:
+                        # attn: [B, heads, 1, 9]
+                        attn_buf.append(attn.detach().cpu())
+            if attn_buf:
+                attn_all = torch.cat(attn_buf, dim=0).mean(dim=(0, 2)).numpy()  # [heads, 9]
+                attention_fig = plot_tcm_attention(attn_all)
+                print(f"[{timestamp()}] >>> Saved cross-attention map to {attention_fig}", flush=True)
+            del model_vis
+            clear_cuda_cache()
+        except Exception as exc:
+            print(f"[{timestamp()}] >>> [WARN] Attention visualization skipped: {exc}", flush=True)
+
     # Step 9 plotting
     comparison_data = [
         {"name": "Baseline A", "metrics": step1["metrics"]},
@@ -986,7 +1057,10 @@ def main() -> None:
     fig1 = plot_comparison(comparison_data)
     fig2 = plot_selection(selection_data)
     fig3 = plot_ablation(ablation_data)
-    matrix_logs.append({"step": 9, "name": "Plotting", "mse": None, "figures": [str(fig1), str(fig2), str(fig3)]})
+    fig_list = [str(fig1), str(fig2), str(fig3)]
+    if attention_fig is not None:
+        fig_list.append(str(attention_fig))
+    matrix_logs.append({"step": 9, "name": "Plotting", "mse": None, "figures": fig_list})
     assert len(matrix_logs) == 9, f"Expected 9 matrix steps, got {len(matrix_logs)}"
 
     # Required outputs
@@ -1020,6 +1094,7 @@ def main() -> None:
                 "gate_a_scale": args.gate_a_scale,
                 "gate_b_scale": selected_gate_b_scale,
                 "final_lr_mult": selected_final_lr_mult,
+                "cross_attention": args.cross_attention,
             },
             "step8_sweep_results": sweep_results,
             "stage3_matrix_best_val_mse": [

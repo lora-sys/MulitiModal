@@ -102,7 +102,7 @@ def train_one_epoch(
 
         # Script-layer static stream (strict TCM chain)
         tcm_probs_9d = tcm_prior.infer_probs(static_x)  # [B, 9], no_grad
-        z_pure_dynamic = model.extract_pure_dynamic(dynamic_x, tcm_probs_9d)  # [B, 128], detached
+        z_pure_dynamic, _ = model.extract_pure_dynamic(dynamic_x, tcm_probs_9d)  # [B, 128], detached
 
         # Late reinjection in script (not in model body)
         final_input = torch.cat([z_pure_dynamic, tcm_probs_9d], dim=-1)  # [B, 137]
@@ -126,7 +126,7 @@ def evaluate(model: OPLRIRegressor, tcm_prior: FrozenTCMPrior, loader: DataLoade
     for batch in loader:
         dynamic_x, static_x, target = _unpack_batch(batch, device)
         tcm_probs_9d = tcm_prior.infer_probs(static_x)  # [B, 9]
-        z_pure_dynamic = model.extract_pure_dynamic(dynamic_x, tcm_probs_9d)  # detached
+        z_pure_dynamic, _ = model.extract_pure_dynamic(dynamic_x, tcm_probs_9d)  # detached
         final_input = torch.cat([z_pure_dynamic, tcm_probs_9d], dim=-1)
         pred = model.forward_from_final_input(final_input)
 
@@ -173,6 +173,9 @@ def main() -> None:
         p.requires_grad = False
     for p in model.gate_b_linear.parameters():
         p.requires_grad = False
+    for p in model.cross_attention.parameters():
+        p.requires_grad = False
+    model.constitution_tokens.requires_grad = False
     optimizer = torch.optim.AdamW(model.reg_head.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     best_mse = float("inf")
@@ -223,4 +226,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

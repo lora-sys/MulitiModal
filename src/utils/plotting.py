@@ -137,3 +137,24 @@ def plot_ablation(data: List[Dict]) -> Path:
     out = _save_all_formats(fig, "fig3_ablation")
     plt.close(fig)
     return out
+
+
+def plot_tcm_attention(attn_heads_by_constitution: np.ndarray) -> Path:
+    """Heatmap for cross-attention weights: heads x 9 constitutions."""
+    arr = np.asarray(attn_heads_by_constitution, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] != 9:
+        raise ValueError(f"Expected attention array shape [n_heads, 9], got {arr.shape}")
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    im = ax.imshow(arr, cmap="RdBu_r", aspect="auto")
+    ax.set_title("Fig.4 Cross-Attention Map (TCM Heads x Constitution Tokens)")
+    ax.set_xlabel("TCM Constitution Token Index")
+    ax.set_ylabel("Attention Head")
+    ax.set_xticks(np.arange(9), [str(i) for i in range(1, 10)])
+    ax.set_yticks(np.arange(arr.shape[0]), [str(i) for i in range(1, arr.shape[0] + 1)])
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("Attention Weight")
+    fig.tight_layout()
+    out = _save_all_formats(fig, "fig4_tcm_cross_attention")
+    plt.close(fig)
+    return out
