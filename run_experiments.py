@@ -78,8 +78,18 @@ class HyperParams:
 class FrozenTCMPrior:
     """Script-side TCM inference: 4D -> scaler -> frozen FT-Transformer -> 9D probs."""
 
-    def __init__(self, checkpoint_path: Path, scaler_path: Path, device: str):
+    def __init__(
+        self,
+        checkpoint_path: Path,
+        scaler_path: Path,
+        device: str,
+        *,
+        prob_eps: float = 0.0,
+        temperature: float = 1.0,
+    ):
         self.device = device
+        self.prob_eps = float(prob_eps)
+        self.temperature = float(temperature)
         resolved_ckpt = self._resolve_checkpoint_path(checkpoint_path)
         resolved_scaler = self._resolve_scaler_path(scaler_path, resolved_ckpt)
         print(f"[{timestamp()}] >>> TCM checkpoint resolved to: {resolved_ckpt}", flush=True)
@@ -218,7 +228,16 @@ class FrozenTCMPrior:
 
         if any(t is None for t in cached):
             raise RuntimeError("TCM probs cache internal error: missing entries after inference.")
-        return torch.stack([t.to(self.device) for t in cached], dim=0)
+        probs = torch.stack([t.to(self.device) for t in cached], dim=0)
+        # Optional: soften overly confident priors to reduce harm on outlier subjects.
+        if self.temperature != 1.0:
+            probs = torch.clamp(probs, 1e-8, 1.0)
+            logits = torch.log(probs)
+            probs = torch.softmax(logits / max(self.temperature, 1e-6), dim=1)
+        if self.prob_eps > 0.0:
+            k = probs.shape[1]
+            probs = (1.0 - self.prob_eps) * probs + (self.prob_eps / float(k))
+        return probs
 
 
 def parse_args() -> argparse.Namespace:
@@ -231,9 +250,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--wesad-dir", type=str, default=None)
     p.add_argument("--tcm-checkpoint", type=str, default=str(TCM_CHECKPOINT_PATH))
     p.add_argument("--tcm-scaler", type=str, default=str(TCM_SCALER_PATH))
+    p.add_argument("--tcm-prob-eps", type=float, default=0.0, help="TCM prob smoothing epsilon (e.g. 0.05).")
+    p.add_argument("--tcm-temp", type=float, default=1.0, help="TCM prob temperature (>1 softens).")
     p.add_argument("--override-params", type=str, default="")
     p.add_argument("--skip-fast-search", action="store_true")
     p.add_argument("--gate-a-scale", type=float, default=0.6)
+    p.add_argument("--gate-a-entropy-adapt", action="store_true", help="Scale Gate A by (1 - normalized entropy).")
     p.add_argument("--gate-b-scale", type=float, default=0.35)
     p.add_argument("--final-lr-mult", type=float, default=0.7)
     p.add_argument("--gate-b-sweep", type=str, default="", help="Comma-separated gate_b_scale values, e.g. 0.1,0.2,0.3")
@@ -296,10 +318,21 @@ def _run_forward(
     old_gate_b = bool(model.use_gate_b)
     model.use_gate_a = bool(use_gate_a and use_tcm)
     model.use_gate_b = bool(use_gate_b)
+    # Optional: entropy-adaptive scaling reduces damage from misaligned priors on outlier subjects.
+    gate_a_scale_eff = float(gate_a_scale)
+    if getattr(model, "_gate_a_entropy_adapt", False) and use_tcm:
+        ent = -(tcm_probs * torch.log(torch.clamp(tcm_probs, 1e-8, 1.0))).sum(dim=1)  # [B]
+        ent_norm = ent / float(np.log(tcm_probs.shape[1] + 1e-12))
+        conf = (1.0 - ent_norm).clamp(0.0, 1.0).unsqueeze(1)  # [B,1]
+        # broadcast to [B,128] inside extract via scalar factor
+        gate_a_scale_eff = float(gate_a_scale)
+        # pass as python float, and apply conf by scaling tcm_probs slightly (keeps API stable)
+        tcm_probs = tcm_probs * conf + (1.0 - conf) * (1.0 / float(tcm_probs.shape[1]))
+
     z_pure_dynamic, attn_weights = model.extract_pure_dynamic(
         dynamic_x,
         tcm_probs,
-        gate_a_scale=gate_a_scale,
+        gate_a_scale=gate_a_scale_eff,
         gate_b_scale=gate_b_scale,
         return_attention=return_attention,
     )
@@ -864,7 +897,13 @@ def main() -> None:
         flush=True,
     )
 
-    tcm_prior = FrozenTCMPrior(Path(args.tcm_checkpoint), Path(args.tcm_scaler), device)
+    tcm_prior = FrozenTCMPrior(
+        Path(args.tcm_checkpoint),
+        Path(args.tcm_scaler),
+        device,
+        prob_eps=float(args.tcm_prob_eps),
+        temperature=float(args.tcm_temp),
+    )
 
     # ---------------- Stage 1: force re-selection ----------------
     stage1_epochs = 3 if args.dry_run else args.selection_epochs
@@ -1063,6 +1102,9 @@ def main() -> None:
     # ---------------- Stage 3: 9-step matrix ----------------
     print(f"[{timestamp()}] >>> Stage 3: running 9-step matrix with fixed best params", flush=True)
     matrix_logs: List[Dict] = []
+
+    # Store entropy-adapt flag on model instances via a private attribute (keeps API small).
+    OPLRIRegressor._gate_a_entropy_adapt = bool(args.gate_a_entropy_adapt)  # type: ignore[attr-defined]
 
     step1 = train_eval_step(
         step_name="Step1-BaselineA-Weak",

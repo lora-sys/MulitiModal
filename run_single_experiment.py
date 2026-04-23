@@ -24,8 +24,18 @@ class FrozenTCMPrior:
       4D static -> scaler.transform -> frozen FT-Transformer -> 9D probs
     """
 
-    def __init__(self, checkpoint_path: Path, scaler_path: Path, device: str) -> None:
+    def __init__(
+        self,
+        checkpoint_path: Path,
+        scaler_path: Path,
+        device: str,
+        *,
+        prob_eps: float = 0.0,
+        temperature: float = 1.0,
+    ) -> None:
         self.device = device
+        self.prob_eps = float(prob_eps)
+        self.temperature = float(temperature)
         self.model = self._load_tcm_model(checkpoint_path).to(device)
         self.scaler = self._load_scaler(scaler_path)
 
@@ -92,7 +102,15 @@ class FrozenTCMPrior:
 
         if any(t is None for t in cached):
             raise RuntimeError("TCM probs cache internal error: missing entries after inference.")
-        return torch.stack([t.to(self.device) for t in cached], dim=0)
+        probs = torch.stack([t.to(self.device) for t in cached], dim=0)
+        if self.temperature != 1.0:
+            probs = torch.clamp(probs, 1e-8, 1.0)
+            logits = torch.log(probs)
+            probs = torch.softmax(logits / max(self.temperature, 1e-6), dim=1)
+        if self.prob_eps > 0.0:
+            k = probs.shape[1]
+            probs = (1.0 - self.prob_eps) * probs + (self.prob_eps / float(k))
+        return probs
 
 
 def _unpack_batch(batch, device: str) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
