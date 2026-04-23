@@ -324,9 +324,10 @@ def main() -> None:
     print(f"[{timestamp()}] TCM probs max|r| dim: {mechanism_metrics['tcm_probs_max_abs_dim']}")
     save_json({"but": but_metrics, "mechanism": mechanism_metrics}, paths.results / "cross_domain_results.json")
 
-    # Optional: copy key outputs into paper/ for writing.
-    paper_dir = Path(args.paper_dir)
-    if paper_dir.exists():
+    # Archive key outputs into paper/ for writing (create if missing).
+    paper_dir = Path(args.paper_dir) if getattr(args, "paper_dir", None) else None
+    if paper_dir is not None:
+        paper_dir.mkdir(parents=True, exist_ok=True)
         (paper_dir / "results").mkdir(parents=True, exist_ok=True)
         (paper_dir / "tables").mkdir(parents=True, exist_ok=True)
         (paper_dir / "results" / "cross_domain_results.json").write_text(
@@ -336,7 +337,9 @@ def main() -> None:
         # Append TSV (already written under paths.results); copy latest snapshot.
         src_tsv = paths.results / "cross_domain_metrics.tsv"
         if src_tsv.exists():
-            (paper_dir / "tables" / "cross_domain_metrics.tsv").write_text(src_tsv.read_text(encoding="utf-8"), encoding="utf-8")
+            (paper_dir / "tables" / "cross_domain_metrics.tsv").write_text(
+                src_tsv.read_text(encoding="utf-8"), encoding="utf-8"
+            )
         print(f"[{timestamp()}] >>> Copied cross-domain outputs into {paper_dir}", flush=True)
 
 

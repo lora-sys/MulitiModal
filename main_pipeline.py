@@ -56,7 +56,8 @@ def run_step(cmd: list[str], name: str) -> None:
 
 
 def main() -> None:
-    # Accept extra args and forward them to run_cross_domain.py.
+    # Accept extra args from CLI. By default these are treated as run_experiments args.
+    # This avoids silently dropping training protocol flags when launching via start_pipeline.sh.
     parser = build_parser()
     args, extra = parser.parse_known_args()
 
@@ -72,6 +73,7 @@ def main() -> None:
         sys.exit(1)
 
     if getattr(args, "only_cross_domain", False):
+        print(f"[{ts()}] >>> Forwarding extra args to cross-domain: {extra}", flush=True)
         run_step(["python3", "-u", "run_cross_domain.py", *extra], "Cross-domain Validation")
         return
 
@@ -87,11 +89,14 @@ def main() -> None:
         print(f"[{ts()}] >>> Skipping Optuna as requested.", flush=True)
 
     if not getattr(args, "skip_experiments", False):
-        run_step(["python3", "-u", "run_experiments.py"], "Experiments")
+        if extra:
+            print(f"[{ts()}] >>> Forwarding extra args to experiments: {extra}", flush=True)
+        run_step(["python3", "-u", "run_experiments.py", *extra], "Experiments")
     else:
         print(f"[{ts()}] >>> Skipping Experiments as requested.", flush=True)
 
-    run_step(["python3", "-u", "run_cross_domain.py", *extra], "Cross-domain Validation")
+    # Keep cross-domain invocation deterministic in full pipeline mode.
+    run_step(["python3", "-u", "run_cross_domain.py"], "Cross-domain Validation")
 
 
 if __name__ == "__main__":
