@@ -1,0 +1,70 @@
+{
+  "but": {
+    "task": "heart_rate_regression_bpm",
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "head": "mlp",
+    "mse_mean": 164.32610066731772,
+    "mse_std": 3.792902040384647,
+    "mae_mean": 9.955599149068197,
+    "mae_std": 0.5032452656507704,
+    "pearson_mean": 0.20824069772368095,
+    "pearson_std": 0.1780578741860937,
+    "spearman_mean": 0.16894036894036893,
+    "spearman_std": 0.2358056419009221,
+    "best_seed": 44,
+    "num_samples": 181,
+    "num_records_train": 145,
+    "num_records_val": 36,
+    "base_lr": 0.001,
+    "finetune_factor": 0.1,
+    "finetune_lr": 0.0001,
+    "scaler_path": "/root/work/MulitiModal/tcm_ft_transformer/scaler_params.npz",
+    "per_seed": [
+      {
+        "mse": 168.15554809570312,
+        "rmse": 12.967480406605715,
+        "mae": 10.3724365234375,
+        "pearson": -0.03996385618223792,
+        "spearman": -0.15830115830115832,
+        "num_val_samples": 36,
+        "best_val_mse": 168.15554809570312,
+        "seed": 42,
+        "target_mu": 76.3448257446289,
+        "target_std": 14.153045654296875
+      },
+      {
+        "mse": 165.66416931152344,
+        "rmse": 12.87105937021205,
+        "mae": 10.246748924255371,
+        "pearson": 0.3691231922504805,
+        "spearman": 0.3881595881595882,
+        "num_val_samples": 36,
+        "best_val_mse": 165.66416931152344,
+        "seed": 43,
+        "target_mu": 76.3448257446289,
+        "target_std": 14.153044700622559
+      },
+      {
+        "mse": 159.15858459472656,
+        "rmse": 12.615806933951017,
+        "mae": 9.247611999511719,
+        "pearson": 0.29556275710280033,
+        "spearman": 0.27696267696267696,
+        "num_val_samples": 36,
+        "best_val_mse": 159.15858459472656,
+        "seed": 44,
+        "target_mu": 76.3448257446289,
+        "target_std": 14.153044700622559
+      }
+    ]
+  },
+  "mechanism": {
+    "tcm_probs_mean_abs_pearson": 0.3984975218772888,
+    "tcm_probs_max_abs_pearson": 0.5171303153038025,
+    "tcm_probs_max_abs_dim": 0
+  }
+}

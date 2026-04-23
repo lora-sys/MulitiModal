@@ -10,7 +10,7 @@ experiment/rawdata/clean_data
 venv
 # Archived files
 experiment/archive/
-
+.DS_Store
 # Python cache
 __pycache__/
 *.py[cod]
