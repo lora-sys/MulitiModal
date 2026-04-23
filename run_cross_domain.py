@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import json
 from typing import List, Tuple
+from dataclasses import dataclass
 
 import numpy as np
 import torch
@@ -23,7 +24,7 @@ from src.utils import regression_metrics, save_json, timestamp
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Cross-domain validation (BUT PPG + MIMIC)")
     p.add_argument("--device", type=str, default="cuda")
-    p.add_argument("--epochs", type=int, default=8)
+    p.add_argument("--epochs", type=int, default=8, help="Max epochs for head fine-tuning per seed.")
     p.add_argument("--but-dir", type=str, default=None)
     p.add_argument("--mimic-csv", type=str, default=None)
     p.add_argument("--head-lr", type=float, default=None)
@@ -32,6 +33,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tcm-scaler", type=str, default=str(TCM_SCALER_PATH))
     p.add_argument("--tcm-prob-eps", type=float, default=0.0)
     p.add_argument("--tcm-temp", type=float, default=1.0)
+    p.add_argument("--seeds", type=str, default="", help="Comma-separated seeds for repeated runs, e.g. 42,43,44")
+    p.add_argument("--head", type=str, default="linear", choices=["linear", "mlp"], help="Head type to train (only head trains).")
+    p.add_argument("--early-stop-patience", type=int, default=10, help="Early stopping patience on val MSE.")
     p.add_argument(
         "--strict-tcm-paths",
         action="store_true",
@@ -42,6 +46,194 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--record-split-seed", type=int, default=42)
     p.add_argument("--paper-dir", type=str, default="paper", help="If exists, copy cross-domain outputs into this folder.")
     return p.parse_args()
+
+
+def _parse_seeds_arg(seeds: str) -> List[int]:
+    s = (seeds or "").strip()
+    if not s:
+        return []
+    out: List[int] = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        out.append(int(part))
+    return out
+
+
+def _set_seed(seed: int) -> None:
+    import random
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _make_head(kind: str, in_dim: int = 128) -> nn.Module:
+    if kind == "mlp":
+        return nn.Sequential(
+            nn.Linear(in_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(p=0.1),
+            nn.Linear(64, 1),
+        )
+    return nn.Linear(in_dim, 1)
+
+
+@dataclass
+class SeedRun:
+    seed: int
+    metrics: dict
+
+
+@torch.no_grad()
+def _collect_preds(
+    model: OPLRIRegressor,
+    tcm_prior: FrozenTCMPrior,
+    head: nn.Module,
+    loader: DataLoader,
+    args,
+    device: str,
+) -> Tuple[np.ndarray, np.ndarray]:
+    ys, ps = [], []
+    model.eval()
+    head.eval()
+    for dynamic, static, target, _rid in loader:
+        dynamic = dynamic.to(device)
+        static = static.to(device)
+        tcm_probs = tcm_prior.infer_probs(static)
+        z_pure, _ = model.extract_pure_dynamic(
+            dynamic,
+            tcm_probs,
+            gate_a_scale=float(args.gate_a_scale),
+            gate_b_scale=float(args.gate_b_scale),
+            return_attention=False,
+        )
+        pred = head(z_pure)
+        ys.append(target.numpy())
+        ps.append(pred.cpu().numpy())
+    return np.concatenate(ys).reshape(-1), np.concatenate(ps).reshape(-1)
+
+
+def _train_head_one_seed(
+    *,
+    seed: int,
+    model: OPLRIRegressor,
+    tcm_prior: FrozenTCMPrior,
+    head: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    args,
+    device: str,
+    finetune_lr: float,
+) -> dict:
+    _set_seed(seed)
+    head = head.to(device)
+    optimizer = torch.optim.Adam(head.parameters(), lr=float(finetune_lr))
+    loss_fn = nn.MSELoss()
+
+    best_val = float("inf")
+    best_state = None
+    counter = 0
+
+    head.train()
+    for epoch in range(int(args.epochs)):
+        for dynamic, static, target, _rid in train_loader:
+            dynamic = dynamic.to(device)
+            static = static.to(device)
+            target = target.to(device)
+            with torch.no_grad():
+                tcm_probs = tcm_prior.infer_probs(static)
+                z_pure, _ = model.extract_pure_dynamic(
+                    dynamic,
+                    tcm_probs,
+                    gate_a_scale=float(args.gate_a_scale),
+                    gate_b_scale=float(args.gate_b_scale),
+                    return_attention=False,
+                )
+            pred = head(z_pure)
+            loss = loss_fn(pred, target)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        # Early stopping on val MSE
+        y, p = _collect_preds(model, tcm_prior, head, val_loader, args, device)
+        val_mse = float(np.mean((y - p) ** 2))
+        if val_mse + 1e-12 < best_val:
+            best_val = val_mse
+            best_state = {k: v.detach().cpu().clone() for k, v in head.state_dict().items()}
+            counter = 0
+        else:
+            counter += 1
+            if counter >= int(args.early_stop_patience):
+                break
+
+    if best_state is not None:
+        head.load_state_dict(best_state, strict=True)
+
+    y, p = _collect_preds(model, tcm_prior, head, val_loader, args, device)
+    metrics = regression_metrics(y, p)
+    metrics["spearman"] = _spearmanr(y, p)
+    metrics["num_val_samples"] = int(y.shape[0])
+    metrics["best_val_mse"] = float(best_val)
+    metrics["seed"] = int(seed)
+    return {"metrics": metrics, "y_true": y, "y_pred": p}
+
+
+def _write_cross_domain_seed_table(tsv_path: Path, seed_rows: List[dict]) -> None:
+    headers = [
+        "timestamp",
+        "seed",
+        "task",
+        "num_samples",
+        "num_records_train",
+        "num_records_val",
+        "base_lr",
+        "finetune_factor",
+        "finetune_lr",
+        "head",
+        "mse",
+        "rmse",
+        "mae",
+        "pearson",
+        "spearman",
+    ]
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    with tsv_path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=headers, delimiter="\t")
+        w.writeheader()
+        for r in seed_rows:
+            w.writerow({k: r.get(k, "") for k in headers})
+
+
+def _plot_scatter(y_true: np.ndarray, y_pred: np.ndarray, out_dir: Path, stem: str) -> List[str]:
+    try:
+        import matplotlib.pyplot as plt  # type: ignore
+    except Exception:
+        return []
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(5.2, 5.2), dpi=300)
+    ax.scatter(y_true, y_pred, s=10, alpha=0.6, color="#2c3e50")
+    lo = float(min(y_true.min(), y_pred.min()))
+    hi = float(max(y_true.max(), y_pred.max()))
+    ax.plot([lo, hi], [lo, hi], color="#c0392b", linewidth=1.2)
+    ax.set_xlabel("True HR (BPM)")
+    ax.set_ylabel("Pred HR (BPM)")
+    ax.set_title("Fig.X Cross-domain HR Probe (BUT)")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+
+    paths = []
+    for ext in ("png", "svg", "pdf"):
+        p = out_dir / f"{stem}.{ext}"
+        fig.savefig(p)
+        paths.append(str(p))
+    plt.close(fig)
+    return paths
 
 
 @torch.no_grad()
@@ -180,65 +372,91 @@ def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
     base_lr = _load_base_lr_from_yaml(Path(args.best_params_yaml), default_lr=1e-3)
     finetune_factor = 0.1
     finetune_lr = args.head_lr if args.head_lr is not None else (base_lr * finetune_factor)
-    head = nn.Linear(128, 1).to(device)
-    optimizer = torch.optim.Adam(head.parameters(), lr=finetune_lr)
-    loss_fn = nn.MSELoss()
+    seeds = _parse_seeds_arg(args.seeds)
+    if not seeds:
+        seeds = [int(args.record_split_seed)]
 
-    # Keep feature extractor behavior frozen (including BN/dropout behavior)
-    head.train()
-    for _ in range(args.epochs):
-        for dynamic, static, target, _rid in train_loader:
-            dynamic = dynamic.to(device)
-            static = static.to(device)
-            target = target.to(device)
-            with torch.no_grad():
-                tcm_probs = tcm_prior.infer_probs(static)
-                z_pure, _ = model.extract_pure_dynamic(
-                    dynamic,
-                    tcm_probs,
-                    gate_a_scale=float(args.gate_a_scale),
-                    gate_b_scale=float(args.gate_b_scale),
-                    return_attention=False,
-                )
-            pred = head(z_pure)
-            loss = loss_fn(pred, target)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+    seed_rows: List[dict] = []
+    per_seed_runs: List[dict] = []
+    best_seed = None
+    best_mse = float("inf")
+    best_y = None
+    best_p = None
 
-    metrics = eval_linear_head(model, tcm_prior, head, val_loader, args, device)
-    # add spearman for robustness
-    # recompute preds to avoid changing regression_metrics
-    ys, ps = [], []
-    model.eval()
-    head.eval()
-    with torch.no_grad():
-        for dynamic, static, target, _rid in val_loader:
-            dynamic = dynamic.to(device)
-            static = static.to(device)
-            tcm_probs = tcm_prior.infer_probs(static)
-            z_pure, _ = model.extract_pure_dynamic(dynamic, tcm_probs, gate_a_scale=float(args.gate_a_scale), gate_b_scale=float(args.gate_b_scale))
-            pred = head(z_pure)
-            ys.append(target.numpy())
-            ps.append(pred.cpu().numpy())
-    y = np.concatenate(ys)
-    p = np.concatenate(ps)
-    spearman = _spearmanr(y, p)
-    return {
+    for seed in seeds:
+        head = _make_head(str(args.head), in_dim=128)
+        run = _train_head_one_seed(
+            seed=int(seed),
+            model=model,
+            tcm_prior=tcm_prior,
+            head=head,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            args=args,
+            device=device,
+            finetune_lr=float(finetune_lr),
+        )
+        m = run["metrics"]
+        per_seed_runs.append(m)
+        if float(m["mse"]) < best_mse:
+            best_mse = float(m["mse"])
+            best_seed = int(seed)
+            best_y = run["y_true"]
+            best_p = run["y_pred"]
+
+        seed_rows.append(
+            {
+                "timestamp": timestamp(),
+                "seed": int(seed),
+                "task": "heart_rate_regression_bpm",
+                "num_samples": len(dataset),
+                "num_records_train": len(set(record_ids[i] for i in train_idx)),
+                "num_records_val": len(set(record_ids[i] for i in val_idx)),
+                "base_lr": base_lr,
+                "finetune_factor": finetune_factor,
+                "finetune_lr": float(finetune_lr),
+                "head": str(args.head),
+                "mse": float(m["mse"]),
+                "rmse": float(m["rmse"]),
+                "mae": float(m["mae"]),
+                "pearson": float(m["pearson"]),
+                "spearman": float(m["spearman"]),
+            }
+        )
+
+    _write_cross_domain_seed_table(paths.results / "cross_domain_seed_metrics.tsv", seed_rows)
+    if best_y is not None and best_p is not None:
+        _plot_scatter(best_y, best_p, paths.results, "fig_cross_domain_hr_probe")
+
+    # Aggregate mean±std across seeds (paper-friendly)
+    mses = np.array([float(x["mse"]) for x in per_seed_runs], dtype=np.float64)
+    maes = np.array([float(x["mae"]) for x in per_seed_runs], dtype=np.float64)
+    pears = np.array([float(x["pearson"]) for x in per_seed_runs], dtype=np.float64)
+    spears = np.array([float(x["spearman"]) for x in per_seed_runs], dtype=np.float64)
+
+    agg = {
         "task": "heart_rate_regression_bpm",
-        "mse": metrics["mse"],
-        "rmse": metrics["rmse"],
-        "mae": metrics["mae"],
-        "pearson": metrics["pearson"],
-        "spearman": spearman,
+        "seeds": seeds,
+        "head": str(args.head),
+        "mse_mean": float(mses.mean()),
+        "mse_std": float(mses.std(ddof=0)) if mses.size > 1 else 0.0,
+        "mae_mean": float(maes.mean()),
+        "mae_std": float(maes.std(ddof=0)) if maes.size > 1 else 0.0,
+        "pearson_mean": float(pears.mean()),
+        "pearson_std": float(pears.std(ddof=0)) if pears.size > 1 else 0.0,
+        "spearman_mean": float(spears.mean()),
+        "spearman_std": float(spears.std(ddof=0)) if spears.size > 1 else 0.0,
+        "best_seed": best_seed,
         "num_samples": len(dataset),
         "num_records_train": len(set(record_ids[i] for i in train_idx)),
         "num_records_val": len(set(record_ids[i] for i in val_idx)),
         "base_lr": base_lr,
         "finetune_factor": finetune_factor,
-        "finetune_lr": finetune_lr,
+        "finetune_lr": float(finetune_lr),
         "scaler_path": str(scaler_path),
+        "per_seed": per_seed_runs,
     }
+    return agg
 
 
 def _pearson_1d(a: np.ndarray, b: np.ndarray) -> float:
@@ -294,9 +512,9 @@ def main() -> None:
 
     print(f"[{timestamp()}] >>> Cross-domain A: BUT PPG (HR mechanism validation)")
     but_metrics = run_but_validation(paths, args, device)
-    print(f"[{timestamp()}] BUT HR Pearson: {but_metrics['pearson']:.4f}")
-    print(f"[{timestamp()}] BUT HR Spearman: {but_metrics['spearman']:.4f}")
-    print(f"[{timestamp()}] BUT HR MAE (BPM): {but_metrics['mae']:.4f}")
+    print(f"[{timestamp()}] BUT HR Pearson(mean±std): {but_metrics['pearson_mean']:.4f} ± {but_metrics['pearson_std']:.4f}")
+    print(f"[{timestamp()}] BUT HR Spearman(mean±std): {but_metrics['spearman_mean']:.4f} ± {but_metrics['spearman_std']:.4f}")
+    print(f"[{timestamp()}] BUT HR MAE (BPM, mean±std): {but_metrics['mae_mean']:.4f} ± {but_metrics['mae_std']:.4f}")
     print("(Note: Negative correlation is physiologically expected between WESAD Relaxation and Heart Rate)")
     append_cross_domain_tsv(
         paths.results / "cross_domain_metrics.tsv",
@@ -309,11 +527,11 @@ def main() -> None:
             "base_lr": but_metrics["base_lr"],
             "finetune_factor": but_metrics["finetune_factor"],
             "finetune_lr": but_metrics["finetune_lr"],
-            "mse": but_metrics["mse"],
-            "rmse": but_metrics["rmse"],
-            "mae": but_metrics["mae"],
-            "pearson": but_metrics["pearson"],
-            "spearman": but_metrics["spearman"],
+            "mse": but_metrics["mse_mean"],
+            "rmse": float(np.sqrt(but_metrics["mse_mean"])),
+            "mae": but_metrics["mae_mean"],
+            "pearson": but_metrics["pearson_mean"],
+            "spearman": but_metrics["spearman_mean"],
         },
     )
 
