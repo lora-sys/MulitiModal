@@ -130,9 +130,10 @@ def _spearmanr(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
+    # NOTE: Do not hard-fail here. FrozenTCMPrior has robust path resolution and supports both
+    # `tcm_scaler.pkl` and legacy `scaler_params.npz`. Some server layouts may not place the scaler
+    # under the exact CLI path.
     scaler_path = Path(args.tcm_scaler)
-    if not scaler_path.exists():
-        raise FileNotFoundError(f"TCM scaler not found: {scaler_path}")
     dataset = BUTPPGDataset(
         paths.but_ppg_dir,
         scaler_path=scaler_path,
