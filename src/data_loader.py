@@ -611,6 +611,12 @@ class BUTPPGDataset(Dataset):
             ch0_t = torch.tensor(ch0, dtype=torch.float32)
             x = torch.stack([ch0_t, ch0_t], dim=0).numpy()
             x = self._fit_to_window(x)
+            # Match WESAD-like input scale: per-window, per-channel z-score.
+            # Without this, raw int16 amplitude can explode the frozen encoder features,
+            # leading to huge MAE even when correlation looks reasonable.
+            mu = x.mean(axis=1, keepdims=True)
+            sig = x.std(axis=1, keepdims=True) + 1e-6
+            x = (x - mu) / sig
 
             self.samples.append(
                 Sample(
