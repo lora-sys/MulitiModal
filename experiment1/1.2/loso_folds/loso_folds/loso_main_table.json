@@ -1,0 +1,98 @@
+{
+  "n_folds": 15,
+  "stage3_main_table": [
+    {
+      "step": 1,
+      "name": "Baseline A",
+      "mean_mse": 0.1817648281653722,
+      "std_mse": 0.04717887625461007,
+      "n_folds": 15
+    },
+    {
+      "step": 2,
+      "name": "Baseline B",
+      "mean_mse": 0.19033946394920348,
+      "std_mse": 0.07283022005083581,
+      "n_folds": 15
+    },
+    {
+      "step": 3,
+      "name": "Ours-TCN",
+      "mean_mse": 0.1891241396466891,
+      "std_mse": 0.08649827458778629,
+      "n_folds": 15
+    },
+    {
+      "step": 4,
+      "name": "Step 4",
+      "mean_mse": null,
+      "std_mse": null,
+      "n_folds": 0
+    },
+    {
+      "step": 5,
+      "name": "w/o Dual Gating",
+      "mean_mse": 0.1457873433828354,
+      "std_mse": 0.1321390245791918,
+      "n_folds": 15
+    },
+    {
+      "step": 6,
+      "name": "w/o TCM Prior",
+      "mean_mse": 0.15164408311247826,
+      "std_mse": 0.13965367962827827,
+      "n_folds": 15
+    },
+    {
+      "step": 7,
+      "name": "w/o TCM_Gate",
+      "mean_mse": 0.13862782108287017,
+      "std_mse": 0.11033912250822614,
+      "n_folds": 15
+    },
+    {
+      "step": 8,
+      "name": "Final Ours",
+      "mean_mse": 0.1417190596461296,
+      "std_mse": 0.11956936237435481,
+      "n_folds": 15
+    },
+    {
+      "step": 9,
+      "name": "Step 9",
+      "mean_mse": null,
+      "std_mse": null,
+      "n_folds": 0
+    }
+  ],
+  "final_ours_fold_stats": {
+    "step": 8,
+    "name": "Final Ours",
+    "mse_mean": 0.1417190596461296,
+    "mse_std": 0.11956936237435481,
+    "rmse_mean": 0.3508697633205267,
+    "rmse_std": 0.13641652698088744,
+    "mae_mean": 0.309055757522583,
+    "mae_std": 0.12938228563882148,
+    "pearson_mean": 0.7517397793319378,
+    "pearson_std": 0.2485549538582136,
+    "n_folds": 15
+  },
+  "fold_files": [
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S10.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S11.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S13.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S14.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S15.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S16.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S17.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S2.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S3.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S4.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S5.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S6.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S7.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S8.json",
+    "/root/work/MulitiModal/results/loso_folds/experiments_summary_S9.json"
+  ]
+}
