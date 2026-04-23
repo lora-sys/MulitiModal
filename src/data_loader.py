@@ -419,9 +419,11 @@ class BUTPPGDataset(Dataset):
         but_dir: Path,
         window_size: int = 1000,
         scaler_path: Optional[Path] = None,
+        return_record_id: bool = False,
     ):
         self.window_size = window_size
         self.samples: List[Sample] = []
+        self.return_record_id = bool(return_record_id)
         self._build(but_dir)
 
     def _build(self, but_dir: Path) -> None:
@@ -615,6 +617,7 @@ class BUTPPGDataset(Dataset):
                     dynamic=x.astype(np.float32),
                     static=meta["static"].copy(),
                     target=float(hr_labels[rid]),
+                    subject_id=str(rid),
                 )
             )
 
@@ -644,11 +647,14 @@ class BUTPPGDataset(Dataset):
 
     def __getitem__(self, idx: int):
         s = self.samples[idx]
-        return (
+        item = (
             torch.tensor(s.dynamic, dtype=torch.float32),
             torch.tensor(s.static, dtype=torch.float32),
             torch.tensor([s.target], dtype=torch.float32),
         )
+        if self.return_record_id:
+            return (*item, s.subject_id)
+        return item
 
 
 class MIMICStaticDataset(Dataset):

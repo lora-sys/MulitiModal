@@ -1,0 +1,100 @@
+{
+  "loso_stage3_summary": [
+    {
+      "step": 1,
+      "name": "Baseline A",
+      "mean_best_val_mse": 0.1817648281653722,
+      "std_best_val_mse": 0.04717887625461007,
+      "n_folds": 15
+    },
+    {
+      "step": 2,
+      "name": "Baseline B",
+      "mean_best_val_mse": 0.19033946394920348,
+      "std_best_val_mse": 0.07283022005083581,
+      "n_folds": 15
+    },
+    {
+      "step": 3,
+      "name": "Ours-TCN",
+      "mean_best_val_mse": 0.20970333566268284,
+      "std_best_val_mse": 0.13593964559783192,
+      "n_folds": 15
+    },
+    {
+      "step": 4,
+      "name": "Encoder Selection",
+      "mean_best_val_mse": null,
+      "std_best_val_mse": null,
+      "n_folds": 0
+    },
+    {
+      "step": 5,
+      "name": "w/o Dual Gating",
+      "mean_best_val_mse": 0.1510649579266707,
+      "std_best_val_mse": 0.13219116505397033,
+      "n_folds": 15
+    },
+    {
+      "step": 6,
+      "name": "w/o TCM Prior",
+      "mean_best_val_mse": 0.1512553133070469,
+      "std_best_val_mse": 0.1382362016006086,
+      "n_folds": 15
+    },
+    {
+      "step": 7,
+      "name": "w/o TCM_Gate",
+      "mean_best_val_mse": 0.13909523325661818,
+      "std_best_val_mse": 0.10941308991723801,
+      "n_folds": 15
+    },
+    {
+      "step": 8,
+      "name": "Final Ours",
+      "mean_best_val_mse": 0.13463565955559412,
+      "std_best_val_mse": 0.11221867145622084,
+      "n_folds": 15
+    },
+    {
+      "step": 9,
+      "name": "Plotting",
+      "mean_best_val_mse": null,
+      "std_best_val_mse": null,
+      "n_folds": 0
+    }
+  ],
+  "protocol": "loso",
+  "n_folds": 15,
+  "fold_subjects": [
+    "S10",
+    "S11",
+    "S13",
+    "S14",
+    "S15",
+    "S16",
+    "S17",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8",
+    "S9"
+  ],
+  "runner": {
+    "signature": "RUN_EXPERIMENTS_V2_LOSO_GUARDED",
+    "file": "/root/work/MulitiModal/run_experiments.py",
+    "mtime": "2026-04-23 06:02:37"
+  },
+  "auto_outputs": {
+    "main_table_json": "/root/work/MulitiModal/results/loso_folds/loso_main_table.json",
+    "main_table_csv": "/root/work/MulitiModal/results/loso_folds/loso_main_table.csv",
+    "main_table_tsv": "/root/work/MulitiModal/results/loso_folds/loso_main_table.tsv",
+    "figures": [
+      "/root/work/MulitiModal/figures/fig1_loso_comparison.png",
+      "/root/work/MulitiModal/figures/fig3_loso_ablation.png"
+    ]
+  }
+}

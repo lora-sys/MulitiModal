@@ -1,0 +1,395 @@
+{
+  "stage1_selection_table": [],
+  "runner": {
+    "signature": "RUN_EXPERIMENTS_V2_LOSO_GUARDED",
+    "file": "/root/work/MulitiModal/run_experiments.py",
+    "mtime": "2026-04-23 06:02:37"
+  },
+  "protocol": "loso",
+  "holdout_subject": "S2",
+  "stage2_best_params": {
+    "lr": 0.0005,
+    "weight_decay": 1e-05,
+    "batch_size": 32
+  },
+  "step8_controls": {
+    "gate_a_scale": 0.0,
+    "gate_b_scale": 0.1,
+    "final_lr_mult": 0.7,
+    "cross_attention": false
+  },
+  "step8_sweep_results": [],
+  "stage3_matrix_best_val_mse": [
+    {
+      "step": 1,
+      "name": "Baseline A",
+      "best_val_mse": 0.22752295434474945
+    },
+    {
+      "step": 2,
+      "name": "Baseline B",
+      "best_val_mse": 0.22921329736709595
+    },
+    {
+      "step": 3,
+      "name": "Ours-TCN",
+      "best_val_mse": 0.22570885717868805
+    },
+    {
+      "step": 4,
+      "name": "Encoder Selection",
+      "best_val_mse": null
+    },
+    {
+      "step": 5,
+      "name": "w/o Dual Gating",
+      "best_val_mse": 0.23830655217170715
+    },
+    {
+      "step": 6,
+      "name": "w/o TCM Prior",
+      "best_val_mse": 0.22967544198036194
+    },
+    {
+      "step": 7,
+      "name": "w/o TCM_Gate",
+      "best_val_mse": 0.22731304168701172
+    },
+    {
+      "step": 8,
+      "name": "Final Ours",
+      "best_val_mse": 0.2118995040655136
+    },
+    {
+      "step": 9,
+      "name": "Plotting",
+      "best_val_mse": null
+    }
+  ],
+  "matrix_logs": [
+    {
+      "step": 1,
+      "name": "Baseline A",
+      "mse": 0.22752295434474945,
+      "full": {
+        "step_name": "Step1-BaselineA-Weak",
+        "encoder": "tcn",
+        "use_tcm": false,
+        "use_gate_a": false,
+        "use_gate_b": false,
+        "hparams": {
+          "lr": 0.0005,
+          "weight_decay": 1e-05,
+          "batch_size": 32
+        },
+        "best_epoch": 9,
+        "val_mse_history": [
+          0.24313975870609283,
+          0.24895352125167847,
+          0.24527083337306976,
+          0.2446439415216446,
+          0.24662160873413086,
+          0.23673850297927856,
+          0.2404586225748062,
+          0.2327016294002533,
+          0.22752295434474945,
+          0.26988348364830017,
+          0.25110581517219543,
+          0.271899551153183,
+          0.24152977764606476,
+          0.25152525305747986,
+          0.2599017322063446,
+          0.2361954301595688,
+          0.2436247020959854,
+          0.2298201620578766,
+          0.2554483711719513
+        ],
+        "metrics": {
+          "mse": 0.22752295434474945,
+          "rmse": 0.4769936627930705,
+          "mae": 0.4117699861526489,
+          "pearson": -0.07439567239835428
+        },
+        "use_cross_attention": false
+      }
+    },
+    {
+      "step": 2,
+      "name": "Baseline B",
+      "mse": 0.22921329736709595,
+      "full": {
+        "step_name": "Step2-BaselineB-Strong",
+        "encoder": "tcn",
+        "use_tcm": false,
+        "use_gate_a": false,
+        "use_gate_b": true,
+        "hparams": {
+          "lr": 0.0005,
+          "weight_decay": 1e-05,
+          "batch_size": 32
+        },
+        "best_epoch": 1,
+        "val_mse_history": [
+          0.22921329736709595,
+          0.2467893362045288,
+          0.23235566914081573,
+          0.2654561400413513,
+          0.23880557715892792,
+          0.2629699409008026,
+          0.27232494950294495,
+          0.23468878865242004,
+          0.26262542605400085,
+          0.26113224029541016,
+          0.2528131306171417
+        ],
+        "metrics": {
+          "mse": 0.22921329736709595,
+          "rmse": 0.4787622555790044,
+          "mae": 0.4091232419013977,
+          "pearson": -0.09375517997702142
+        },
+        "use_cross_attention": false
+      }
+    },
+    {
+      "step": 3,
+      "name": "Ours-TCN",
+      "mse": 0.22570885717868805,
+      "full": {
+        "step_name": "Step3-Ours-TCN",
+        "encoder": "tcn",
+        "use_tcm": true,
+        "use_gate_a": true,
+        "use_gate_b": true,
+        "hparams": {
+          "lr": 0.0005,
+          "weight_decay": 1e-05,
+          "batch_size": 32
+        },
+        "best_epoch": 26,
+        "val_mse_history": [
+          0.24605298042297363,
+          0.24886170029640198,
+          0.24976442754268646,
+          0.24378202855587006,
+          0.24220706522464752,
+          0.2750592827796936,
+          0.2380552738904953,
+          0.2567714750766754,
+          0.25158852338790894,
+          0.242788165807724,
+          0.239958718419075,
+          0.2386029064655304,
+          0.24223683774471283,
+          0.26406794786453247,
+          0.2614917457103729,
+          0.2730441689491272,
+          0.23102189600467682,
+          0.27372023463249207,
+          0.25995469093322754,
+          0.2484734058380127,
+          0.24865053594112396,
+          0.25924575328826904,
+          0.25559762120246887,
+          0.2320563793182373,
+          0.24461160600185394,
+          0.22570885717868805,
+          0.24221102893352509,
+          0.2561047673225403,
+          0.25686031579971313,
+          0.25278937816619873,
+          0.2686045169830322,
+          0.24907678365707397,
+          0.26119494438171387,
+          0.23823869228363037,
+          0.2623031735420227,
+          0.24604204297065735
+        ],
+        "metrics": {
+          "mse": 0.22570885717868805,
+          "rmse": 0.4750882625141228,
+          "mae": 0.42728176712989807,
+          "pearson": -0.04598845752981699
+        },
+        "use_cross_attention": false
+      }
+    },
+    {
+      "step": 4,
+      "name": "Encoder Selection",
+      "mse": null,
+      "best_encoder": "inceptiontime",
+      "selection_rows": []
+    },
+    {
+      "step": 5,
+      "name": "w/o Dual Gating",
+      "mse": 0.23830655217170715,
+      "full": {
+        "step_name": "Step5-Ablation1-woDualGating",
+        "encoder": "inceptiontime",
+        "use_tcm": true,
+        "use_gate_a": false,
+        "use_gate_b": false,
+        "hparams": {
+          "lr": 0.0005,
+          "weight_decay": 1e-05,
+          "batch_size": 32
+        },
+        "best_epoch": 4,
+        "val_mse_history": [
+          0.2558179795742035,
+          0.26156094670295715,
+          0.297280490398407,
+          0.23830655217170715,
+          0.2562040090560913,
+          0.2511632740497589,
+          0.251681923866272,
+          0.31358543038368225,
+          0.32254302501678467,
+          0.36993077397346497,
+          0.3749033808708191,
+          0.38123756647109985,
+          0.4315740466117859,
+          0.5386862754821777
+        ],
+        "metrics": {
+          "mse": 0.23830655217170715,
+          "rmse": 0.48816652094516594,
+          "mae": 0.4369751214981079,
+          "pearson": -0.17362960156500293
+        },
+        "use_cross_attention": false
+      }
+    },
+    {
+      "step": 6,
+      "name": "w/o TCM Prior",
+      "mse": 0.22967544198036194,
+      "full": {
+        "step_name": "Step6-Ablation2-woTCMPrior",
+        "encoder": "inceptiontime",
+        "use_tcm": false,
+        "use_gate_a": false,
+        "use_gate_b": true,
+        "hparams": {
+          "lr": 0.0005,
+          "weight_decay": 1e-05,
+          "batch_size": 32
+        },
+        "best_epoch": 1,
+        "val_mse_history": [
+          0.22967544198036194,
+          0.2617979049682617,
+          0.24390554428100586,
+          0.23055918514728546,
+          0.23633421957492828,
+          0.24014946818351746,
+          0.3130275309085846,
+          0.25648999214172363,
+          0.29384005069732666,
+          0.28217729926109314,
+          0.297948956489563
+        ],
+        "metrics": {
+          "mse": 0.22967544198036194,
+          "rmse": 0.47924465774838004,
+          "mae": 0.41671180725097656,
+          "pearson": -0.16695222652230568
+        },
+        "use_cross_attention": false
+      }
+    },
+    {
+      "step": 7,
+      "name": "w/o TCM_Gate",
+      "mse": 0.22731304168701172,
+      "full": {
+        "step_name": "Step7-Ablation3-woTCMGate",
+        "encoder": "inceptiontime",
+        "use_tcm": true,
+        "use_gate_a": false,
+        "use_gate_b": true,
+        "hparams": {
+          "lr": 0.0005,
+          "weight_decay": 1e-05,
+          "batch_size": 32
+        },
+        "best_epoch": 4,
+        "val_mse_history": [
+          0.34906744956970215,
+          0.2549172043800354,
+          0.3011717200279236,
+          0.22731304168701172,
+          0.25974583625793457,
+          0.2792811393737793,
+          0.26134490966796875,
+          0.2877233624458313,
+          0.25849243998527527,
+          0.2789843678474426,
+          0.3130052983760834,
+          0.3257454037666321,
+          0.3265710175037384,
+          0.32541972398757935
+        ],
+        "metrics": {
+          "mse": 0.22731304168701172,
+          "rmse": 0.47677357486233624,
+          "mae": 0.438006728887558,
+          "pearson": -0.08467556678215124
+        },
+        "use_cross_attention": false
+      }
+    },
+    {
+      "step": 8,
+      "name": "Final Ours",
+      "mse": 0.2118995040655136,
+      "full": {
+        "step_name": "Step8-FinalOurs",
+        "encoder": "inceptiontime",
+        "use_tcm": true,
+        "use_gate_a": true,
+        "use_gate_b": true,
+        "hparams": {
+          "lr": 0.00035,
+          "weight_decay": 1e-05,
+          "batch_size": 32
+        },
+        "best_epoch": 4,
+        "val_mse_history": [
+          0.22845791280269623,
+          0.2403528243303299,
+          0.2242877334356308,
+          0.2118995040655136,
+          0.23407462239265442,
+          0.2268974483013153,
+          0.2382276952266693,
+          0.25125694274902344,
+          0.35623428225517273,
+          0.2881672978401184,
+          0.3633027970790863,
+          0.3695259988307953,
+          0.3692726194858551,
+          0.5069125890731812
+        ],
+        "metrics": {
+          "mse": 0.2118995040655136,
+          "rmse": 0.46032543278154164,
+          "mae": 0.41576412320137024,
+          "pearson": -0.058041321578926386
+        },
+        "use_cross_attention": false
+      }
+    },
+    {
+      "step": 9,
+      "name": "Plotting",
+      "mse": null,
+      "figures": [
+        "/root/work/MulitiModal/figures/fig1_comparison.png",
+        "/root/work/MulitiModal/figures/fig3_ablation.png"
+      ]
+    }
+  ]
+}
