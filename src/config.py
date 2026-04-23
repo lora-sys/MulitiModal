@@ -13,7 +13,8 @@ EARLY_STOPPING_PATIENCE = 10  # 连续 10 轮不掉分就停
 
 # Default pre-trained TCM assets provided by user.
 TCM_CHECKPOINT_PATH = Path("/root/work/MulitiModal/checkpoints/best_tcm_model.pth")
-TCM_SCALER_PATH = Path("/root/work/MulitiModal/checkpoints/tcm_scaler.pkl")
+# NOTE: In the current deployment, we use the legacy npz scaler shipped with `tcm_ft_transformer`.
+TCM_SCALER_PATH = Path("/root/work/MulitiModal/tcm_ft_transformer/scaler_params.npz")
 TCM_TRAINING_HISTORY_PATH = Path("/home/lora/repos/MulitiModal/tcm_ft_transformer/training_history.png")
 
 

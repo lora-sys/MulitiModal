@@ -86,12 +86,22 @@ class FrozenTCMPrior:
         *,
         prob_eps: float = 0.0,
         temperature: float = 1.0,
+        strict_paths: bool = False,
     ):
         self.device = device
         self.prob_eps = float(prob_eps)
         self.temperature = float(temperature)
-        resolved_ckpt = self._resolve_checkpoint_path(checkpoint_path)
-        resolved_scaler = self._resolve_scaler_path(scaler_path, resolved_ckpt)
+        strict_paths = bool(strict_paths)
+        if strict_paths:
+            if not checkpoint_path.exists():
+                raise FileNotFoundError(f"TCM checkpoint not found (strict): {checkpoint_path}")
+            if not scaler_path.exists():
+                raise FileNotFoundError(f"TCM scaler not found (strict): {scaler_path}")
+            resolved_ckpt = checkpoint_path
+            resolved_scaler = scaler_path
+        else:
+            resolved_ckpt = self._resolve_checkpoint_path(checkpoint_path)
+            resolved_scaler = self._resolve_scaler_path(scaler_path, resolved_ckpt)
         print(f"[{timestamp()}] >>> TCM checkpoint resolved to: {resolved_ckpt}", flush=True)
         print(f"[{timestamp()}] >>> TCM scaler resolved to: {resolved_scaler}", flush=True)
 
@@ -706,11 +716,12 @@ def _plot_loso_summary_figures(main_table: Dict) -> List[str]:
     row_by_name = {r["name"]: r for r in main_table.get("stage3_main_table", [])}
     fig_paths: List[str] = []
 
-    comp_names = ["Baseline A", "Baseline B", "Ours-TCN"]
+    # Paper main comparison should use the FINAL model (Step8), not the intermediate Step3 (Ours-TCN).
+    comp_names = ["Baseline A", "Baseline B", "Final Ours"]
     if all(name in row_by_name and row_by_name[name]["mean_mse"] is not None for name in comp_names):
         comparison_data = [{"name": "Baseline A", "metrics": {"mse": row_by_name["Baseline A"]["mean_mse"]}}]
         comparison_data.append({"name": "Baseline B", "metrics": {"mse": row_by_name["Baseline B"]["mean_mse"]}})
-        comparison_data.append({"name": "Ours", "metrics": {"mse": row_by_name["Ours-TCN"]["mean_mse"]}})
+        comparison_data.append({"name": "Ours", "metrics": {"mse": row_by_name["Final Ours"]["mean_mse"]}})
         fig1 = plot_comparison(comparison_data, stem="fig1_loso_comparison")
         fig_paths.append(str(fig1))
 

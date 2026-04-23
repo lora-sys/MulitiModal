@@ -32,6 +32,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tcm-scaler", type=str, default=str(TCM_SCALER_PATH))
     p.add_argument("--tcm-prob-eps", type=float, default=0.0)
     p.add_argument("--tcm-temp", type=float, default=1.0)
+    p.add_argument(
+        "--strict-tcm-paths",
+        action="store_true",
+        help="If set, do not fallback/auto-search TCM checkpoint/scaler paths; fail fast if missing.",
+    )
     p.add_argument("--gate-a-scale", type=float, default=0.0)
     p.add_argument("--gate-b-scale", type=float, default=0.1)
     p.add_argument("--record-split-seed", type=int, default=42)
@@ -169,6 +174,7 @@ def run_but_validation(paths: Paths, args: argparse.Namespace, device: str):
         device,
         prob_eps=float(args.tcm_prob_eps),
         temperature=float(args.tcm_temp),
+        strict_paths=bool(args.strict_tcm_paths),
     )
 
     base_lr = _load_base_lr_from_yaml(Path(args.best_params_yaml), default_lr=1e-3)
@@ -256,6 +262,7 @@ def run_but_tcm_feature_correlation(paths: Paths, args: argparse.Namespace, devi
         device,
         prob_eps=float(args.tcm_prob_eps),
         temperature=float(args.tcm_temp),
+        strict_paths=bool(args.strict_tcm_paths),
     )
 
     probs_all, targets = [], []
