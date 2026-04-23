@@ -254,7 +254,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tcm-temp", type=float, default=1.0, help="TCM prob temperature (>1 softens).")
     p.add_argument("--override-params", type=str, default="")
     p.add_argument("--skip-fast-search", action="store_true")
-    p.add_argument("--gate-a-scale", type=float, default=0.6)
+    p.add_argument(
+        "--gate-a-scale",
+        type=float,
+        default=None,
+        help="Gate A strength. If omitted in LOSO fixed-encoder runs, defaults to 0.0 (paper-safe).",
+    )
     p.add_argument("--gate-a-entropy-adapt", action="store_true", help="Scale Gate A by (1 - normalized entropy).")
     p.add_argument("--gate-b-scale", type=float, default=0.35)
     p.add_argument("--final-lr-mult", type=float, default=0.7)
@@ -758,6 +763,14 @@ def main() -> None:
     cfg = TrainConfig(device=device, epochs=(3 if args.dry_run else args.epochs))
     set_seed(cfg.seed)
 
+    # Paper-safe default: in LOSO with fixed encoder, Gate A defaults to OFF unless explicitly set.
+    if args.gate_a_scale is None:
+        if args.protocol == "loso" and bool(args.fixed_encoder):
+            args.gate_a_scale = 0.0
+            print(f"[{timestamp()}] >>> gate_a_scale not set; defaulting to 0.0 for LOSO fixed-encoder.", flush=True)
+        else:
+            args.gate_a_scale = 0.6
+
     print(f"[{timestamp()}] >>> Loading WESAD dataset from {paths.wesad_dir}", flush=True)
     dataset = WESADDataset(
         paths.wesad_dir,
@@ -767,7 +780,7 @@ def main() -> None:
     )
     print(f"[{timestamp()}] >>> WESAD loaded. total_windows={len(dataset)}", flush=True)
     print(
-        f"[{timestamp()}] >>> Gate scales: gate_a_scale={args.gate_a_scale:.3f}, gate_b_scale={args.gate_b_scale:.3f}",
+        f"[{timestamp()}] >>> Gate scales: gate_a_scale={float(args.gate_a_scale):.3f}, gate_b_scale={args.gate_b_scale:.3f}",
         flush=True,
     )
     if args.protocol == "loso" and not args.loso_subject:
@@ -805,7 +818,7 @@ def main() -> None:
                 "--override-params",
                 str(args.override_params),
                 "--gate-a-scale",
-                str(args.gate_a_scale),
+                str(float(args.gate_a_scale)),
                 "--gate-b-scale",
                 str(args.gate_b_scale),
                 "--final-lr-mult",
