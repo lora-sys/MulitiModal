@@ -6,6 +6,7 @@ import csv
 import json
 import pickle
 import random
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -887,14 +888,45 @@ def main() -> None:
         else:
             print(f"[{timestamp()}] >>> LOSO summary figures skipped (missing required rows).", flush=True)
 
+        # Archive LOSO outputs to stable locations to avoid confusion with stale experiment folders.
+        fold_fig_dir = fold_dir / "figures"
+        fold_fig_dir.mkdir(parents=True, exist_ok=True)
+        paper_dir = Path("paper")
+        paper_tables_dir = paper_dir / "tables"
+        paper_fig_dir = paper_dir / "figures"
+        paper_results_dir = paper_dir / "results"
+        paper_tables_dir.mkdir(parents=True, exist_ok=True)
+        paper_fig_dir.mkdir(parents=True, exist_ok=True)
+        paper_results_dir.mkdir(parents=True, exist_ok=True)
+
+        copied_figs: List[str] = []
+        for fig in loso_figs:
+            src = Path(fig)
+            if not src.exists():
+                continue
+            dst_fold = fold_fig_dir / src.name
+            shutil.copy2(src, dst_fold)
+            copied_figs.append(str(dst_fold))
+            dst_paper = paper_fig_dir / src.name
+            shutil.copy2(src, dst_paper)
+
+        # Copy table files into paper/tables for manuscript drafting.
+        for k in ("json", "csv", "tsv"):
+            src = Path(main_paths[k])
+            if src.exists():
+                shutil.copy2(src, paper_tables_dir / src.name)
+
         loso_summary["auto_outputs"] = {
             "main_table_json": main_paths["json"],
             "main_table_csv": main_paths["csv"],
             "main_table_tsv": main_paths["tsv"],
             "figures": loso_figs,
+            "figures_in_loso_folds": copied_figs,
+            "paper_dir": str(paper_dir.resolve()),
         }
         out_path = Path(args.output_json) if args.output_json else (paths.results / "experiments_summary_loso.json")
         save_json(loso_summary, out_path)
+        shutil.copy2(out_path, paper_results_dir / out_path.name)
         print(f"[{timestamp()}] >>> LOSO summary saved to {out_path}", flush=True)
         return
 
