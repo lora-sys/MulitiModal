@@ -37,6 +37,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--head", type=str, default="linear", choices=["linear", "mlp"], help="Head type to train (only head trains).")
     p.add_argument("--early-stop-patience", type=int, default=10, help="Early stopping patience on val MSE.")
     p.add_argument(
+        "--target-standardize",
+        action="store_true",
+        help="Standardize HR targets using TRAIN split stats (stabilizes head training); metrics are reported in BPM.",
+    )
+    p.add_argument("--loss", type=str, default="mse", choices=["mse", "huber"], help="Head training loss.")
+    p.add_argument("--huber-delta", type=float, default=5.0, help="Huber delta (BPM units) when --loss huber.")
+    p.add_argument("--head-weight-decay", type=float, default=0.0, help="Weight decay for head optimizer.")
+    p.add_argument(
         "--strict-tcm-paths",
         action="store_true",
         help="If set, do not fallback/auto-search TCM checkpoint/scaler paths; fail fast if missing.",
@@ -131,12 +139,37 @@ def _train_head_one_seed(
 ) -> dict:
     _set_seed(seed)
     head = head.to(device)
-    optimizer = torch.optim.Adam(head.parameters(), lr=float(finetune_lr))
-    loss_fn = nn.MSELoss()
+    optimizer = torch.optim.Adam(head.parameters(), lr=float(finetune_lr), weight_decay=float(args.head_weight_decay))
+    if str(args.loss) == "huber":
+        loss_fn = nn.SmoothL1Loss(beta=float(args.huber_delta))
+    else:
+        loss_fn = nn.MSELoss()
 
     best_val = float("inf")
     best_state = None
     counter = 0
+
+    # Target standardization (train-split only), report metrics back in BPM.
+    y_mu = 0.0
+    y_std = 1.0
+    if bool(args.target_standardize):
+        ys = []
+        for _dyn, _st, target, _rid in train_loader:
+            ys.append(target.numpy().reshape(-1))
+        y = np.concatenate(ys) if ys else np.zeros((1,), dtype=np.float32)
+        y_mu = float(np.mean(y))
+        y_std = float(np.std(y))
+        if y_std <= 1e-6:
+            y_std = 1.0
+
+        # Initialize head bias near the (standardized) mean to reduce constant-collapse.
+        try:
+            if isinstance(head, nn.Linear):
+                head.bias.data.fill_(0.0)
+            elif isinstance(head, nn.Sequential) and isinstance(head[-1], nn.Linear):
+                head[-1].bias.data.fill_(0.0)
+        except Exception:
+            pass
 
     head.train()
     for epoch in range(int(args.epochs)):
@@ -144,6 +177,8 @@ def _train_head_one_seed(
             dynamic = dynamic.to(device)
             static = static.to(device)
             target = target.to(device)
+            if bool(args.target_standardize):
+                target = (target - float(y_mu)) / float(y_std)
             with torch.no_grad():
                 tcm_probs = tcm_prior.infer_probs(static)
                 z_pure, _ = model.extract_pure_dynamic(
@@ -161,6 +196,8 @@ def _train_head_one_seed(
 
         # Early stopping on val MSE
         y, p = _collect_preds(model, tcm_prior, head, val_loader, args, device)
+        if bool(args.target_standardize):
+            p = p * float(y_std) + float(y_mu)
         val_mse = float(np.mean((y - p) ** 2))
         if val_mse + 1e-12 < best_val:
             best_val = val_mse
@@ -175,11 +212,16 @@ def _train_head_one_seed(
         head.load_state_dict(best_state, strict=True)
 
     y, p = _collect_preds(model, tcm_prior, head, val_loader, args, device)
+    if bool(args.target_standardize):
+        p = p * float(y_std) + float(y_mu)
     metrics = regression_metrics(y, p)
     metrics["spearman"] = _spearmanr(y, p)
     metrics["num_val_samples"] = int(y.shape[0])
     metrics["best_val_mse"] = float(best_val)
     metrics["seed"] = int(seed)
+    if bool(args.target_standardize):
+        metrics["target_mu"] = float(y_mu)
+        metrics["target_std"] = float(y_std)
     return {"metrics": metrics, "y_true": y, "y_pred": p}
 
 
