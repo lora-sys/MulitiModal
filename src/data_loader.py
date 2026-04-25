@@ -420,10 +420,17 @@ class BUTPPGDataset(Dataset):
         window_size: int = 1000,
         scaler_path: Optional[Path] = None,
         return_record_id: bool = False,
+        # For probe stability: extract multiple windows per record (still record-level split).
+        raw_window_seconds: float = 20.0,
+        raw_stride_seconds: float = 10.0,
+        max_windows_per_record: int = 8,
     ):
         self.window_size = window_size
         self.samples: List[Sample] = []
         self.return_record_id = bool(return_record_id)
+        self.raw_window_seconds = float(raw_window_seconds)
+        self.raw_stride_seconds = float(raw_stride_seconds)
+        self.max_windows_per_record = int(max_windows_per_record)
         self._build(but_dir)
 
     def _build(self, but_dir: Path) -> None:
@@ -608,24 +615,46 @@ class BUTPPGDataset(Dataset):
                 ch0 = signal[:, 0]
             else:
                 ch0 = raw.astype(np.float32)
-            ch0_t = torch.tensor(ch0, dtype=torch.float32)
-            x = torch.stack([ch0_t, ch0_t], dim=0).numpy()
-            x = self._fit_to_window(x)
-            # Match WESAD-like input scale: per-window, per-channel z-score.
-            # Without this, raw int16 amplitude can explode the frozen encoder features,
-            # leading to huge MAE even when correlation looks reasonable.
-            mu = x.mean(axis=1, keepdims=True)
-            sig = x.std(axis=1, keepdims=True) + 1e-6
-            x = (x - mu) / sig
 
-            self.samples.append(
-                Sample(
-                    dynamic=x.astype(np.float32),
-                    static=meta["static"].copy(),
-                    target=float(hr_labels[rid]),
-                    subject_id=str(rid),
+            # Build multiple windows per record (keeps record-level split valid).
+            # We use seconds-based slicing (fs from header) then resample each slice to window_size.
+            # This prevents the probe head from collapsing to a constant mean predictor.
+            fs = float(fs) if fs and fs > 0 else 30.0
+            win = int(max(4, round(fs * self.raw_window_seconds)))
+            stride = int(max(1, round(fs * self.raw_stride_seconds)))
+            if win <= 0 or stride <= 0:
+                win, stride = 600, 300
+            starts = list(range(0, max(0, len(ch0) - win + 1), stride))
+            if not starts:
+                # Fallback: use whole record as a single window.
+                starts = [0]
+                win = len(ch0)
+
+            # Limit windows per record deterministically for reproducibility.
+            if self.max_windows_per_record > 0 and len(starts) > self.max_windows_per_record:
+                rng = np.random.default_rng(abs(hash(rid)) % (2**32))
+                starts = sorted(rng.choice(starts, size=self.max_windows_per_record, replace=False).tolist())
+
+            for s in starts:
+                seg = ch0[s : s + win]
+                if seg.size < 2:
+                    continue
+                ch0_t = torch.tensor(seg, dtype=torch.float32)
+                x = torch.stack([ch0_t, ch0_t], dim=0).numpy()
+                x = self._fit_to_window(x)
+                # Match WESAD-like input scale: per-window, per-channel z-score.
+                mu = x.mean(axis=1, keepdims=True)
+                sig = x.std(axis=1, keepdims=True) + 1e-6
+                x = (x - mu) / sig
+
+                self.samples.append(
+                    Sample(
+                        dynamic=x.astype(np.float32),
+                        static=meta["static"].copy(),
+                        target=float(hr_labels[rid]),
+                        subject_id=str(rid),
+                    )
                 )
-            )
 
     def _scan_h5_datasets(self, h5file):
         found = {}
