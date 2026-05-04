@@ -15,7 +15,9 @@ experiment/archive/
 __pycache__/
 *.py[cod]
 *$py.class
-
+/.vscode/
+/.windsurf/
+/.agent/
 # Training logs
 experiment/model/log.txt
 training_output.log

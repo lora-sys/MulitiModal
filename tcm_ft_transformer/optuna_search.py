@@ -12,7 +12,7 @@ from optuna.pruners import MedianPruner
 from sklearn.model_selection import KFold
 import torch
 
-from config import OPTUNA_CONFIG, CV_CONFIG, TRAIN_CONFIG, MODEL_CONFIG, OUTPUT_FILES
+from config import DATA_CONFIG, OPTUNA_CONFIG, CV_CONFIG, TRAIN_CONFIG, MODEL_CONFIG, OUTPUT_FILES
 from train import train_single_fold
 
 
@@ -34,11 +34,12 @@ def objective(trial, X, y, n_splits=5, num_epochs=20):
     # 定义搜索空间（连续分布，充分利用 TPE 贝叶斯优化）
     # =====================================================================
     model_params = {
+         'n_features': DATA_CONFIG['n_features'],
+        'n_classes': DATA_CONFIG['n_classes'],
         'd_token': 64,  # 固定
         'n_heads': 4,  # 固定
         'n_layers': trial.suggest_int('n_layers', 2, 4),  # 连续整数搜索
         'dropout': trial.suggest_float('dropout', 0.1, 0.5, step=0.05),  # 连续搜索，步长 0.05
-        # n_classes 不在这里，会在 train.py 中显式传递
     }
 
     train_config = {

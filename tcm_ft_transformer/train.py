@@ -336,9 +336,9 @@ def train_single_fold(
     
     # 创建模型
     model = get_model(
-        n_features=8,
-        n_classes=9,
-        **model_params
+        n_features=model_params.get('n_features', 8),
+        n_classes=model_params.get('n_classes', 9),
+        **{k: v for k, v in model_params.items() if k not in ('n_features', 'n_classes')}
     )
     
     # 创建训练器
