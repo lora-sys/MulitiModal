@@ -17,12 +17,13 @@ LLM 标签质量验证实验
 
 import os
 import sys
+import argparse
 import numpy as np
 import pandas as pd
 import torch
 from pathlib import Path
 from scipy.stats import pearsonr
-from sklearn.metrics import confusion_matrix, classification_accuracy
+from sklearn.metrics import confusion_matrix
 
 # 添加项目路径
 PROJ = Path(__file__).resolve().parent.parent
@@ -47,8 +48,14 @@ CONSTITUTION_NAMES = [
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--smoke", action="store_true", help="冒烟测试: 只用 20 条样本快速验证")
+    args = parser.parse_args()
+
+    n_sample = 20 if args.smoke else N_SAMPLE
+
     print("=" * 60)
-    print("LLM 标签质量验证实验")
+    print(f"LLM 标签质量验证实验{' (SMOKE)' if args.smoke else ''}")
     print("=" * 60)
 
     # ----------------------------------------------------------
@@ -79,9 +86,9 @@ def main():
     # ----------------------------------------------------------
     # 3. 抽样
     # ----------------------------------------------------------
-    print(f"\n[3] 随机抽样 {N_SAMPLE} 条 (seed={RANDOM_SEED})")
+    print(f"\n[3] 随机抽样 {n_sample} 条 (seed={RANDOM_SEED})")
     rng = np.random.RandomState(RANDOM_SEED)
-    sample_idx = rng.choice(len(X), size=N_SAMPLE, replace=False)
+    sample_idx = rng.choice(len(X), size=n_sample, replace=False)
     X_sample = X_scaled[sample_idx]
     y_llm_sample = y_llm_norm[sample_idx]
 
@@ -145,7 +152,7 @@ def main():
     # 整体分布的 KL 散度（可选）
     from scipy.stats import entropy
     kl_divs = []
-    for i in range(N_SAMPLE):
+    for i in range(n_sample):
         kl = entropy(y_llm_sample[i], y_pred[i])
         kl_divs.append(kl)
     mean_kl = np.mean(kl_divs)
@@ -175,7 +182,7 @@ def main():
 
     import json
     result = {
-        "n_sample": N_SAMPLE,
+        "n_sample": n_sample,
         "random_seed": RANDOM_SEED,
         "top1_accuracy": float(top1_acc),
         "mean_pearson_r": float(mean_pearson),

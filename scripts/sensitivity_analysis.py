@@ -80,8 +80,9 @@ def run_final_ours_loso(
     batch_size: int,
     lr: float,
     weight_decay: float,
+    max_subjects: int = 0,
 ) -> dict:
-    """只跑 Final Ours 的 15-fold LOSO"""
+    """只跑 Final Ours 的 LOSO (max_subjects=0 表示全部)"""
     print(f"\n{'='*60}")
     print(f"Final Ours LOSO: meditation = {meditation_val}")
     print(f"{'='*60}")
@@ -90,6 +91,8 @@ def run_final_ours_loso(
 
     dataset = WESADDataset(PROJ / "data" / "wesad")
     unique_subjects = sorted(set(s for s in dataset.subject_ids))
+    if max_subjects > 0:
+        unique_subjects = unique_subjects[:max_subjects]
     print(f"  被试: {unique_subjects} ({len(unique_subjects)} 人)")
 
     tcm_prior = FrozenTCMPrior(
@@ -163,24 +166,32 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--smoke", action="store_true", help="冒烟测试: 1 组 × 2 折 × 2 epochs")
     args = parser.parse_args()
     device = args.device or _auto_device()
 
+    smoke = args.smoke
+    epochs = 2 if smoke else args.epochs
+    patience = 1 if smoke else args.patience
+    smoke_subjects = 2
+    meditation_values = [0.6] if smoke else MEDITATION_VALUES
+
     print("=" * 60)
-    print("敏感性分析 (快速版: 只跑 Final Ours)")
+    print(f"敏感性分析 {'(SMOKE)' if smoke else '(快速版: 只跑 Final Ours)'}")
     print(f"Device: {device}")
     print("=" * 60)
 
     all_results = {}
-    for med_val in MEDITATION_VALUES:
+    for med_val in meditation_values:
         summary = run_final_ours_loso(
             meditation_val=med_val,
             device=device,
-            epochs=args.epochs,
-            patience=args.patience,
+            epochs=epochs,
+            patience=patience,
             batch_size=args.batch_size,
             lr=args.lr,
             weight_decay=args.weight_decay,
+            max_subjects=smoke_subjects if smoke else 0,
         )
         all_results[str(med_val)] = summary
 
@@ -190,7 +201,7 @@ def main():
     print(f"{'='*60}")
     print(f"{'Meditation':>12s} {'MSE (mean±std)':>20s} {'Pearson r (mean±std)':>22s}")
     print("-" * 58)
-    for med_val in MEDITATION_VALUES:
+    for med_val in meditation_values:
         key = str(med_val)
         s = all_results[key]
         print(f"{med_val:>12.1f} {s['mse_mean']:>10.4f} ± {s['mse_std']:.4f}   {s['pearson_mean']:.4f} ± {s['pearson_std']:.4f}")

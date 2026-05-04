@@ -145,17 +145,24 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--smoke", action="store_true", help="冒烟测试: 2 折 × 2 epochs, 快速验证流程")
     args = parser.parse_args()
     device = args.device or _auto_device()
 
+    smoke = args.smoke
+    epochs = 2 if smoke else args.epochs
+    patience = 1 if smoke else args.patience
+
     print("=" * 60)
-    print("Early Fusion LOSO (快速版)")
+    print(f"Early Fusion LOSO {'(SMOKE)' if smoke else '(快速版)'}")
     print(f"Device: {device}")
     print("=" * 60)
 
     # 加载数据
     dataset = WESADDataset(PROJ / "data" / "wesad")
     unique_subjects = sorted(set(s for s in dataset.subject_ids))
+    if smoke:
+        unique_subjects = unique_subjects[:2]
     print(f"被试: {unique_subjects} (共 {len(unique_subjects)} 人)")
 
     hparams = HyperParams(lr=args.lr, weight_decay=args.weight_decay, batch_size=args.batch_size)
@@ -172,8 +179,8 @@ def main():
             train_indices=train_idx,
             val_indices=val_idx,
             hparams=hparams,
-            epochs=args.epochs,
-            patience=args.patience,
+            epochs=epochs,
+            patience=patience,
             device=device,
         )
         fold_results.append({
