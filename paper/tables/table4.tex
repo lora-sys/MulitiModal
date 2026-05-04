@@ -1,0 +1,46 @@
+% 建议使用 pdfLaTeX 或 XeLaTeX 编译
+\documentclass{article}
+
+% --- 导言区：放置宏包声明 ---
+\usepackage[utf8]{inputenc} 
+\usepackage{booktabs}       
+\usepackage{amsmath}        
+\usepackage{array}          
+\usepackage{caption} % 必须放在这里
+
+% 设置去掉 "Table 1" 前缀
+\captionsetup[table]{labelformat=empty} 
+
+% 增加行高
+\renewcommand{\arraystretch}{1.2}
+
+\begin{document}
+
+
+% --- 表格代码开始 ---
+\begin{table}[htbp]
+\centering
+\caption{Hyperparameter Settings for the Proposed Regression Framework}
+% \label{tab:4} % 隐藏编号后，label 也就失去意义了，可以注释掉
+\begin{tabular}{lc}
+\toprule
+\textbf{Hyperparameter} & \textbf{Value} \\
+\midrule
+Loss function & Mean Squared Error (MSE) \\
+Optimizer & AdamW \\
+Base learning rate & $5 \times 10^{-4}$ \\
+LR search range (Log space) & $[2.5 \times 10^{-4},\ 8 \times 10^{-4}]$ \\
+Weight decay & $10^{-5}$ \\
+Batch size & 32 \\
+Max epochs & 50 \\
+Early stopping patience & 10 \\
+Dropout (Regression head) & 0.2 \\
+Dropout (Gate hidden layers) & 0.1 \\
+Suppression strength ($\lambda_b$) & 0.35 \\
+Random seed & 42 \\
+\bottomrule
+\end{tabular}
+\end{table}
+% --- 表格代码结束 ---
+
+\end{document}

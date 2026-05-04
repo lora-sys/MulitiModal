@@ -1,0 +1,37 @@
+% 建议使用 pdfLaTeX 或 XeLaTeX 编译
+\documentclass{article}
+
+% --- 核心宏包 ---
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}       % 提供高质量三线表
+\usepackage{amsmath}        % 处理数学符号
+\usepackage{caption}        % 用于隐藏编号
+
+% --- 设置：去掉 "Table x" 前缀 ---
+\captionsetup[table]{labelformat=empty} 
+
+% 增加行高，让内容不拥挤
+\renewcommand{\arraystretch}{1.2}
+
+\begin{document}
+
+
+% --- 表格代码开始 ---
+\begin{table}[htbp]
+\centering
+\caption{Ablation Study (MSE, mean $\pm$ std over 15 folds, all using InceptionTime encoder)}
+\label{tab:ablation}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Variant} & \textbf{MSE} & \textbf{$\Delta$ MSE} \\
+\midrule
+Final Ours (full model) & $0.1346 \pm 0.1122$ & --- \\
+w/o Dual Gating & $0.1511 \pm 0.1322$ & $+0.0164$ \\
+w/o TCM Prior & $0.1513 \pm 0.1382$ & $+0.0166$ \\
+w/o TCM\_Gate & $0.1391 \pm 0.1094$ & $+0.0045$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+% --- 表格代码结束 ---
+
+\end{document}

@@ -1,0 +1,38 @@
+% 建议使用 pdfLaTeX 或 XeLaTeX 编译
+\documentclass{article}
+
+% --- 核心宏包 ---
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}       % 提供高质量三线表
+\usepackage{amsmath}        % 处理数学符号
+\usepackage{caption}        % 用于隐藏编号
+
+% --- 设置：去掉 "Table x" 前缀 ---
+\captionsetup[table]{labelformat=empty}
+
+% 增加行高，让内容不拥挤
+\renewcommand{\arraystretch}{1.2}
+
+\begin{document}
+
+
+% --- 表格代码开始 ---
+\begin{table}[htbp]
+\centering
+\caption{Encoder Selection Results on Validation Set (single fold)}
+\label{tab:encoder_selection}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Encoder} & \textbf{MSE} & \textbf{RMSE} & \textbf{MAE} & \textbf{Pearson $r$} \\
+\midrule
+TCN & 0.1672 & 0.4090 & 0.3568 & 0.3664 \\
+OS-CNN & 0.1634 & 0.4042 & 0.3479 & 0.4075 \\
+XCM & 0.1620 & 0.4025 & 0.3519 & 0.4043 \\
+1D-ResNet & 0.1032 & 0.3212 & 0.2678 & 0.6945 \\
+InceptionTime & \textbf{0.0930} & \textbf{0.3049} & \textbf{0.2570} & \textbf{0.7488} \\
+\bottomrule
+\end{tabular}
+\end{table}
+% --- 表格代码结束 ---
+
+\end{document}

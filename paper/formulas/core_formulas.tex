@@ -1,0 +1,43 @@
+\section*{Core Formulas}
+
+\subsection*{TCM Prior Generation}
+\begin{equation}
+    \mathbf{p}_{\mathrm{tcm}} = \mathrm{softmax}\!\left(\mathrm{FT\text{-}Transformer}(\mathbf{x}_{\mathrm{static}})\right) \in \mathbb{R}^{9}
+\end{equation}
+where $\mathbf{x}_{\mathrm{static}} \in \mathbb{R}^{4}$ contains Age, Gender, BMI, and Baseline HR.
+The TCM encoder is pretrained on an external dataset and \textbf{frozen} during main task training.
+
+\subsection*{Gate A: Prior-Guided Modulation}
+\begin{equation}
+    \mathbf{a} = \sigma\!\left(\mathbf{W}_a \, \mathbf{p}_{\mathrm{tcm}} + \mathbf{b}_a\right) \in (0,1)^{128}
+\end{equation}
+\begin{equation}
+    \mathbf{z}_{\mathrm{mod}} = \mathbf{z}_{\mathrm{raw}} \odot \mathbf{a}
+\end{equation}
+where $\mathbf{z}_{\mathrm{raw}} \in \mathbb{R}^{128}$ is the dynamic encoder output.
+Gate A amplifies channels that are informative for the specific individual.
+
+\subsection*{Gate B: Subtractive Debiasing}
+\begin{equation}
+    \mathbf{b} = \sigma\!\left(\mathbf{W}_b \, \mathbf{z}_{\mathrm{mod}} + \mathbf{b}_b\right) \in (0,1)^{128}
+\end{equation}
+\begin{equation}
+    \mathbf{z}_{\mathrm{pure}} = \mathbf{z}_{\mathrm{mod}} \odot (1 - \lambda_b \cdot \mathbf{b})
+\end{equation}
+where $\lambda_b$ controls debiasing strength.
+Channels with larger $\mathbf{b}$ values are more coupled to static baselines and thus suppressed.
+
+\subsection*{Late Re-injection}
+\begin{equation}
+    \mathbf{f}_{\mathrm{final}} = \left[\mathbf{z}_{\mathrm{pure}} \; ; \; \mathbf{p}_{\mathrm{tcm}}\right] \in \mathbb{R}^{137}
+\end{equation}
+\begin{equation}
+    \hat{y} = \mathrm{Regressor}(\mathbf{f}_{\mathrm{final}})
+\end{equation}
+
+\subsection*{Loss Function}
+\begin{equation}
+    \mathcal{L} = \frac{1}{N}\sum_{i=1}^{N}\left(y_i - \hat{y}_i\right)^2
+\end{equation}
+Only the dynamic encoder, dual gates, and regressor are updated.
+The TCM encoder remains frozen throughout training.

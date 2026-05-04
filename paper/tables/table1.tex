@@ -1,0 +1,33 @@
+% This document is compiled using pdfLaTeX
+% You can switch XeLaTeX/pdfLaTeX/LaTeX/LuaLaTeX in Settings
+
+\documentclass{article}
+\usepackage{booktabs} % 必须添加这个宏包以支持表格边框
+
+
+\begin{document}
+
+
+
+\begin{table}[h]
+\centering
+\caption{WESAD Dataset Statistics and Preprocessing Configurations}
+\label{tab:dataset}
+\begin{tabular}{lc}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+Number of subjects & 15 \\
+Dynamic modalities & ECG + EDA (chest) \\
+Dynamic input shape & $(2, 1000)$ \\
+Window length / stride & 1000 pts / 500 pts (50\% overlap) \\
+Static features & Age, Gender, BMI, Baseline HR \\
+Static feature dimension & 4 \\
+Relaxation labels (continuous) & 1.0 (stress), 0.6 (meditation), 0.0 (amusement)  \\
+Label mapping principle & Empirical Soft-label Encoding  \\
+Phenotype prior dimension & 9 (phenotype probabilities) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}

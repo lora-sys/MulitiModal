@@ -117,10 +117,12 @@ class FrozenTCMPrior:
         self._probs_cache: Dict[bytes, torch.Tensor] = {}
 
     def _resolve_checkpoint_path(self, checkpoint_path: Path) -> Path:
+        repo_root = Path(__file__).resolve().parent
         candidates = [
             checkpoint_path,
             checkpoint_path.parent / "best_model.pth",
             checkpoint_path.parent / "best_tcm_model.pth",
+            repo_root / "tcm_ft_transformer" / "checkpoints" / "best_model.pth",
             Path("/root/work/MulitiModal/checkpoints/best_model.pth"),
             Path("/root/work/MulitiModal/checkpoints/best_tcm_model.pth"),
             Path("/root/work/MulitiModal/tcm_ft_transformer/checkpoints/best_model.pth"),
@@ -141,10 +143,12 @@ class FrozenTCMPrior:
         )
 
     def _resolve_scaler_path(self, scaler_path: Path, resolved_ckpt: Path) -> Path:
+        repo_root = Path(__file__).resolve().parent
         candidates = [
             scaler_path,
             resolved_ckpt.parent / "tcm_scaler.pkl",
             resolved_ckpt.parent / "scaler_params.npz",
+            repo_root / "tcm_ft_transformer" / "scaler_params.npz",
             Path("/root/work/MulitiModal/checkpoints/tcm_scaler.pkl"),
             Path("/root/work/MulitiModal/checkpoints/scaler_params.npz"),
             Path("/root/work/MulitiModal/tcm_ft_transformer/scaler_params.npz"),
@@ -324,7 +328,14 @@ def _run_forward(
     gate_a_scale: float,
     gate_b_scale: float,
     return_attention: bool = False,
+    early_fusion: bool = False,
 ) -> torch.Tensor:
+    if early_fusion:
+        # Early Fusion: skip TCM/gates, concat z_raw[128] + static[4] = 132
+        z_raw = model.dynamic_encoder(dynamic_x)  # [B, 128]
+        final_input = torch.cat([z_raw.detach(), static_x], dim=-1)  # [B, 132]
+        return model.forward_from_final_input(final_input)
+
     if use_tcm:
         tcm_probs = tcm_prior.infer_probs(static_x)  # [B, 9]
     else:
@@ -394,6 +405,7 @@ def train_eval_step(
     gate_a_scale: float,
     gate_b_scale: float,
     use_cross_attention: bool,
+    early_fusion: bool = False,
 ) -> Dict:
     train_loader, val_loader = make_loaders_from_indices(
         dataset,
@@ -402,12 +414,15 @@ def train_eval_step(
         batch_size=hparams.batch_size,
         seed=seed,
     )
-    model = OPLRIRegressor(
-        encoder_name=encoder,
-        use_gate_a=True,
-        use_gate_b=True,
-        use_cross_attention=use_cross_attention,
-    ).to(device)
+    if early_fusion:
+        model = OPLRIRegressor.create_early_fusion(encoder_name=encoder).to(device)
+    else:
+        model = OPLRIRegressor(
+            encoder_name=encoder,
+            use_gate_a=True,
+            use_gate_b=True,
+            use_cross_attention=use_cross_attention,
+        ).to(device)
     _freeze_non_head(model)
     optimizer = torch.optim.AdamW(model.reg_head.parameters(), lr=hparams.lr, weight_decay=hparams.weight_decay)
     loss_fn = nn.MSELoss()
@@ -434,6 +449,7 @@ def train_eval_step(
                 use_gate_b=use_gate_b,
                 gate_a_scale=gate_a_scale,
                 gate_b_scale=gate_b_scale,
+                early_fusion=early_fusion,
             )
             loss = loss_fn(pred, target)
             optimizer.zero_grad()
@@ -459,6 +475,7 @@ def train_eval_step(
                     use_gate_b=use_gate_b,
                     gate_a_scale=gate_a_scale,
                     gate_b_scale=gate_b_scale,
+                    early_fusion=early_fusion,
                 )
                 ys.append(to_numpy(target))
                 ps.append(to_numpy(pred))
@@ -505,6 +522,7 @@ def train_eval_step(
                 use_gate_b=use_gate_b,
                 gate_a_scale=gate_a_scale,
                 gate_b_scale=gate_b_scale,
+                early_fusion=early_fusion,
             )
             ys.append(to_numpy(target))
             ps.append(to_numpy(pred))
@@ -1204,6 +1222,29 @@ def main() -> None:
     )
     matrix_logs.append({"step": 2, "name": "Baseline B", "mse": step2["metrics"]["mse"], "full": _strip_for_json(step2)})
 
+    # Step 2.5: Early Fusion baseline (concat static 4D + dynamic 128D = 132D)
+    step2b = train_eval_step(
+        step_name="Step2b-EarlyFusion",
+        encoder="inceptiontime",
+        use_tcm=False,
+        use_gate_a=False,
+        use_gate_b=False,
+        hparams=best_hp,
+        epochs=cfg.epochs,
+        patience=EARLY_STOPPING_PATIENCE,
+        dataset=dataset,
+        train_indices=train_indices,
+        val_indices=val_indices,
+        seed=cfg.seed,
+        device=device,
+        tcm_prior=tcm_prior,
+        gate_a_scale=args.gate_a_scale,
+        gate_b_scale=args.gate_b_scale,
+        use_cross_attention=args.cross_attention,
+        early_fusion=True,
+    )
+    matrix_logs.append({"step": 2.5, "name": "Early Fusion", "mse": step2b["metrics"]["mse"], "full": _strip_for_json(step2b)})
+
     step3 = train_eval_step(
         step_name="Step3-Ours-TCN",
         encoder="tcn",
@@ -1413,7 +1454,7 @@ def main() -> None:
     if attention_fig is not None:
         fig_list.append(str(attention_fig))
     matrix_logs.append({"step": 9, "name": "Plotting", "mse": None, "figures": fig_list})
-    assert len(matrix_logs) == 9, f"Expected 9 matrix steps, got {len(matrix_logs)}"
+    assert len(matrix_logs) == 10, f"Expected 10 matrix steps, got {len(matrix_logs)}"
 
     # Required outputs
     print("\n===== Stage 2 Chosen Hyper-Parameters =====")

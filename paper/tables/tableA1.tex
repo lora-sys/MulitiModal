@@ -1,0 +1,51 @@
+% 建议使用 pdfLaTeX 或 XeLaTeX 编译
+\documentclass{article}
+
+% --- 核心宏包 ---
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}       % 专业三线表
+\usepackage{amsmath}        % 数学符号
+\usepackage{caption}        % 隐藏编号
+
+% --- 设置：去掉 "Table x" 前缀 ---
+\captionsetup[table]{labelformat=empty} 
+
+% 稍微紧凑一点的行高，确保长表格能在一页放下
+\renewcommand{\arraystretch}{1.1}
+
+\begin{document}
+
+% --- 表格代码开始 ---
+\begin{table}[htbp]
+\centering
+\caption{Per-fold Test Results (Final Ours, LOSO)}
+\label{tab:per_fold}
+\small % 缩小字号以适应长表格
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Fold} & \textbf{MSE} & \textbf{RMSE} & \textbf{MAE} & \textbf{Pearson $r$} \\
+\midrule
+S10 & 0.1912 & 0.4373 & 0.3738 & 0.2597 \\
+S11 & 0.0345 & 0.1857 & 0.1657 & 0.9338 \\
+S13 & 0.0908 & 0.3013 & 0.2588 & 0.8783 \\
+S14 & 0.1110 & 0.3331 & 0.3004 & 0.9320 \\
+S15 & 0.0791 & 0.2813 & 0.2412 & 0.9409 \\
+S16 & 0.0253 & 0.1590 & 0.1414 & 0.9526 \\
+S17 & 0.0435 & 0.2085 & 0.1797 & 0.8834 \\
+S2  & 0.2320 & 0.4816 & 0.4276 & -0.1601 \\
+S3  & 0.1787 & 0.4227 & 0.3740 & 0.4160 \\
+S4  & 0.1437 & 0.3791 & 0.2807 & 0.8836 \\
+S5  & 0.1435 & 0.3788 & 0.3499 & 0.5282 \\
+S6  & 0.1160 & 0.3406 & 0.3037 & 0.7233 \\
+S7  & 0.6170 & 0.7855 & 0.7620 & 0.9137 \\
+S8  & 0.0733 & 0.2708 & 0.2252 & 0.8092 \\
+S9  & 0.1419 & 0.3767 & 0.3111 & 0.8187 \\
+\midrule
+Mean & 0.1481 & 0.3561 & 0.3130 & 0.7142 \\
+Std  & 0.1426 & 0.1509 & 0.1487 & 0.3210 \\
+\bottomrule
+\end{tabular}
+\end{table}
+% --- 表格代码结束 ---
+
+\end{document}

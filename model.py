@@ -108,3 +108,22 @@ class OPLRIRegressor(nn.Module):
 
     def forward_from_final_input(self, final_input: torch.Tensor) -> torch.Tensor:
         return self.reg_head(final_input)
+
+    @staticmethod
+    def create_early_fusion(
+        encoder_name: str = "inceptiontime",
+    ) -> "OPLRIRegressor":
+        """Create an Early Fusion baseline: concat(z_raw[128], static[4]) -> regressor."""
+        model = OPLRIRegressor(
+            encoder_name=encoder_name,
+            use_gate_a=False,
+            use_gate_b=False,
+        )
+        # Replace regressor head: 128 (dynamic) + 4 (static) = 132
+        model.reg_head = nn.Sequential(
+            nn.Linear(132, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, 1),
+        )
+        return model
