@@ -234,7 +234,7 @@ def run_full_pipeline(
         model = get_model(
             n_features=4,
             n_classes=9,
-            **final_model_params
+            **{k: v for k, v in final_model_params.items() if k not in ('n_features', 'n_classes')}
         )
         
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
@@ -385,7 +385,7 @@ def run_full_pipeline(
     final_model = get_model(
         n_features=4,
         n_classes=9,
-        **final_model_params
+        **{k: v for k, v in final_model_params.items() if k not in ('n_features', 'n_classes')}
     )
 
     # 训练最终模型

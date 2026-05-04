@@ -1,6 +1,0 @@
-{
-    "python.analysis.extraPaths": [
-        "./experiment/dataset",
-        "./tcm_ft_transformer"
-    ]
-}

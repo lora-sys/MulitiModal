@@ -335,9 +335,10 @@ def train_single_fold(
     )
     
     # 创建模型
-    model = get_model(        
-        n_features=4,
-        n_classes=9,
+    model = get_model(
+        n_features=model_params.get('n_features', 4),
+        n_classes=model_params.get('n_classes', 9),
+        **{k: v for k, v in model_params.items() if k not in ('n_features', 'n_classes')}
     ) 
     # 创建训练器
     checkpoint_dir = os.path.join(train_config.get('checkpoint_dir', './checkpoints'), f'fold_{fold_idx}')

@@ -179,6 +179,8 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
 
     # 合并最佳参数
     final_model_params = {
+        'n_features': DATA_CONFIG['n_features'],
+        'n_classes': DATA_CONFIG['n_classes'],
         'd_token': MODEL_CONFIG['d_token'],
         'n_heads': MODEL_CONFIG['n_heads'],
         'n_layers': best_params.get('n_layers', 3),
@@ -208,10 +210,10 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
 
         fold_val_losses = cv_results['fold_val_losses']
         fold_train_losses = cv_results['fold_train_losses']
-        fold_optimal_epochs = cv_results['fold_optimal_epochs']
-
-        median_optimal_epoch = cv_results['median_optimal_epoch']
-        mean_optimal_epoch = cv_results['mean_optimal_epoch']
+        # 兼容旧版 cv_results（可能缺少这些字段）
+        fold_optimal_epochs = cv_results.get('fold_optimal_epochs', [])
+        median_optimal_epoch = cv_results.get('median_optimal_epoch', 15)
+        mean_optimal_epoch = cv_results.get('mean_optimal_epoch', 15)
         mean_val_loss = cv_results['mean_val_loss']
         std_val_loss = cv_results['std_val_loss']
         mean_train_loss = cv_results['mean_train_loss']
@@ -358,8 +360,13 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
     mean_overfit_gap = np.mean(overfit_gaps)
     
     # 使用中位数而不是平均数（避免异常值影响）
-    median_optimal_epoch = int(np.median(fold_optimal_epochs))
-    mean_optimal_epoch = int(round(np.mean(fold_optimal_epochs)))
+    if fold_optimal_epochs:
+        median_optimal_epoch = int(np.median(fold_optimal_epochs))
+        mean_optimal_epoch = int(round(np.mean(fold_optimal_epochs)))
+    else:
+        # 旧版 cv_results 没有 fold_optimal_epochs，使用默认 epoch 数
+        median_optimal_epoch = 15
+        mean_optimal_epoch = 15
     
     print(f"\n{'=' * 80}")
     print("交叉验证结果汇总")
@@ -477,7 +484,7 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
             model = get_model(
                 n_features=4,
                 n_classes=9,
-                **final_model_params
+                **{k: v for k, v in final_model_params.items() if k not in ('n_features', 'n_classes')}
             )
 
             # 训练模型
@@ -557,7 +564,7 @@ def run_complete_training(data_path=None, n_trials=20, n_splits=5, device='cuda'
     best_model = get_model(
         n_features=4,
         n_classes=9,
-        **final_model_params
+        **{k: v for k, v in final_model_params.items() if k not in ('n_features', 'n_classes')}
     )
     
     checkpoint = torch.load(best_model_path, map_location=device, weights_only=True)

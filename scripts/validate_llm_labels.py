@@ -127,15 +127,12 @@ def main():
     n_features = DATA_CONFIG["n_features"]  # 4: Age, Gender, BMI, HR
     n_classes = DATA_CONFIG["n_classes"]    # 9
 
-    # Encode string columns (Gender: Male→0, Female→1, 与训练一致)
+    # Encode Gender column (Male→0, Female→1, 与训练一致)
     df_feat = df.iloc[:, :n_features].copy()
-    for col in df_feat.columns:
-        if df_feat[col].dtype == object:
-            # 与训练代码一致: Male→0, Female→1
-            df_feat[col] = df_feat[col].astype(str).str.strip().str.lower().map(
-                lambda v: 0.0 if v.startswith("m") else (1.0 if v.startswith("f") else np.nan)
-            )
-            df_feat[col] = df_feat[col].fillna(0.0)
+    if 'Gender' in df_feat.columns:
+        df_feat['Gender'] = df_feat['Gender'].astype(str).str.strip().str.lower().map(
+            lambda v: 0.0 if v.startswith('m') else (1.0 if v.startswith('f') else np.nan)
+        ).fillna(0.0)
 
     X = df_feat.values.astype(np.float32)
     y_llm = df.iloc[:, -n_classes:].values.astype(np.float32)

@@ -1,0 +1,1371 @@
+nohup: 忽略输入
+/home/lora/repos/MulitiModal/tcm_ft_transformer/ft_transformer.py:110: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer_encoder = nn.TransformerEncoder(
+/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/torch/cuda/__init__.py:1007: UserWarning: Can't initialize NVML
+  raw_cnt = _raw_device_count_nvml()
+============================================================
+LLM 标签质量验证实验
+  数据: /home/lora/repos/MulitiModal/tcm_ft_transformer/data/vital_signs_dataset_final.csv
+  模型: /home/lora/repos/MulitiModal/tcm_ft_transformer/checkpoints/best_model.pth
+  Scaler: /home/lora/repos/MulitiModal/tcm_ft_transformer/scaler_params.npz
+============================================================
+
+[1] 加载数据...
+    总样本数: 198617
+
+[2] 加载标准化参数...
+
+[3] 随机抽样 500 条 (seed=42)
+
+[4] 加载 FT-Transformer...
+    模型加载完成, 设备: cuda
+
+[5] 计算一致性指标...
+
+    Top-1 体质类型一致率: 0.8500 (85.0%)
+
+    逐维度 Pearson 相关系数:
+       平和质: r = 0.8233 ***
+       气虚质: r = 0.7878 ***
+       阳虚质: r = 0.7051 ***
+       阴虚质: r = 0.4491 ***
+       痰湿质: r = 0.8957 ***
+       湿热质: r = 0.3930 ***
+       血瘀质: r = 0.2411 ***
+       气郁质: r = 0.2945 ***
+       特禀质: r = 0.1879 ***
+
+    平均 Pearson r (9维): 0.5308
+    平均 KL(LLM || Pred): 0.3141
+
+    Top-1 混淆矩阵:
+            平和质  气虚质  阳虚质  阴虚质  痰湿质  湿热质  血瘀质  气郁质  特禀质
+     平和质  245   11    0    0   18    0    0    0    0
+     气虚质   24   44    0    0    3    0    0    0    0
+     阳虚质    0    0    0    0    0    0    0    0    0
+     阴虚质    2    0    0    0    0    0    0    0    0
+     痰湿质   15    1    0    0  136    0    0    0    0
+     湿热质    0    0    0    0    0    0    0    0    0
+     血瘀质    1    0    0    0    0    0    0    0    0
+     气郁质    0    0    0    0    0    0    0    0    0
+     特禀质    0    0    0    0    0    0    0    0    0
+
+    结果已保存: /home/lora/repos/MulitiModal/paper/results/llm_label_validation.json
+
+============================================================
+验证完成!
+============================================================
+/home/lora/repos/MulitiModal/src/data_loader.py:282: VisibleDeprecationWarning: dtype(): align should be passed as Python or NumPy boolean but got `align=0`. Did you mean to pass a tuple to create a subarray type? (Deprecated NumPy 2.4)
+  data = pickle.load(f, encoding="latin1")
+============================================================
+Early Fusion LOSO (快速版)
+Device: cuda
+Scaler: /home/lora/repos/MulitiModal/tcm_ft_transformer/scaler_params.npz (exists=True)
+============================================================
+Subject S10: Age=28.0, Gender=1, BMI=24.0, HR=64.2
+Subject S11: Age=26.0, Gender=0, BMI=18.5, HR=63.9
+Subject S13: Age=28.0, Gender=1, BMI=25.0, HR=65.6
+Subject S14: Age=27.0, Gender=1, BMI=24.7, HR=64.9
+Subject S15: Age=28.0, Gender=1, BMI=24.0, HR=66.7
+Subject S16: Age=24.0, Gender=1, BMI=20.4, HR=63.5
+Subject S17: Age=29.0, Gender=0, BMI=20.2, HR=61.3
+Subject S2: Age=27.0, Gender=1, BMI=26.1, HR=64.6
+Subject S3: Age=27.0, Gender=1, BMI=23.1, HR=58.7
+Subject S4: Age=25.0, Gender=1, BMI=29.4, HR=60.0
+Subject S5: Age=35.0, Gender=1, BMI=22.4, HR=62.6
+Subject S6: Age=27.0, Gender=1, BMI=22.8, HR=62.9
+Subject S7: Age=28.0, Gender=1, BMI=21.9, HR=62.3
+Subject S8: Age=27.0, Gender=0, BMI=21.6, HR=64.3
+Subject S9: Age=26.0, Gender=1, BMI=22.9, HR=68.1
+/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/torch/cuda/__init__.py:1007: UserWarning: Can't initialize NVML
+  raw_cnt = _raw_device_count_nvml()
+被试: ['S10', 'S11', 'S13', 'S14', 'S15', 'S16', 'S17', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'] (共 15 人)
+
+[1/15] Holdout: S10
+  MSE=0.2445  Pearson=0.7173
+
+[2/15] Holdout: S11
+  MSE=0.1073  Pearson=0.8505
+
+[3/15] Holdout: S13
+  MSE=0.1824  Pearson=0.2543
+
+[4/15] Holdout: S14
+  MSE=0.1077  Pearson=0.9258
+
+[5/15] Holdout: S15
+  MSE=0.1066  Pearson=0.9380
+
+[6/15] Holdout: S16
+  MSE=0.0164  Pearson=0.9655
+
+[7/15] Holdout: S17
+  MSE=0.0379  Pearson=0.9045
+
+[8/15] Holdout: S2
+  MSE=0.2558  Pearson=-0.1952
+
+[9/15] Holdout: S3
+  MSE=0.1460  Pearson=0.6047
+
+[10/15] Holdout: S4
+  MSE=0.1182  Pearson=0.9188
+
+[11/15] Holdout: S5
+  MSE=0.1487  Pearson=0.4794
+
+[12/15] Holdout: S6
+  MSE=0.1908  Pearson=0.0744
+
+[13/15] Holdout: S7
+  MSE=0.5430  Pearson=0.9069
+
+[14/15] Holdout: S8
+  MSE=0.1609  Pearson=0.4130
+
+[15/15] Holdout: S9
+  MSE=0.0919  Pearson=0.8810
+
+============================================================
+Early Fusion LOSO 结果:
+  MSE = 0.1639 ± 0.1197
+  Pearson r = 0.6426 ± 0.3510
+============================================================
+结果已保存: /home/lora/repos/MulitiModal/paper/results/early_fusion_loso.json
+/home/lora/repos/MulitiModal/src/data_loader.py:282: VisibleDeprecationWarning: dtype(): align should be passed as Python or NumPy boolean but got `align=0`. Did you mean to pass a tuple to create a subarray type? (Deprecated NumPy 2.4)
+  data = pickle.load(f, encoding="latin1")
+============================================================
+敏感性分析 (快速版: 只跑 Final Ours)
+Device: cuda
+Scaler: /home/lora/repos/MulitiModal/tcm_ft_transformer/scaler_params.npz (exists=True)
+============================================================
+
+============================================================
+Final Ours LOSO: meditation = 0.5
+============================================================
+  WESAD_LABEL_MAP patched in-place: {1: 1.0, 2: 0.0, 3: 0.5}
+Subject S10: Age=28.0, Gender=1, BMI=24.0, HR=64.2
+Subject S11: Age=26.0, Gender=0, BMI=18.5, HR=63.9
+Subject S13: Age=28.0, Gender=1, BMI=25.0, HR=65.6
+Subject S14: Age=27.0, Gender=1, BMI=24.7, HR=64.9
+Subject S15: Age=28.0, Gender=1, BMI=24.0, HR=66.7
+Subject S16: Age=24.0, Gender=1, BMI=20.4, HR=63.5
+Subject S17: Age=29.0, Gender=0, BMI=20.2, HR=61.3
+Subject S2: Age=27.0, Gender=1, BMI=26.1, HR=64.6
+Subject S3: Age=27.0, Gender=1, BMI=23.1, HR=58.7
+Subject S4: Age=25.0, Gender=1, BMI=29.4, HR=60.0
+Subject S5: Age=35.0, Gender=1, BMI=22.4, HR=62.6
+Subject S6: Age=27.0, Gender=1, BMI=22.8, HR=62.9
+Subject S7: Age=28.0, Gender=1, BMI=21.9, HR=62.3
+Subject S8: Age=27.0, Gender=0, BMI=21.6, HR=64.3
+Subject S9: Age=26.0, Gender=1, BMI=22.9, HR=68.1
+  被试: ['S10', 'S11', 'S13', 'S14', 'S15', 'S16', 'S17', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'] (15 人)
+[2026-05-04 15:21:49] >>> TCM checkpoint resolved to: /home/lora/repos/MulitiModal/tcm_ft_transformer/checkpoints/best_model.pth
+[2026-05-04 15:21:49] >>> TCM scaler resolved to: /home/lora/repos/MulitiModal/tcm_ft_transformer/scaler_params.npz
+/home/lora/repos/MulitiModal/tcm_ft_transformer/ft_transformer.py:110: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer_encoder = nn.TransformerEncoder(
+/home/lora/repos/MulitiModal/venv/lib/python3.14/site-packages/torch/cuda/__init__.py:1007: UserWarning: Can't initialize NVML
+  raw_cnt = _raw_device_count_nvml()
+
+  [1/15] Holdout: S10
+[2026-05-04 15:21:57] FinalOurs-m0.5-S10 | Epoch 1/50 train_loss=0.152926 val_mse=0.294930 best_val=0.294930 patience=0/10
+[2026-05-04 15:22:03] FinalOurs-m0.5-S10 | Epoch 2/50 train_loss=0.133797 val_mse=0.276595 best_val=0.276595 patience=0/10
+[2026-05-04 15:22:09] FinalOurs-m0.5-S10 | Epoch 3/50 train_loss=0.126116 val_mse=0.303715 best_val=0.276595 patience=1/10
+[2026-05-04 15:22:15] FinalOurs-m0.5-S10 | Epoch 4/50 train_loss=0.123784 val_mse=0.295410 best_val=0.276595 patience=2/10
+[2026-05-04 15:22:22] FinalOurs-m0.5-S10 | Epoch 5/50 train_loss=0.119846 val_mse=0.305575 best_val=0.276595 patience=3/10
+[2026-05-04 15:22:28] FinalOurs-m0.5-S10 | Epoch 6/50 train_loss=0.116445 val_mse=0.304440 best_val=0.276595 patience=4/10
+[2026-05-04 15:22:34] FinalOurs-m0.5-S10 | Epoch 7/50 train_loss=0.112911 val_mse=0.318711 best_val=0.276595 patience=5/10
+[2026-05-04 15:22:40] FinalOurs-m0.5-S10 | Epoch 8/50 train_loss=0.110651 val_mse=0.287487 best_val=0.276595 patience=6/10
+[2026-05-04 15:22:46] FinalOurs-m0.5-S10 | Epoch 9/50 train_loss=0.107681 val_mse=0.287077 best_val=0.276595 patience=7/10
+[2026-05-04 15:22:52] FinalOurs-m0.5-S10 | Epoch 10/50 train_loss=0.105941 val_mse=0.304903 best_val=0.276595 patience=8/10
+[2026-05-04 15:22:58] FinalOurs-m0.5-S10 | Epoch 11/50 train_loss=0.103063 val_mse=0.280317 best_val=0.276595 patience=9/10
+[2026-05-04 15:23:04] FinalOurs-m0.5-S10 | Epoch 12/50 train_loss=0.102522 val_mse=0.295346 best_val=0.276595 patience=10/10
+[2026-05-04 15:23:04] FinalOurs-m0.5-S10 | Early stop at epoch 12, best=2
+[2026-05-04 15:23:05] FinalOurs-m0.5-S10 DONE | MSE=0.276595 RMSE=0.525923 MAE=0.399364 Pearson=0.379428 [best_epoch=2]
+    MSE=0.2766  Pearson=0.3794
+
+  [2/15] Holdout: S11
+[2026-05-04 15:23:11] FinalOurs-m0.5-S11 | Epoch 1/50 train_loss=0.156246 val_mse=0.103599 best_val=0.103599 patience=0/10
+[2026-05-04 15:23:17] FinalOurs-m0.5-S11 | Epoch 2/50 train_loss=0.136962 val_mse=0.088337 best_val=0.088337 patience=0/10
+[2026-05-04 15:23:23] FinalOurs-m0.5-S11 | Epoch 3/50 train_loss=0.132783 val_mse=0.091720 best_val=0.088337 patience=1/10
+[2026-05-04 15:23:29] FinalOurs-m0.5-S11 | Epoch 4/50 train_loss=0.128393 val_mse=0.094720 best_val=0.088337 patience=2/10
+[2026-05-04 15:23:35] FinalOurs-m0.5-S11 | Epoch 5/50 train_loss=0.125396 val_mse=0.092060 best_val=0.088337 patience=3/10
+[2026-05-04 15:23:42] FinalOurs-m0.5-S11 | Epoch 6/50 train_loss=0.121878 val_mse=0.084451 best_val=0.084451 patience=0/10
+[2026-05-04 15:23:48] FinalOurs-m0.5-S11 | Epoch 7/50 train_loss=0.118892 val_mse=0.088709 best_val=0.084451 patience=1/10
+[2026-05-04 15:23:54] FinalOurs-m0.5-S11 | Epoch 8/50 train_loss=0.115166 val_mse=0.092589 best_val=0.084451 patience=2/10
+[2026-05-04 15:24:00] FinalOurs-m0.5-S11 | Epoch 9/50 train_loss=0.113292 val_mse=0.090769 best_val=0.084451 patience=3/10
+[2026-05-04 15:24:06] FinalOurs-m0.5-S11 | Epoch 10/50 train_loss=0.111234 val_mse=0.083195 best_val=0.083195 patience=0/10
+[2026-05-04 15:24:12] FinalOurs-m0.5-S11 | Epoch 11/50 train_loss=0.108209 val_mse=0.087689 best_val=0.083195 patience=1/10
+[2026-05-04 15:24:18] FinalOurs-m0.5-S11 | Epoch 12/50 train_loss=0.107889 val_mse=0.087408 best_val=0.083195 patience=2/10
+[2026-05-04 15:24:24] FinalOurs-m0.5-S11 | Epoch 13/50 train_loss=0.105892 val_mse=0.094304 best_val=0.083195 patience=3/10
+[2026-05-04 15:24:31] FinalOurs-m0.5-S11 | Epoch 14/50 train_loss=0.104926 val_mse=0.082901 best_val=0.082901 patience=0/10
+[2026-05-04 15:24:37] FinalOurs-m0.5-S11 | Epoch 15/50 train_loss=0.102792 val_mse=0.098826 best_val=0.082901 patience=1/10
+[2026-05-04 15:24:43] FinalOurs-m0.5-S11 | Epoch 16/50 train_loss=0.101699 val_mse=0.071562 best_val=0.071562 patience=0/10
+[2026-05-04 15:24:49] FinalOurs-m0.5-S11 | Epoch 17/50 train_loss=0.099662 val_mse=0.060299 best_val=0.060299 patience=0/10
+[2026-05-04 15:24:55] FinalOurs-m0.5-S11 | Epoch 18/50 train_loss=0.099043 val_mse=0.059994 best_val=0.059994 patience=0/10
+[2026-05-04 15:25:01] FinalOurs-m0.5-S11 | Epoch 19/50 train_loss=0.097816 val_mse=0.081752 best_val=0.059994 patience=1/10
+[2026-05-04 15:25:07] FinalOurs-m0.5-S11 | Epoch 20/50 train_loss=0.098138 val_mse=0.068122 best_val=0.059994 patience=2/10
+[2026-05-04 15:25:13] FinalOurs-m0.5-S11 | Epoch 21/50 train_loss=0.096355 val_mse=0.068130 best_val=0.059994 patience=3/10
+[2026-05-04 15:25:20] FinalOurs-m0.5-S11 | Epoch 22/50 train_loss=0.096083 val_mse=0.065880 best_val=0.059994 patience=4/10
+[2026-05-04 15:25:26] FinalOurs-m0.5-S11 | Epoch 23/50 train_loss=0.092924 val_mse=0.051569 best_val=0.051569 patience=0/10
+[2026-05-04 15:25:32] FinalOurs-m0.5-S11 | Epoch 24/50 train_loss=0.094160 val_mse=0.068224 best_val=0.051569 patience=1/10
+[2026-05-04 15:25:38] FinalOurs-m0.5-S11 | Epoch 25/50 train_loss=0.093885 val_mse=0.047442 best_val=0.047442 patience=0/10
+[2026-05-04 15:25:44] FinalOurs-m0.5-S11 | Epoch 26/50 train_loss=0.091214 val_mse=0.065929 best_val=0.047442 patience=1/10
+[2026-05-04 15:25:50] FinalOurs-m0.5-S11 | Epoch 27/50 train_loss=0.091700 val_mse=0.055547 best_val=0.047442 patience=2/10
+[2026-05-04 15:25:56] FinalOurs-m0.5-S11 | Epoch 28/50 train_loss=0.090420 val_mse=0.051153 best_val=0.047442 patience=3/10
+[2026-05-04 15:26:03] FinalOurs-m0.5-S11 | Epoch 29/50 train_loss=0.090133 val_mse=0.043843 best_val=0.043843 patience=0/10
+[2026-05-04 15:26:09] FinalOurs-m0.5-S11 | Epoch 30/50 train_loss=0.089569 val_mse=0.051938 best_val=0.043843 patience=1/10
+[2026-05-04 15:26:15] FinalOurs-m0.5-S11 | Epoch 31/50 train_loss=0.088715 val_mse=0.050659 best_val=0.043843 patience=2/10
+[2026-05-04 15:26:21] FinalOurs-m0.5-S11 | Epoch 32/50 train_loss=0.087972 val_mse=0.095493 best_val=0.043843 patience=3/10
+[2026-05-04 15:26:27] FinalOurs-m0.5-S11 | Epoch 33/50 train_loss=0.086738 val_mse=0.061972 best_val=0.043843 patience=4/10
+[2026-05-04 15:26:33] FinalOurs-m0.5-S11 | Epoch 34/50 train_loss=0.086041 val_mse=0.079701 best_val=0.043843 patience=5/10
+[2026-05-04 15:26:39] FinalOurs-m0.5-S11 | Epoch 35/50 train_loss=0.085825 val_mse=0.047302 best_val=0.043843 patience=6/10
+[2026-05-04 15:26:45] FinalOurs-m0.5-S11 | Epoch 36/50 train_loss=0.085214 val_mse=0.063941 best_val=0.043843 patience=7/10
+[2026-05-04 15:26:52] FinalOurs-m0.5-S11 | Epoch 37/50 train_loss=0.084468 val_mse=0.050511 best_val=0.043843 patience=8/10
+[2026-05-04 15:26:58] FinalOurs-m0.5-S11 | Epoch 38/50 train_loss=0.083023 val_mse=0.058563 best_val=0.043843 patience=9/10
+[2026-05-04 15:27:04] FinalOurs-m0.5-S11 | Epoch 39/50 train_loss=0.083016 val_mse=0.052634 best_val=0.043843 patience=10/10
+[2026-05-04 15:27:04] FinalOurs-m0.5-S11 | Early stop at epoch 39, best=29
+[2026-05-04 15:27:04] FinalOurs-m0.5-S11 DONE | MSE=0.043843 RMSE=0.209387 MAE=0.186613 Pearson=0.905991 [best_epoch=29]
+    MSE=0.0438  Pearson=0.9060
+
+  [3/15] Holdout: S13
+[2026-05-04 15:27:10] FinalOurs-m0.5-S13 | Epoch 1/50 train_loss=0.148807 val_mse=0.193345 best_val=0.193345 patience=0/10
+[2026-05-04 15:27:16] FinalOurs-m0.5-S13 | Epoch 2/50 train_loss=0.127181 val_mse=0.193915 best_val=0.193345 patience=1/10
+[2026-05-04 15:27:23] FinalOurs-m0.5-S13 | Epoch 3/50 train_loss=0.122184 val_mse=0.195530 best_val=0.193345 patience=2/10
+[2026-05-04 15:27:29] FinalOurs-m0.5-S13 | Epoch 4/50 train_loss=0.117051 val_mse=0.163348 best_val=0.163348 patience=0/10
+[2026-05-04 15:27:35] FinalOurs-m0.5-S13 | Epoch 5/50 train_loss=0.112910 val_mse=0.183419 best_val=0.163348 patience=1/10
+[2026-05-04 15:27:41] FinalOurs-m0.5-S13 | Epoch 6/50 train_loss=0.110476 val_mse=0.173233 best_val=0.163348 patience=2/10
+[2026-05-04 15:27:47] FinalOurs-m0.5-S13 | Epoch 7/50 train_loss=0.108166 val_mse=0.194532 best_val=0.163348 patience=3/10
+[2026-05-04 15:27:53] FinalOurs-m0.5-S13 | Epoch 8/50 train_loss=0.106588 val_mse=0.192691 best_val=0.163348 patience=4/10
+[2026-05-04 15:27:59] FinalOurs-m0.5-S13 | Epoch 9/50 train_loss=0.105147 val_mse=0.183166 best_val=0.163348 patience=5/10
+[2026-05-04 15:28:05] FinalOurs-m0.5-S13 | Epoch 10/50 train_loss=0.103453 val_mse=0.191896 best_val=0.163348 patience=6/10
+[2026-05-04 15:28:12] FinalOurs-m0.5-S13 | Epoch 11/50 train_loss=0.100416 val_mse=0.179427 best_val=0.163348 patience=7/10
+[2026-05-04 15:28:18] FinalOurs-m0.5-S13 | Epoch 12/50 train_loss=0.100240 val_mse=0.178861 best_val=0.163348 patience=8/10
+[2026-05-04 15:28:24] FinalOurs-m0.5-S13 | Epoch 13/50 train_loss=0.099516 val_mse=0.202909 best_val=0.163348 patience=9/10
+[2026-05-04 15:28:30] FinalOurs-m0.5-S13 | Epoch 14/50 train_loss=0.099409 val_mse=0.197263 best_val=0.163348 patience=10/10
+[2026-05-04 15:28:30] FinalOurs-m0.5-S13 | Early stop at epoch 14, best=4
+[2026-05-04 15:28:30] FinalOurs-m0.5-S13 DONE | MSE=0.163348 RMSE=0.404163 MAE=0.356168 Pearson=0.453207 [best_epoch=4]
+    MSE=0.1633  Pearson=0.4532
+
+  [4/15] Holdout: S14
+[2026-05-04 15:28:36] FinalOurs-m0.5-S14 | Epoch 1/50 train_loss=0.160078 val_mse=0.151389 best_val=0.151389 patience=0/10
+[2026-05-04 15:28:43] FinalOurs-m0.5-S14 | Epoch 2/50 train_loss=0.139396 val_mse=0.149075 best_val=0.149075 patience=0/10
+[2026-05-04 15:28:49] FinalOurs-m0.5-S14 | Epoch 3/50 train_loss=0.132199 val_mse=0.173739 best_val=0.149075 patience=1/10
+[2026-05-04 15:28:55] FinalOurs-m0.5-S14 | Epoch 4/50 train_loss=0.127872 val_mse=0.116442 best_val=0.116442 patience=0/10
+[2026-05-04 15:29:01] FinalOurs-m0.5-S14 | Epoch 5/50 train_loss=0.123334 val_mse=0.212677 best_val=0.116442 patience=1/10
+[2026-05-04 15:29:07] FinalOurs-m0.5-S14 | Epoch 6/50 train_loss=0.119472 val_mse=0.151351 best_val=0.116442 patience=2/10
+[2026-05-04 15:29:13] FinalOurs-m0.5-S14 | Epoch 7/50 train_loss=0.116867 val_mse=0.266147 best_val=0.116442 patience=3/10
+[2026-05-04 15:29:19] FinalOurs-m0.5-S14 | Epoch 8/50 train_loss=0.113534 val_mse=0.185806 best_val=0.116442 patience=4/10
+[2026-05-04 15:29:25] FinalOurs-m0.5-S14 | Epoch 9/50 train_loss=0.112151 val_mse=0.258237 best_val=0.116442 patience=5/10
+[2026-05-04 15:29:32] FinalOurs-m0.5-S14 | Epoch 10/50 train_loss=0.110451 val_mse=0.216110 best_val=0.116442 patience=6/10
+[2026-05-04 15:29:38] FinalOurs-m0.5-S14 | Epoch 11/50 train_loss=0.106610 val_mse=0.239201 best_val=0.116442 patience=7/10
+[2026-05-04 15:29:44] FinalOurs-m0.5-S14 | Epoch 12/50 train_loss=0.104494 val_mse=0.171953 best_val=0.116442 patience=8/10
+[2026-05-04 15:29:50] FinalOurs-m0.5-S14 | Epoch 13/50 train_loss=0.103244 val_mse=0.254148 best_val=0.116442 patience=9/10
+[2026-05-04 15:29:56] FinalOurs-m0.5-S14 | Epoch 14/50 train_loss=0.101864 val_mse=0.208673 best_val=0.116442 patience=10/10
+[2026-05-04 15:29:56] FinalOurs-m0.5-S14 | Early stop at epoch 14, best=4
+[2026-05-04 15:29:57] FinalOurs-m0.5-S14 DONE | MSE=0.116442 RMSE=0.341236 MAE=0.304460 Pearson=0.920109 [best_epoch=4]
+    MSE=0.1164  Pearson=0.9201
+
+  [5/15] Holdout: S15
+[2026-05-04 15:30:03] FinalOurs-m0.5-S15 | Epoch 1/50 train_loss=0.165600 val_mse=0.126547 best_val=0.126547 patience=0/10
+[2026-05-04 15:30:09] FinalOurs-m0.5-S15 | Epoch 2/50 train_loss=0.146215 val_mse=0.161741 best_val=0.126547 patience=1/10
+[2026-05-04 15:30:15] FinalOurs-m0.5-S15 | Epoch 3/50 train_loss=0.139900 val_mse=0.184788 best_val=0.126547 patience=2/10
+[2026-05-04 15:30:21] FinalOurs-m0.5-S15 | Epoch 4/50 train_loss=0.135290 val_mse=0.163766 best_val=0.126547 patience=3/10
+[2026-05-04 15:30:27] FinalOurs-m0.5-S15 | Epoch 5/50 train_loss=0.130087 val_mse=0.154678 best_val=0.126547 patience=4/10
+[2026-05-04 15:30:33] FinalOurs-m0.5-S15 | Epoch 6/50 train_loss=0.126296 val_mse=0.116845 best_val=0.116845 patience=0/10
+[2026-05-04 15:30:39] FinalOurs-m0.5-S15 | Epoch 7/50 train_loss=0.124263 val_mse=0.130475 best_val=0.116845 patience=1/10
+[2026-05-04 15:30:46] FinalOurs-m0.5-S15 | Epoch 8/50 train_loss=0.120276 val_mse=0.107763 best_val=0.107763 patience=0/10
+[2026-05-04 15:30:52] FinalOurs-m0.5-S15 | Epoch 9/50 train_loss=0.118320 val_mse=0.100568 best_val=0.100568 patience=0/10
+[2026-05-04 15:30:58] FinalOurs-m0.5-S15 | Epoch 10/50 train_loss=0.115333 val_mse=0.135585 best_val=0.100568 patience=1/10
+[2026-05-04 15:31:04] FinalOurs-m0.5-S15 | Epoch 11/50 train_loss=0.113222 val_mse=0.147721 best_val=0.100568 patience=2/10
+[2026-05-04 15:31:10] FinalOurs-m0.5-S15 | Epoch 12/50 train_loss=0.110953 val_mse=0.128469 best_val=0.100568 patience=3/10
+[2026-05-04 15:31:16] FinalOurs-m0.5-S15 | Epoch 13/50 train_loss=0.109928 val_mse=0.146768 best_val=0.100568 patience=4/10
+[2026-05-04 15:31:22] FinalOurs-m0.5-S15 | Epoch 14/50 train_loss=0.110132 val_mse=0.133884 best_val=0.100568 patience=5/10
+[2026-05-04 15:31:28] FinalOurs-m0.5-S15 | Epoch 15/50 train_loss=0.107799 val_mse=0.121090 best_val=0.100568 patience=6/10
+[2026-05-04 15:31:35] FinalOurs-m0.5-S15 | Epoch 16/50 train_loss=0.105849 val_mse=0.148115 best_val=0.100568 patience=7/10
+[2026-05-04 15:31:41] FinalOurs-m0.5-S15 | Epoch 17/50 train_loss=0.105875 val_mse=0.119054 best_val=0.100568 patience=8/10
+[2026-05-04 15:31:47] FinalOurs-m0.5-S15 | Epoch 18/50 train_loss=0.105062 val_mse=0.167208 best_val=0.100568 patience=9/10
+[2026-05-04 15:31:53] FinalOurs-m0.5-S15 | Epoch 19/50 train_loss=0.102584 val_mse=0.132759 best_val=0.100568 patience=10/10
+[2026-05-04 15:31:53] FinalOurs-m0.5-S15 | Early stop at epoch 19, best=9
+[2026-05-04 15:31:53] FinalOurs-m0.5-S15 DONE | MSE=0.100568 RMSE=0.317125 MAE=0.294644 Pearson=0.889174 [best_epoch=9]
+    MSE=0.1006  Pearson=0.8892
+
+  [6/15] Holdout: S16
+[2026-05-04 15:32:00] FinalOurs-m0.5-S16 | Epoch 1/50 train_loss=0.168127 val_mse=0.039326 best_val=0.039326 patience=0/10
+[2026-05-04 15:32:06] FinalOurs-m0.5-S16 | Epoch 2/50 train_loss=0.142372 val_mse=0.045624 best_val=0.039326 patience=1/10
+[2026-05-04 15:32:12] FinalOurs-m0.5-S16 | Epoch 3/50 train_loss=0.134950 val_mse=0.064664 best_val=0.039326 patience=2/10
+[2026-05-04 15:32:18] FinalOurs-m0.5-S16 | Epoch 4/50 train_loss=0.128459 val_mse=0.071107 best_val=0.039326 patience=3/10
+[2026-05-04 15:32:24] FinalOurs-m0.5-S16 | Epoch 5/50 train_loss=0.125079 val_mse=0.054368 best_val=0.039326 patience=4/10
+[2026-05-04 15:32:30] FinalOurs-m0.5-S16 | Epoch 6/50 train_loss=0.120966 val_mse=0.089547 best_val=0.039326 patience=5/10
+[2026-05-04 15:32:36] FinalOurs-m0.5-S16 | Epoch 7/50 train_loss=0.118587 val_mse=0.085083 best_val=0.039326 patience=6/10
+[2026-05-04 15:32:43] FinalOurs-m0.5-S16 | Epoch 8/50 train_loss=0.114831 val_mse=0.106340 best_val=0.039326 patience=7/10
+[2026-05-04 15:32:49] FinalOurs-m0.5-S16 | Epoch 9/50 train_loss=0.111670 val_mse=0.092964 best_val=0.039326 patience=8/10
+[2026-05-04 15:32:55] FinalOurs-m0.5-S16 | Epoch 10/50 train_loss=0.110334 val_mse=0.077978 best_val=0.039326 patience=9/10
+[2026-05-04 15:33:01] FinalOurs-m0.5-S16 | Epoch 11/50 train_loss=0.107939 val_mse=0.065079 best_val=0.039326 patience=10/10
+[2026-05-04 15:33:01] FinalOurs-m0.5-S16 | Early stop at epoch 11, best=1
+[2026-05-04 15:33:01] FinalOurs-m0.5-S16 DONE | MSE=0.039326 RMSE=0.198309 MAE=0.130548 Pearson=0.911629 [best_epoch=1]
+    MSE=0.0393  Pearson=0.9116
+
+  [7/15] Holdout: S17
+[2026-05-04 15:33:07] FinalOurs-m0.5-S17 | Epoch 1/50 train_loss=0.164194 val_mse=0.098060 best_val=0.098060 patience=0/10
+[2026-05-04 15:33:14] FinalOurs-m0.5-S17 | Epoch 2/50 train_loss=0.142519 val_mse=0.084033 best_val=0.084033 patience=0/10
+[2026-05-04 15:33:20] FinalOurs-m0.5-S17 | Epoch 3/50 train_loss=0.137598 val_mse=0.097193 best_val=0.084033 patience=1/10
+[2026-05-04 15:33:26] FinalOurs-m0.5-S17 | Epoch 4/50 train_loss=0.132413 val_mse=0.085800 best_val=0.084033 patience=2/10
+[2026-05-04 15:33:32] FinalOurs-m0.5-S17 | Epoch 5/50 train_loss=0.128532 val_mse=0.097696 best_val=0.084033 patience=3/10
+[2026-05-04 15:33:38] FinalOurs-m0.5-S17 | Epoch 6/50 train_loss=0.123914 val_mse=0.083753 best_val=0.083753 patience=0/10
+[2026-05-04 15:33:45] FinalOurs-m0.5-S17 | Epoch 7/50 train_loss=0.119993 val_mse=0.099013 best_val=0.083753 patience=1/10
+[2026-05-04 15:33:51] FinalOurs-m0.5-S17 | Epoch 8/50 train_loss=0.115828 val_mse=0.077365 best_val=0.077365 patience=0/10
+[2026-05-04 15:33:57] FinalOurs-m0.5-S17 | Epoch 9/50 train_loss=0.113277 val_mse=0.091461 best_val=0.077365 patience=1/10
+[2026-05-04 15:34:03] FinalOurs-m0.5-S17 | Epoch 10/50 train_loss=0.110972 val_mse=0.064372 best_val=0.064372 patience=0/10
+[2026-05-04 15:34:09] FinalOurs-m0.5-S17 | Epoch 11/50 train_loss=0.109134 val_mse=0.115335 best_val=0.064372 patience=1/10
+[2026-05-04 15:34:16] FinalOurs-m0.5-S17 | Epoch 12/50 train_loss=0.106589 val_mse=0.113211 best_val=0.064372 patience=2/10
+[2026-05-04 15:34:22] FinalOurs-m0.5-S17 | Epoch 13/50 train_loss=0.103913 val_mse=0.062454 best_val=0.062454 patience=0/10
+[2026-05-04 15:34:28] FinalOurs-m0.5-S17 | Epoch 14/50 train_loss=0.104225 val_mse=0.091383 best_val=0.062454 patience=1/10
+[2026-05-04 15:34:34] FinalOurs-m0.5-S17 | Epoch 15/50 train_loss=0.102028 val_mse=0.078408 best_val=0.062454 patience=2/10
+[2026-05-04 15:34:41] FinalOurs-m0.5-S17 | Epoch 16/50 train_loss=0.100775 val_mse=0.064262 best_val=0.062454 patience=3/10
+[2026-05-04 15:34:47] FinalOurs-m0.5-S17 | Epoch 17/50 train_loss=0.099287 val_mse=0.122577 best_val=0.062454 patience=4/10
+[2026-05-04 15:34:53] FinalOurs-m0.5-S17 | Epoch 18/50 train_loss=0.098994 val_mse=0.101867 best_val=0.062454 patience=5/10
+[2026-05-04 15:34:59] FinalOurs-m0.5-S17 | Epoch 19/50 train_loss=0.097438 val_mse=0.067649 best_val=0.062454 patience=6/10
+[2026-05-04 15:35:05] FinalOurs-m0.5-S17 | Epoch 20/50 train_loss=0.095092 val_mse=0.086952 best_val=0.062454 patience=7/10
+[2026-05-04 15:35:12] FinalOurs-m0.5-S17 | Epoch 21/50 train_loss=0.095919 val_mse=0.050466 best_val=0.050466 patience=0/10
+[2026-05-04 15:35:18] FinalOurs-m0.5-S17 | Epoch 22/50 train_loss=0.095864 val_mse=0.091596 best_val=0.050466 patience=1/10
+[2026-05-04 15:35:24] FinalOurs-m0.5-S17 | Epoch 23/50 train_loss=0.095205 val_mse=0.080242 best_val=0.050466 patience=2/10
+[2026-05-04 15:35:30] FinalOurs-m0.5-S17 | Epoch 24/50 train_loss=0.093931 val_mse=0.074381 best_val=0.050466 patience=3/10
+[2026-05-04 15:35:37] FinalOurs-m0.5-S17 | Epoch 25/50 train_loss=0.093131 val_mse=0.101750 best_val=0.050466 patience=4/10
+[2026-05-04 15:35:43] FinalOurs-m0.5-S17 | Epoch 26/50 train_loss=0.093056 val_mse=0.085316 best_val=0.050466 patience=5/10
+[2026-05-04 15:35:49] FinalOurs-m0.5-S17 | Epoch 27/50 train_loss=0.092468 val_mse=0.063972 best_val=0.050466 patience=6/10
+[2026-05-04 15:35:55] FinalOurs-m0.5-S17 | Epoch 28/50 train_loss=0.092098 val_mse=0.122965 best_val=0.050466 patience=7/10
+[2026-05-04 15:36:02] FinalOurs-m0.5-S17 | Epoch 29/50 train_loss=0.091631 val_mse=0.078390 best_val=0.050466 patience=8/10
+[2026-05-04 15:36:08] FinalOurs-m0.5-S17 | Epoch 30/50 train_loss=0.089010 val_mse=0.075036 best_val=0.050466 patience=9/10
+[2026-05-04 15:36:14] FinalOurs-m0.5-S17 | Epoch 31/50 train_loss=0.088954 val_mse=0.058807 best_val=0.050466 patience=10/10
+[2026-05-04 15:36:14] FinalOurs-m0.5-S17 | Early stop at epoch 31, best=21
+[2026-05-04 15:36:15] FinalOurs-m0.5-S17 DONE | MSE=0.050466 RMSE=0.224646 MAE=0.147747 Pearson=0.906196 [best_epoch=21]
+    MSE=0.0505  Pearson=0.9062
+
+  [8/15] Holdout: S2
+[2026-05-04 15:36:21] FinalOurs-m0.5-S2 | Epoch 1/50 train_loss=0.150447 val_mse=0.260029 best_val=0.260029 patience=0/10
+[2026-05-04 15:36:27] FinalOurs-m0.5-S2 | Epoch 2/50 train_loss=0.127756 val_mse=0.296729 best_val=0.260029 patience=1/10
+[2026-05-04 15:36:34] FinalOurs-m0.5-S2 | Epoch 3/50 train_loss=0.122655 val_mse=0.263378 best_val=0.260029 patience=2/10
+[2026-05-04 15:36:40] FinalOurs-m0.5-S2 | Epoch 4/50 train_loss=0.117954 val_mse=0.263483 best_val=0.260029 patience=3/10
+[2026-05-04 15:36:46] FinalOurs-m0.5-S2 | Epoch 5/50 train_loss=0.111368 val_mse=0.276497 best_val=0.260029 patience=4/10
+[2026-05-04 15:36:53] FinalOurs-m0.5-S2 | Epoch 6/50 train_loss=0.106471 val_mse=0.313652 best_val=0.260029 patience=5/10
+[2026-05-04 15:36:59] FinalOurs-m0.5-S2 | Epoch 7/50 train_loss=0.102579 val_mse=0.320628 best_val=0.260029 patience=6/10
+[2026-05-04 15:37:06] FinalOurs-m0.5-S2 | Epoch 8/50 train_loss=0.100059 val_mse=0.299746 best_val=0.260029 patience=7/10
+[2026-05-04 15:37:12] FinalOurs-m0.5-S2 | Epoch 9/50 train_loss=0.096915 val_mse=0.367140 best_val=0.260029 patience=8/10
+[2026-05-04 15:37:19] FinalOurs-m0.5-S2 | Epoch 10/50 train_loss=0.097543 val_mse=0.334727 best_val=0.260029 patience=9/10
+[2026-05-04 15:37:25] FinalOurs-m0.5-S2 | Epoch 11/50 train_loss=0.092957 val_mse=0.344043 best_val=0.260029 patience=10/10
+[2026-05-04 15:37:25] FinalOurs-m0.5-S2 | Early stop at epoch 11, best=1
+[2026-05-04 15:37:25] FinalOurs-m0.5-S2 DONE | MSE=0.260029 RMSE=0.509930 MAE=0.446691 Pearson=-0.155762 [best_epoch=1]
+    MSE=0.2600  Pearson=-0.1558
+
+  [9/15] Holdout: S3
+[2026-05-04 15:37:32] FinalOurs-m0.5-S3 | Epoch 1/50 train_loss=0.156334 val_mse=0.164221 best_val=0.164221 patience=0/10
+[2026-05-04 15:37:38] FinalOurs-m0.5-S3 | Epoch 2/50 train_loss=0.135634 val_mse=0.182892 best_val=0.164221 patience=1/10
+[2026-05-04 15:37:44] FinalOurs-m0.5-S3 | Epoch 3/50 train_loss=0.130113 val_mse=0.193195 best_val=0.164221 patience=2/10
+[2026-05-04 15:37:50] FinalOurs-m0.5-S3 | Epoch 4/50 train_loss=0.124912 val_mse=0.169808 best_val=0.164221 patience=3/10
+[2026-05-04 15:37:56] FinalOurs-m0.5-S3 | Epoch 5/50 train_loss=0.119497 val_mse=0.183054 best_val=0.164221 patience=4/10
+[2026-05-04 15:38:03] FinalOurs-m0.5-S3 | Epoch 6/50 train_loss=0.115897 val_mse=0.155672 best_val=0.155672 patience=0/10
+[2026-05-04 15:38:09] FinalOurs-m0.5-S3 | Epoch 7/50 train_loss=0.112579 val_mse=0.196101 best_val=0.155672 patience=1/10
+[2026-05-04 15:38:15] FinalOurs-m0.5-S3 | Epoch 8/50 train_loss=0.110374 val_mse=0.168041 best_val=0.155672 patience=2/10
+[2026-05-04 15:38:21] FinalOurs-m0.5-S3 | Epoch 9/50 train_loss=0.108074 val_mse=0.190136 best_val=0.155672 patience=3/10
+[2026-05-04 15:38:27] FinalOurs-m0.5-S3 | Epoch 10/50 train_loss=0.105977 val_mse=0.181066 best_val=0.155672 patience=4/10
+[2026-05-04 15:38:34] FinalOurs-m0.5-S3 | Epoch 11/50 train_loss=0.105084 val_mse=0.188172 best_val=0.155672 patience=5/10
+[2026-05-04 15:38:40] FinalOurs-m0.5-S3 | Epoch 12/50 train_loss=0.103904 val_mse=0.183261 best_val=0.155672 patience=6/10
+[2026-05-04 15:38:46] FinalOurs-m0.5-S3 | Epoch 13/50 train_loss=0.102825 val_mse=0.202703 best_val=0.155672 patience=7/10
+[2026-05-04 15:38:52] FinalOurs-m0.5-S3 | Epoch 14/50 train_loss=0.102230 val_mse=0.236053 best_val=0.155672 patience=8/10
+[2026-05-04 15:38:59] FinalOurs-m0.5-S3 | Epoch 15/50 train_loss=0.100443 val_mse=0.175491 best_val=0.155672 patience=9/10
+[2026-05-04 15:39:05] FinalOurs-m0.5-S3 | Epoch 16/50 train_loss=0.099966 val_mse=0.191207 best_val=0.155672 patience=10/10
+[2026-05-04 15:39:05] FinalOurs-m0.5-S3 | Early stop at epoch 16, best=6
+[2026-05-04 15:39:05] FinalOurs-m0.5-S3 DONE | MSE=0.155672 RMSE=0.394553 MAE=0.352684 Pearson=0.507197 [best_epoch=6]
+    MSE=0.1557  Pearson=0.5072
+
+  [10/15] Holdout: S4
+[2026-05-04 15:39:11] FinalOurs-m0.5-S4 | Epoch 1/50 train_loss=0.158947 val_mse=0.138562 best_val=0.138562 patience=0/10
+[2026-05-04 15:39:18] FinalOurs-m0.5-S4 | Epoch 2/50 train_loss=0.138062 val_mse=0.166214 best_val=0.138562 patience=1/10
+[2026-05-04 15:39:24] FinalOurs-m0.5-S4 | Epoch 3/50 train_loss=0.131261 val_mse=0.161675 best_val=0.138562 patience=2/10
+[2026-05-04 15:39:31] FinalOurs-m0.5-S4 | Epoch 4/50 train_loss=0.125167 val_mse=0.195497 best_val=0.138562 patience=3/10
+[2026-05-04 15:39:38] FinalOurs-m0.5-S4 | Epoch 5/50 train_loss=0.120663 val_mse=0.184271 best_val=0.138562 patience=4/10
+[2026-05-04 15:39:45] FinalOurs-m0.5-S4 | Epoch 6/50 train_loss=0.117738 val_mse=0.143698 best_val=0.138562 patience=5/10
+[2026-05-04 15:39:52] FinalOurs-m0.5-S4 | Epoch 7/50 train_loss=0.113774 val_mse=0.286827 best_val=0.138562 patience=6/10
+[2026-05-04 15:39:59] FinalOurs-m0.5-S4 | Epoch 8/50 train_loss=0.112176 val_mse=0.250146 best_val=0.138562 patience=7/10
+[2026-05-04 15:40:06] FinalOurs-m0.5-S4 | Epoch 9/50 train_loss=0.108193 val_mse=0.224396 best_val=0.138562 patience=8/10
+[2026-05-04 15:40:13] FinalOurs-m0.5-S4 | Epoch 10/50 train_loss=0.107503 val_mse=0.348350 best_val=0.138562 patience=9/10
+[2026-05-04 15:40:19] FinalOurs-m0.5-S4 | Epoch 11/50 train_loss=0.104300 val_mse=0.253517 best_val=0.138562 patience=10/10
+[2026-05-04 15:40:19] FinalOurs-m0.5-S4 | Early stop at epoch 11, best=1
+[2026-05-04 15:40:20] FinalOurs-m0.5-S4 DONE | MSE=0.138562 RMSE=0.372239 MAE=0.326437 Pearson=0.884949 [best_epoch=1]
+    MSE=0.1386  Pearson=0.8849
+
+  [11/15] Holdout: S5
+[2026-05-04 15:40:26] FinalOurs-m0.5-S5 | Epoch 1/50 train_loss=0.153212 val_mse=0.222207 best_val=0.222207 patience=0/10
+[2026-05-04 15:40:33] FinalOurs-m0.5-S5 | Epoch 2/50 train_loss=0.132801 val_mse=0.208592 best_val=0.208592 patience=0/10
+[2026-05-04 15:40:40] FinalOurs-m0.5-S5 | Epoch 3/50 train_loss=0.126693 val_mse=0.200598 best_val=0.200598 patience=0/10
+[2026-05-04 15:40:47] FinalOurs-m0.5-S5 | Epoch 4/50 train_loss=0.121430 val_mse=0.205629 best_val=0.200598 patience=1/10
+[2026-05-04 15:40:53] FinalOurs-m0.5-S5 | Epoch 5/50 train_loss=0.117627 val_mse=0.177270 best_val=0.177270 patience=0/10
+[2026-05-04 15:40:59] FinalOurs-m0.5-S5 | Epoch 6/50 train_loss=0.115106 val_mse=0.216035 best_val=0.177270 patience=1/10
+[2026-05-04 15:41:06] FinalOurs-m0.5-S5 | Epoch 7/50 train_loss=0.111229 val_mse=0.200240 best_val=0.177270 patience=2/10
+[2026-05-04 15:41:13] FinalOurs-m0.5-S5 | Epoch 8/50 train_loss=0.108941 val_mse=0.243796 best_val=0.177270 patience=3/10
+[2026-05-04 15:41:19] FinalOurs-m0.5-S5 | Epoch 9/50 train_loss=0.108538 val_mse=0.216585 best_val=0.177270 patience=4/10
+[2026-05-04 15:41:26] FinalOurs-m0.5-S5 | Epoch 10/50 train_loss=0.106083 val_mse=0.221911 best_val=0.177270 patience=5/10
+[2026-05-04 15:41:33] FinalOurs-m0.5-S5 | Epoch 11/50 train_loss=0.104354 val_mse=0.169456 best_val=0.169456 patience=0/10
+[2026-05-04 15:41:39] FinalOurs-m0.5-S5 | Epoch 12/50 train_loss=0.102067 val_mse=0.149512 best_val=0.149512 patience=0/10
+[2026-05-04 15:41:46] FinalOurs-m0.5-S5 | Epoch 13/50 train_loss=0.102066 val_mse=0.181584 best_val=0.149512 patience=1/10
+[2026-05-04 15:41:52] FinalOurs-m0.5-S5 | Epoch 14/50 train_loss=0.101235 val_mse=0.187843 best_val=0.149512 patience=2/10
+[2026-05-04 15:41:59] FinalOurs-m0.5-S5 | Epoch 15/50 train_loss=0.100386 val_mse=0.193611 best_val=0.149512 patience=3/10
+[2026-05-04 15:42:06] FinalOurs-m0.5-S5 | Epoch 16/50 train_loss=0.098714 val_mse=0.186664 best_val=0.149512 patience=4/10
+[2026-05-04 15:42:12] FinalOurs-m0.5-S5 | Epoch 17/50 train_loss=0.098358 val_mse=0.188830 best_val=0.149512 patience=5/10
+[2026-05-04 15:42:19] FinalOurs-m0.5-S5 | Epoch 18/50 train_loss=0.096827 val_mse=0.148766 best_val=0.148766 patience=0/10
+[2026-05-04 15:42:26] FinalOurs-m0.5-S5 | Epoch 19/50 train_loss=0.096719 val_mse=0.209925 best_val=0.148766 patience=1/10
+[2026-05-04 15:42:32] FinalOurs-m0.5-S5 | Epoch 20/50 train_loss=0.095328 val_mse=0.195530 best_val=0.148766 patience=2/10
+[2026-05-04 15:42:39] FinalOurs-m0.5-S5 | Epoch 21/50 train_loss=0.094478 val_mse=0.183915 best_val=0.148766 patience=3/10
+[2026-05-04 15:42:45] FinalOurs-m0.5-S5 | Epoch 22/50 train_loss=0.094517 val_mse=0.166702 best_val=0.148766 patience=4/10
+[2026-05-04 15:42:52] FinalOurs-m0.5-S5 | Epoch 23/50 train_loss=0.094701 val_mse=0.199320 best_val=0.148766 patience=5/10
+[2026-05-04 15:42:59] FinalOurs-m0.5-S5 | Epoch 24/50 train_loss=0.092663 val_mse=0.185739 best_val=0.148766 patience=6/10
+[2026-05-04 15:43:05] FinalOurs-m0.5-S5 | Epoch 25/50 train_loss=0.092799 val_mse=0.184383 best_val=0.148766 patience=7/10
+[2026-05-04 15:43:12] FinalOurs-m0.5-S5 | Epoch 26/50 train_loss=0.092338 val_mse=0.196528 best_val=0.148766 patience=8/10
+[2026-05-04 15:43:19] FinalOurs-m0.5-S5 | Epoch 27/50 train_loss=0.091149 val_mse=0.174838 best_val=0.148766 patience=9/10
+[2026-05-04 15:43:25] FinalOurs-m0.5-S5 | Epoch 28/50 train_loss=0.091044 val_mse=0.137246 best_val=0.137246 patience=0/10
+[2026-05-04 15:43:32] FinalOurs-m0.5-S5 | Epoch 29/50 train_loss=0.089837 val_mse=0.223494 best_val=0.137246 patience=1/10
+[2026-05-04 15:43:39] FinalOurs-m0.5-S5 | Epoch 30/50 train_loss=0.090963 val_mse=0.154285 best_val=0.137246 patience=2/10
+[2026-05-04 15:43:45] FinalOurs-m0.5-S5 | Epoch 31/50 train_loss=0.088326 val_mse=0.192363 best_val=0.137246 patience=3/10
+[2026-05-04 15:43:52] FinalOurs-m0.5-S5 | Epoch 32/50 train_loss=0.089316 val_mse=0.169468 best_val=0.137246 patience=4/10
+[2026-05-04 15:43:59] FinalOurs-m0.5-S5 | Epoch 33/50 train_loss=0.088420 val_mse=0.151651 best_val=0.137246 patience=5/10
+[2026-05-04 15:44:06] FinalOurs-m0.5-S5 | Epoch 34/50 train_loss=0.087946 val_mse=0.156748 best_val=0.137246 patience=6/10
+[2026-05-04 15:44:12] FinalOurs-m0.5-S5 | Epoch 35/50 train_loss=0.088120 val_mse=0.198143 best_val=0.137246 patience=7/10
+[2026-05-04 15:44:19] FinalOurs-m0.5-S5 | Epoch 36/50 train_loss=0.087580 val_mse=0.184543 best_val=0.137246 patience=8/10
+[2026-05-04 15:44:26] FinalOurs-m0.5-S5 | Epoch 37/50 train_loss=0.087023 val_mse=0.192141 best_val=0.137246 patience=9/10
+[2026-05-04 15:44:32] FinalOurs-m0.5-S5 | Epoch 38/50 train_loss=0.086250 val_mse=0.153774 best_val=0.137246 patience=10/10
+[2026-05-04 15:44:32] FinalOurs-m0.5-S5 | Early stop at epoch 38, best=28
+[2026-05-04 15:44:33] FinalOurs-m0.5-S5 DONE | MSE=0.137246 RMSE=0.370467 MAE=0.321520 Pearson=0.611263 [best_epoch=28]
+    MSE=0.1372  Pearson=0.6113
+
+  [12/15] Holdout: S6
+[2026-05-04 15:44:40] FinalOurs-m0.5-S6 | Epoch 1/50 train_loss=0.152266 val_mse=0.139065 best_val=0.139065 patience=0/10
+[2026-05-04 15:44:46] FinalOurs-m0.5-S6 | Epoch 2/50 train_loss=0.129211 val_mse=0.143707 best_val=0.139065 patience=1/10
+[2026-05-04 15:44:53] FinalOurs-m0.5-S6 | Epoch 3/50 train_loss=0.123042 val_mse=0.148292 best_val=0.139065 patience=2/10
+[2026-05-04 15:45:00] FinalOurs-m0.5-S6 | Epoch 4/50 train_loss=0.119484 val_mse=0.129652 best_val=0.129652 patience=0/10
+[2026-05-04 15:45:06] FinalOurs-m0.5-S6 | Epoch 5/50 train_loss=0.114981 val_mse=0.149702 best_val=0.129652 patience=1/10
+[2026-05-04 15:45:13] FinalOurs-m0.5-S6 | Epoch 6/50 train_loss=0.111042 val_mse=0.128474 best_val=0.128474 patience=0/10
+[2026-05-04 15:45:20] FinalOurs-m0.5-S6 | Epoch 7/50 train_loss=0.108886 val_mse=0.120613 best_val=0.120613 patience=0/10
+[2026-05-04 15:45:27] FinalOurs-m0.5-S6 | Epoch 8/50 train_loss=0.106199 val_mse=0.141457 best_val=0.120613 patience=1/10
+[2026-05-04 15:45:33] FinalOurs-m0.5-S6 | Epoch 9/50 train_loss=0.103107 val_mse=0.162615 best_val=0.120613 patience=2/10
+[2026-05-04 15:45:40] FinalOurs-m0.5-S6 | Epoch 10/50 train_loss=0.100563 val_mse=0.141321 best_val=0.120613 patience=3/10
+[2026-05-04 15:45:46] FinalOurs-m0.5-S6 | Epoch 11/50 train_loss=0.100151 val_mse=0.146650 best_val=0.120613 patience=4/10
+[2026-05-04 15:45:53] FinalOurs-m0.5-S6 | Epoch 12/50 train_loss=0.096760 val_mse=0.170085 best_val=0.120613 patience=5/10
+[2026-05-04 15:45:59] FinalOurs-m0.5-S6 | Epoch 13/50 train_loss=0.096769 val_mse=0.165378 best_val=0.120613 patience=6/10
+[2026-05-04 15:46:06] FinalOurs-m0.5-S6 | Epoch 14/50 train_loss=0.095104 val_mse=0.142769 best_val=0.120613 patience=7/10
+[2026-05-04 15:46:12] FinalOurs-m0.5-S6 | Epoch 15/50 train_loss=0.093256 val_mse=0.112743 best_val=0.112743 patience=0/10
+[2026-05-04 15:46:18] FinalOurs-m0.5-S6 | Epoch 16/50 train_loss=0.093923 val_mse=0.138656 best_val=0.112743 patience=1/10
+[2026-05-04 15:46:25] FinalOurs-m0.5-S6 | Epoch 17/50 train_loss=0.092048 val_mse=0.168104 best_val=0.112743 patience=2/10
+[2026-05-04 15:46:31] FinalOurs-m0.5-S6 | Epoch 18/50 train_loss=0.091129 val_mse=0.129501 best_val=0.112743 patience=3/10
+[2026-05-04 15:46:38] FinalOurs-m0.5-S6 | Epoch 19/50 train_loss=0.089359 val_mse=0.173029 best_val=0.112743 patience=4/10
+[2026-05-04 15:46:44] FinalOurs-m0.5-S6 | Epoch 20/50 train_loss=0.089527 val_mse=0.135489 best_val=0.112743 patience=5/10
+[2026-05-04 15:46:51] FinalOurs-m0.5-S6 | Epoch 21/50 train_loss=0.087535 val_mse=0.174187 best_val=0.112743 patience=6/10
+[2026-05-04 15:46:57] FinalOurs-m0.5-S6 | Epoch 22/50 train_loss=0.088560 val_mse=0.139547 best_val=0.112743 patience=7/10
+[2026-05-04 15:47:04] FinalOurs-m0.5-S6 | Epoch 23/50 train_loss=0.085460 val_mse=0.145196 best_val=0.112743 patience=8/10
+[2026-05-04 15:47:10] FinalOurs-m0.5-S6 | Epoch 24/50 train_loss=0.085891 val_mse=0.168216 best_val=0.112743 patience=9/10
+[2026-05-04 15:47:17] FinalOurs-m0.5-S6 | Epoch 25/50 train_loss=0.085435 val_mse=0.155534 best_val=0.112743 patience=10/10
+[2026-05-04 15:47:17] FinalOurs-m0.5-S6 | Early stop at epoch 25, best=15
+[2026-05-04 15:47:17] FinalOurs-m0.5-S6 DONE | MSE=0.112743 RMSE=0.335772 MAE=0.301199 Pearson=0.761630 [best_epoch=15]
+    MSE=0.1127  Pearson=0.7616
+
+  [13/15] Holdout: S7
+[2026-05-04 15:47:24] FinalOurs-m0.5-S7 | Epoch 1/50 train_loss=0.152701 val_mse=0.671229 best_val=0.671229 patience=0/10
+[2026-05-04 15:47:30] FinalOurs-m0.5-S7 | Epoch 2/50 train_loss=0.130222 val_mse=0.699482 best_val=0.671229 patience=1/10
+[2026-05-04 15:47:37] FinalOurs-m0.5-S7 | Epoch 3/50 train_loss=0.122482 val_mse=0.962450 best_val=0.671229 patience=2/10
+[2026-05-04 15:47:43] FinalOurs-m0.5-S7 | Epoch 4/50 train_loss=0.117542 val_mse=0.768102 best_val=0.671229 patience=3/10
+[2026-05-04 15:47:50] FinalOurs-m0.5-S7 | Epoch 5/50 train_loss=0.111982 val_mse=0.546443 best_val=0.546443 patience=0/10
+[2026-05-04 15:47:56] FinalOurs-m0.5-S7 | Epoch 6/50 train_loss=0.107963 val_mse=0.574604 best_val=0.546443 patience=1/10
+[2026-05-04 15:48:02] FinalOurs-m0.5-S7 | Epoch 7/50 train_loss=0.105454 val_mse=0.527968 best_val=0.527968 patience=0/10
+[2026-05-04 15:48:09] FinalOurs-m0.5-S7 | Epoch 8/50 train_loss=0.102423 val_mse=0.540394 best_val=0.527968 patience=1/10
+[2026-05-04 15:48:15] FinalOurs-m0.5-S7 | Epoch 9/50 train_loss=0.100513 val_mse=0.713728 best_val=0.527968 patience=2/10
+[2026-05-04 15:48:22] FinalOurs-m0.5-S7 | Epoch 10/50 train_loss=0.100056 val_mse=0.733215 best_val=0.527968 patience=3/10
+[2026-05-04 15:48:28] FinalOurs-m0.5-S7 | Epoch 11/50 train_loss=0.096734 val_mse=0.628340 best_val=0.527968 patience=4/10
+[2026-05-04 15:48:35] FinalOurs-m0.5-S7 | Epoch 12/50 train_loss=0.095395 val_mse=0.577664 best_val=0.527968 patience=5/10
+[2026-05-04 15:48:41] FinalOurs-m0.5-S7 | Epoch 13/50 train_loss=0.095379 val_mse=0.955321 best_val=0.527968 patience=6/10
+[2026-05-04 15:48:48] FinalOurs-m0.5-S7 | Epoch 14/50 train_loss=0.094499 val_mse=0.649741 best_val=0.527968 patience=7/10
+[2026-05-04 15:48:54] FinalOurs-m0.5-S7 | Epoch 15/50 train_loss=0.093585 val_mse=1.010746 best_val=0.527968 patience=8/10
+[2026-05-04 15:49:01] FinalOurs-m0.5-S7 | Epoch 16/50 train_loss=0.092896 val_mse=0.867053 best_val=0.527968 patience=9/10
+[2026-05-04 15:49:07] FinalOurs-m0.5-S7 | Epoch 17/50 train_loss=0.092049 val_mse=1.095947 best_val=0.527968 patience=10/10
+[2026-05-04 15:49:07] FinalOurs-m0.5-S7 | Early stop at epoch 17, best=7
+[2026-05-04 15:49:07] FinalOurs-m0.5-S7 DONE | MSE=0.527968 RMSE=0.726614 MAE=0.675597 Pearson=0.886088 [best_epoch=7]
+    MSE=0.5280  Pearson=0.8861
+
+  [14/15] Holdout: S8
+[2026-05-04 15:49:14] FinalOurs-m0.5-S8 | Epoch 1/50 train_loss=0.150792 val_mse=0.127030 best_val=0.127030 patience=0/10
+[2026-05-04 15:49:20] FinalOurs-m0.5-S8 | Epoch 2/50 train_loss=0.131037 val_mse=0.157204 best_val=0.127030 patience=1/10
+[2026-05-04 15:49:26] FinalOurs-m0.5-S8 | Epoch 3/50 train_loss=0.124255 val_mse=0.114854 best_val=0.114854 patience=0/10
+[2026-05-04 15:49:33] FinalOurs-m0.5-S8 | Epoch 4/50 train_loss=0.119473 val_mse=0.113239 best_val=0.113239 patience=0/10
+[2026-05-04 15:49:39] FinalOurs-m0.5-S8 | Epoch 5/50 train_loss=0.113922 val_mse=0.111744 best_val=0.111744 patience=0/10
+[2026-05-04 15:49:46] FinalOurs-m0.5-S8 | Epoch 6/50 train_loss=0.109992 val_mse=0.120799 best_val=0.111744 patience=1/10
+[2026-05-04 15:49:52] FinalOurs-m0.5-S8 | Epoch 7/50 train_loss=0.105831 val_mse=0.114551 best_val=0.111744 patience=2/10
+[2026-05-04 15:49:58] FinalOurs-m0.5-S8 | Epoch 8/50 train_loss=0.103084 val_mse=0.099346 best_val=0.099346 patience=0/10
+[2026-05-04 15:50:05] FinalOurs-m0.5-S8 | Epoch 9/50 train_loss=0.100426 val_mse=0.089927 best_val=0.089927 patience=0/10
+[2026-05-04 15:50:11] FinalOurs-m0.5-S8 | Epoch 10/50 train_loss=0.098458 val_mse=0.107784 best_val=0.089927 patience=1/10
+[2026-05-04 15:50:18] FinalOurs-m0.5-S8 | Epoch 11/50 train_loss=0.095101 val_mse=0.096499 best_val=0.089927 patience=2/10
+[2026-05-04 15:50:24] FinalOurs-m0.5-S8 | Epoch 12/50 train_loss=0.093100 val_mse=0.095861 best_val=0.089927 patience=3/10
+[2026-05-04 15:50:30] FinalOurs-m0.5-S8 | Epoch 13/50 train_loss=0.091301 val_mse=0.092007 best_val=0.089927 patience=4/10
+[2026-05-04 15:50:37] FinalOurs-m0.5-S8 | Epoch 14/50 train_loss=0.089799 val_mse=0.095988 best_val=0.089927 patience=5/10
+[2026-05-04 15:50:43] FinalOurs-m0.5-S8 | Epoch 15/50 train_loss=0.088374 val_mse=0.124699 best_val=0.089927 patience=6/10
+[2026-05-04 15:50:50] FinalOurs-m0.5-S8 | Epoch 16/50 train_loss=0.087235 val_mse=0.093306 best_val=0.089927 patience=7/10
+[2026-05-04 15:50:56] FinalOurs-m0.5-S8 | Epoch 17/50 train_loss=0.086339 val_mse=0.088126 best_val=0.088126 patience=0/10
+[2026-05-04 15:51:02] FinalOurs-m0.5-S8 | Epoch 18/50 train_loss=0.085074 val_mse=0.098319 best_val=0.088126 patience=1/10
+[2026-05-04 15:51:09] FinalOurs-m0.5-S8 | Epoch 19/50 train_loss=0.085126 val_mse=0.081256 best_val=0.081256 patience=0/10
+[2026-05-04 15:51:15] FinalOurs-m0.5-S8 | Epoch 20/50 train_loss=0.084231 val_mse=0.084341 best_val=0.081256 patience=1/10
+[2026-05-04 15:51:22] FinalOurs-m0.5-S8 | Epoch 21/50 train_loss=0.082386 val_mse=0.078320 best_val=0.078320 patience=0/10
+[2026-05-04 15:51:28] FinalOurs-m0.5-S8 | Epoch 22/50 train_loss=0.082138 val_mse=0.087495 best_val=0.078320 patience=1/10
+[2026-05-04 15:51:34] FinalOurs-m0.5-S8 | Epoch 23/50 train_loss=0.081054 val_mse=0.079289 best_val=0.078320 patience=2/10
+[2026-05-04 15:51:41] FinalOurs-m0.5-S8 | Epoch 24/50 train_loss=0.080731 val_mse=0.070320 best_val=0.070320 patience=0/10
+[2026-05-04 15:51:47] FinalOurs-m0.5-S8 | Epoch 25/50 train_loss=0.079143 val_mse=0.083760 best_val=0.070320 patience=1/10
+[2026-05-04 15:51:53] FinalOurs-m0.5-S8 | Epoch 26/50 train_loss=0.078962 val_mse=0.082117 best_val=0.070320 patience=2/10
+[2026-05-04 15:52:00] FinalOurs-m0.5-S8 | Epoch 27/50 train_loss=0.078879 val_mse=0.083511 best_val=0.070320 patience=3/10
+[2026-05-04 15:52:07] FinalOurs-m0.5-S8 | Epoch 28/50 train_loss=0.077219 val_mse=0.078228 best_val=0.070320 patience=4/10
+[2026-05-04 15:52:13] FinalOurs-m0.5-S8 | Epoch 29/50 train_loss=0.077205 val_mse=0.086686 best_val=0.070320 patience=5/10
+[2026-05-04 15:52:19] FinalOurs-m0.5-S8 | Epoch 30/50 train_loss=0.076555 val_mse=0.064901 best_val=0.064901 patience=0/10
+[2026-05-04 15:52:26] FinalOurs-m0.5-S8 | Epoch 31/50 train_loss=0.076019 val_mse=0.073821 best_val=0.064901 patience=1/10
+[2026-05-04 15:52:32] FinalOurs-m0.5-S8 | Epoch 32/50 train_loss=0.074999 val_mse=0.082494 best_val=0.064901 patience=2/10
+[2026-05-04 15:52:39] FinalOurs-m0.5-S8 | Epoch 33/50 train_loss=0.074443 val_mse=0.063658 best_val=0.063658 patience=0/10
+[2026-05-04 15:52:45] FinalOurs-m0.5-S8 | Epoch 34/50 train_loss=0.074797 val_mse=0.091123 best_val=0.063658 patience=1/10
+[2026-05-04 15:52:52] FinalOurs-m0.5-S8 | Epoch 35/50 train_loss=0.073367 val_mse=0.087111 best_val=0.063658 patience=2/10
+[2026-05-04 15:52:58] FinalOurs-m0.5-S8 | Epoch 36/50 train_loss=0.074052 val_mse=0.068106 best_val=0.063658 patience=3/10
+[2026-05-04 15:53:04] FinalOurs-m0.5-S8 | Epoch 37/50 train_loss=0.073601 val_mse=0.057621 best_val=0.057621 patience=0/10
+[2026-05-04 15:53:11] FinalOurs-m0.5-S8 | Epoch 38/50 train_loss=0.071169 val_mse=0.054355 best_val=0.054355 patience=0/10
+[2026-05-04 15:53:17] FinalOurs-m0.5-S8 | Epoch 39/50 train_loss=0.071625 val_mse=0.072396 best_val=0.054355 patience=1/10
+[2026-05-04 15:53:23] FinalOurs-m0.5-S8 | Epoch 40/50 train_loss=0.071648 val_mse=0.089168 best_val=0.054355 patience=2/10
+[2026-05-04 15:53:29] FinalOurs-m0.5-S8 | Epoch 41/50 train_loss=0.072345 val_mse=0.069729 best_val=0.054355 patience=3/10
+[2026-05-04 15:53:36] FinalOurs-m0.5-S8 | Epoch 42/50 train_loss=0.070630 val_mse=0.100678 best_val=0.054355 patience=4/10
+[2026-05-04 15:53:42] FinalOurs-m0.5-S8 | Epoch 43/50 train_loss=0.070796 val_mse=0.069683 best_val=0.054355 patience=5/10
+[2026-05-04 15:53:48] FinalOurs-m0.5-S8 | Epoch 44/50 train_loss=0.069868 val_mse=0.062305 best_val=0.054355 patience=6/10
+[2026-05-04 15:53:54] FinalOurs-m0.5-S8 | Epoch 45/50 train_loss=0.070710 val_mse=0.069127 best_val=0.054355 patience=7/10
+[2026-05-04 15:54:00] FinalOurs-m0.5-S8 | Epoch 46/50 train_loss=0.070427 val_mse=0.097811 best_val=0.054355 patience=8/10
+[2026-05-04 15:54:07] FinalOurs-m0.5-S8 | Epoch 47/50 train_loss=0.069563 val_mse=0.068999 best_val=0.054355 patience=9/10
+[2026-05-04 15:54:13] FinalOurs-m0.5-S8 | Epoch 48/50 train_loss=0.068991 val_mse=0.065601 best_val=0.054355 patience=10/10
+[2026-05-04 15:54:13] FinalOurs-m0.5-S8 | Early stop at epoch 48, best=38
+[2026-05-04 15:54:13] FinalOurs-m0.5-S8 DONE | MSE=0.054355 RMSE=0.233142 MAE=0.187370 Pearson=0.862442 [best_epoch=38]
+    MSE=0.0544  Pearson=0.8624
+
+  [15/15] Holdout: S9
+[2026-05-04 15:54:19] FinalOurs-m0.5-S9 | Epoch 1/50 train_loss=0.154719 val_mse=0.179180 best_val=0.179180 patience=0/10
+[2026-05-04 15:54:26] FinalOurs-m0.5-S9 | Epoch 2/50 train_loss=0.134123 val_mse=0.212773 best_val=0.179180 patience=1/10
+[2026-05-04 15:54:32] FinalOurs-m0.5-S9 | Epoch 3/50 train_loss=0.126879 val_mse=0.187746 best_val=0.179180 patience=2/10
+[2026-05-04 15:54:38] FinalOurs-m0.5-S9 | Epoch 4/50 train_loss=0.122253 val_mse=0.197743 best_val=0.179180 patience=3/10
+[2026-05-04 15:54:44] FinalOurs-m0.5-S9 | Epoch 5/50 train_loss=0.117722 val_mse=0.221453 best_val=0.179180 patience=4/10
+[2026-05-04 15:54:51] FinalOurs-m0.5-S9 | Epoch 6/50 train_loss=0.116640 val_mse=0.204362 best_val=0.179180 patience=5/10
+[2026-05-04 15:54:57] FinalOurs-m0.5-S9 | Epoch 7/50 train_loss=0.113270 val_mse=0.221688 best_val=0.179180 patience=6/10
+[2026-05-04 15:55:03] FinalOurs-m0.5-S9 | Epoch 8/50 train_loss=0.111272 val_mse=0.205494 best_val=0.179180 patience=7/10
+[2026-05-04 15:55:10] FinalOurs-m0.5-S9 | Epoch 9/50 train_loss=0.109712 val_mse=0.237671 best_val=0.179180 patience=8/10
+[2026-05-04 15:55:16] FinalOurs-m0.5-S9 | Epoch 10/50 train_loss=0.106515 val_mse=0.195775 best_val=0.179180 patience=9/10
+[2026-05-04 15:55:22] FinalOurs-m0.5-S9 | Epoch 11/50 train_loss=0.106356 val_mse=0.248186 best_val=0.179180 patience=10/10
+[2026-05-04 15:55:22] FinalOurs-m0.5-S9 | Early stop at epoch 11, best=1
+[2026-05-04 15:55:23] FinalOurs-m0.5-S9 DONE | MSE=0.179180 RMSE=0.423296 MAE=0.384766 Pearson=0.407246 [best_epoch=1]
+/home/lora/repos/MulitiModal/src/data_loader.py:282: VisibleDeprecationWarning: dtype(): align should be passed as Python or NumPy boolean but got `align=0`. Did you mean to pass a tuple to create a subarray type? (Deprecated NumPy 2.4)
+  data = pickle.load(f, encoding="latin1")
+    MSE=0.1792  Pearson=0.4072
+  WESAD_LABEL_MAP patched in-place: {1: 1.0, 2: 0.0, 3: 0.6}
+  WESAD_LABEL_MAP restored to default
+
+============================================================
+Final Ours LOSO: meditation = 0.6
+============================================================
+  WESAD_LABEL_MAP patched in-place: {1: 1.0, 2: 0.0, 3: 0.6}
+Subject S10: Age=28.0, Gender=1, BMI=24.0, HR=64.2
+Subject S11: Age=26.0, Gender=0, BMI=18.5, HR=63.9
+Subject S13: Age=28.0, Gender=1, BMI=25.0, HR=65.6
+Subject S14: Age=27.0, Gender=1, BMI=24.7, HR=64.9
+Subject S15: Age=28.0, Gender=1, BMI=24.0, HR=66.7
+Subject S16: Age=24.0, Gender=1, BMI=20.4, HR=63.5
+Subject S17: Age=29.0, Gender=0, BMI=20.2, HR=61.3
+Subject S2: Age=27.0, Gender=1, BMI=26.1, HR=64.6
+Subject S3: Age=27.0, Gender=1, BMI=23.1, HR=58.7
+Subject S4: Age=25.0, Gender=1, BMI=29.4, HR=60.0
+Subject S5: Age=35.0, Gender=1, BMI=22.4, HR=62.6
+Subject S6: Age=27.0, Gender=1, BMI=22.8, HR=62.9
+Subject S7: Age=28.0, Gender=1, BMI=21.9, HR=62.3
+Subject S8: Age=27.0, Gender=0, BMI=21.6, HR=64.3
+Subject S9: Age=26.0, Gender=1, BMI=22.9, HR=68.1
+  被试: ['S10', 'S11', 'S13', 'S14', 'S15', 'S16', 'S17', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'] (15 人)
+[2026-05-04 15:56:01] >>> TCM checkpoint resolved to: /home/lora/repos/MulitiModal/tcm_ft_transformer/checkpoints/best_model.pth
+[2026-05-04 15:56:01] >>> TCM scaler resolved to: /home/lora/repos/MulitiModal/tcm_ft_transformer/scaler_params.npz
+/home/lora/repos/MulitiModal/tcm_ft_transformer/ft_transformer.py:110: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer_encoder = nn.TransformerEncoder(
+
+  [1/15] Holdout: S10
+[2026-05-04 15:56:09] FinalOurs-m0.6-S10 | Epoch 1/50 train_loss=0.146507 val_mse=0.281709 best_val=0.281709 patience=0/10
+[2026-05-04 15:56:15] FinalOurs-m0.6-S10 | Epoch 2/50 train_loss=0.126392 val_mse=0.255285 best_val=0.255285 patience=0/10
+[2026-05-04 15:56:22] FinalOurs-m0.6-S10 | Epoch 3/50 train_loss=0.119507 val_mse=0.312280 best_val=0.255285 patience=1/10
+[2026-05-04 15:56:28] FinalOurs-m0.6-S10 | Epoch 4/50 train_loss=0.116841 val_mse=0.303973 best_val=0.255285 patience=2/10
+[2026-05-04 15:56:34] FinalOurs-m0.6-S10 | Epoch 5/50 train_loss=0.113331 val_mse=0.353269 best_val=0.255285 patience=3/10
+[2026-05-04 15:56:41] FinalOurs-m0.6-S10 | Epoch 6/50 train_loss=0.110385 val_mse=0.308419 best_val=0.255285 patience=4/10
+[2026-05-04 15:56:47] FinalOurs-m0.6-S10 | Epoch 7/50 train_loss=0.107332 val_mse=0.302362 best_val=0.255285 patience=5/10
+[2026-05-04 15:56:54] FinalOurs-m0.6-S10 | Epoch 8/50 train_loss=0.106457 val_mse=0.262148 best_val=0.255285 patience=6/10
+[2026-05-04 15:57:00] FinalOurs-m0.6-S10 | Epoch 9/50 train_loss=0.103462 val_mse=0.308983 best_val=0.255285 patience=7/10
+[2026-05-04 15:57:06] FinalOurs-m0.6-S10 | Epoch 10/50 train_loss=0.102927 val_mse=0.302319 best_val=0.255285 patience=8/10
+[2026-05-04 15:57:13] FinalOurs-m0.6-S10 | Epoch 11/50 train_loss=0.100175 val_mse=0.286235 best_val=0.255285 patience=9/10
+[2026-05-04 15:57:19] FinalOurs-m0.6-S10 | Epoch 12/50 train_loss=0.100247 val_mse=0.313246 best_val=0.255285 patience=10/10
+[2026-05-04 15:57:19] FinalOurs-m0.6-S10 | Early stop at epoch 12, best=2
+[2026-05-04 15:57:20] FinalOurs-m0.6-S10 DONE | MSE=0.255285 RMSE=0.505258 MAE=0.359951 Pearson=0.823051 [best_epoch=2]
+    MSE=0.2553  Pearson=0.8231
+
+  [2/15] Holdout: S11
+[2026-05-04 15:57:26] FinalOurs-m0.6-S11 | Epoch 1/50 train_loss=0.155158 val_mse=0.092019 best_val=0.092019 patience=0/10
+[2026-05-04 15:57:32] FinalOurs-m0.6-S11 | Epoch 2/50 train_loss=0.135728 val_mse=0.084947 best_val=0.084947 patience=0/10
+[2026-05-04 15:57:39] FinalOurs-m0.6-S11 | Epoch 3/50 train_loss=0.130720 val_mse=0.085904 best_val=0.084947 patience=1/10
+[2026-05-04 15:57:45] FinalOurs-m0.6-S11 | Epoch 4/50 train_loss=0.125324 val_mse=0.087699 best_val=0.084947 patience=2/10
+[2026-05-04 15:57:52] FinalOurs-m0.6-S11 | Epoch 5/50 train_loss=0.121874 val_mse=0.093155 best_val=0.084947 patience=3/10
+[2026-05-04 15:57:58] FinalOurs-m0.6-S11 | Epoch 6/50 train_loss=0.117931 val_mse=0.087416 best_val=0.084947 patience=4/10
+[2026-05-04 15:58:04] FinalOurs-m0.6-S11 | Epoch 7/50 train_loss=0.114161 val_mse=0.086869 best_val=0.084947 patience=5/10
+[2026-05-04 15:58:11] FinalOurs-m0.6-S11 | Epoch 8/50 train_loss=0.111434 val_mse=0.083881 best_val=0.083881 patience=0/10
+[2026-05-04 15:58:17] FinalOurs-m0.6-S11 | Epoch 9/50 train_loss=0.109320 val_mse=0.080940 best_val=0.080940 patience=0/10
+[2026-05-04 15:58:24] FinalOurs-m0.6-S11 | Epoch 10/50 train_loss=0.106957 val_mse=0.069844 best_val=0.069844 patience=0/10
+[2026-05-04 15:58:30] FinalOurs-m0.6-S11 | Epoch 11/50 train_loss=0.104031 val_mse=0.073777 best_val=0.069844 patience=1/10
+[2026-05-04 15:58:36] FinalOurs-m0.6-S11 | Epoch 12/50 train_loss=0.103370 val_mse=0.076161 best_val=0.069844 patience=2/10
+[2026-05-04 15:58:43] FinalOurs-m0.6-S11 | Epoch 13/50 train_loss=0.101837 val_mse=0.078751 best_val=0.069844 patience=3/10
+[2026-05-04 15:58:49] FinalOurs-m0.6-S11 | Epoch 14/50 train_loss=0.100153 val_mse=0.076322 best_val=0.069844 patience=4/10
+[2026-05-04 15:58:55] FinalOurs-m0.6-S11 | Epoch 15/50 train_loss=0.098282 val_mse=0.071679 best_val=0.069844 patience=5/10
+[2026-05-04 15:59:02] FinalOurs-m0.6-S11 | Epoch 16/50 train_loss=0.096710 val_mse=0.067732 best_val=0.067732 patience=0/10
+[2026-05-04 15:59:08] FinalOurs-m0.6-S11 | Epoch 17/50 train_loss=0.095690 val_mse=0.052419 best_val=0.052419 patience=0/10
+[2026-05-04 15:59:15] FinalOurs-m0.6-S11 | Epoch 18/50 train_loss=0.095059 val_mse=0.063429 best_val=0.052419 patience=1/10
+[2026-05-04 15:59:21] FinalOurs-m0.6-S11 | Epoch 19/50 train_loss=0.092710 val_mse=0.082147 best_val=0.052419 patience=2/10
+[2026-05-04 15:59:27] FinalOurs-m0.6-S11 | Epoch 20/50 train_loss=0.093813 val_mse=0.060922 best_val=0.052419 patience=3/10
+[2026-05-04 15:59:34] FinalOurs-m0.6-S11 | Epoch 21/50 train_loss=0.092326 val_mse=0.057143 best_val=0.052419 patience=4/10
+[2026-05-04 15:59:40] FinalOurs-m0.6-S11 | Epoch 22/50 train_loss=0.091146 val_mse=0.061193 best_val=0.052419 patience=5/10
+[2026-05-04 15:59:46] FinalOurs-m0.6-S11 | Epoch 23/50 train_loss=0.088356 val_mse=0.052935 best_val=0.052419 patience=6/10
+[2026-05-04 15:59:52] FinalOurs-m0.6-S11 | Epoch 24/50 train_loss=0.090646 val_mse=0.043962 best_val=0.043962 patience=0/10
+[2026-05-04 15:59:59] FinalOurs-m0.6-S11 | Epoch 25/50 train_loss=0.090799 val_mse=0.057147 best_val=0.043962 patience=1/10
+[2026-05-04 16:00:05] FinalOurs-m0.6-S11 | Epoch 26/50 train_loss=0.088513 val_mse=0.066123 best_val=0.043962 patience=2/10
+[2026-05-04 16:00:11] FinalOurs-m0.6-S11 | Epoch 27/50 train_loss=0.088698 val_mse=0.069716 best_val=0.043962 patience=3/10
+[2026-05-04 16:00:17] FinalOurs-m0.6-S11 | Epoch 28/50 train_loss=0.087210 val_mse=0.069466 best_val=0.043962 patience=4/10
+[2026-05-04 16:00:23] FinalOurs-m0.6-S11 | Epoch 29/50 train_loss=0.087008 val_mse=0.045765 best_val=0.043962 patience=5/10
+[2026-05-04 16:00:30] FinalOurs-m0.6-S11 | Epoch 30/50 train_loss=0.086851 val_mse=0.050452 best_val=0.043962 patience=6/10
+[2026-05-04 16:00:36] FinalOurs-m0.6-S11 | Epoch 31/50 train_loss=0.086818 val_mse=0.068553 best_val=0.043962 patience=7/10
+[2026-05-04 16:00:42] FinalOurs-m0.6-S11 | Epoch 32/50 train_loss=0.085764 val_mse=0.062830 best_val=0.043962 patience=8/10
+[2026-05-04 16:00:48] FinalOurs-m0.6-S11 | Epoch 33/50 train_loss=0.084464 val_mse=0.037778 best_val=0.037778 patience=0/10
+[2026-05-04 16:00:54] FinalOurs-m0.6-S11 | Epoch 34/50 train_loss=0.084940 val_mse=0.053648 best_val=0.037778 patience=1/10
+[2026-05-04 16:01:01] FinalOurs-m0.6-S11 | Epoch 35/50 train_loss=0.084810 val_mse=0.050162 best_val=0.037778 patience=2/10
+[2026-05-04 16:01:07] FinalOurs-m0.6-S11 | Epoch 36/50 train_loss=0.084341 val_mse=0.065176 best_val=0.037778 patience=3/10
+[2026-05-04 16:01:13] FinalOurs-m0.6-S11 | Epoch 37/50 train_loss=0.084136 val_mse=0.046910 best_val=0.037778 patience=4/10
+[2026-05-04 16:01:19] FinalOurs-m0.6-S11 | Epoch 38/50 train_loss=0.082550 val_mse=0.047181 best_val=0.037778 patience=5/10
+[2026-05-04 16:01:25] FinalOurs-m0.6-S11 | Epoch 39/50 train_loss=0.082982 val_mse=0.082313 best_val=0.037778 patience=6/10
+[2026-05-04 16:01:31] FinalOurs-m0.6-S11 | Epoch 40/50 train_loss=0.083541 val_mse=0.066442 best_val=0.037778 patience=7/10
+[2026-05-04 16:01:38] FinalOurs-m0.6-S11 | Epoch 41/50 train_loss=0.082455 val_mse=0.062561 best_val=0.037778 patience=8/10
+[2026-05-04 16:01:44] FinalOurs-m0.6-S11 | Epoch 42/50 train_loss=0.081453 val_mse=0.047343 best_val=0.037778 patience=9/10
+[2026-05-04 16:01:50] FinalOurs-m0.6-S11 | Epoch 43/50 train_loss=0.080846 val_mse=0.056585 best_val=0.037778 patience=10/10
+[2026-05-04 16:01:50] FinalOurs-m0.6-S11 | Early stop at epoch 43, best=33
+[2026-05-04 16:01:50] FinalOurs-m0.6-S11 DONE | MSE=0.037778 RMSE=0.194366 MAE=0.174824 Pearson=0.931121 [best_epoch=33]
+    MSE=0.0378  Pearson=0.9311
+
+  [3/15] Holdout: S13
+[2026-05-04 16:01:57] FinalOurs-m0.6-S13 | Epoch 1/50 train_loss=0.149346 val_mse=0.187144 best_val=0.187144 patience=0/10
+[2026-05-04 16:02:03] FinalOurs-m0.6-S13 | Epoch 2/50 train_loss=0.126435 val_mse=0.197291 best_val=0.187144 patience=1/10
+[2026-05-04 16:02:09] FinalOurs-m0.6-S13 | Epoch 3/50 train_loss=0.120218 val_mse=0.193742 best_val=0.187144 patience=2/10
+[2026-05-04 16:02:15] FinalOurs-m0.6-S13 | Epoch 4/50 train_loss=0.115581 val_mse=0.150910 best_val=0.150910 patience=0/10
+[2026-05-04 16:02:22] FinalOurs-m0.6-S13 | Epoch 5/50 train_loss=0.112906 val_mse=0.179282 best_val=0.150910 patience=1/10
+[2026-05-04 16:02:28] FinalOurs-m0.6-S13 | Epoch 6/50 train_loss=0.110329 val_mse=0.171962 best_val=0.150910 patience=2/10
+[2026-05-04 16:02:34] FinalOurs-m0.6-S13 | Epoch 7/50 train_loss=0.108066 val_mse=0.187312 best_val=0.150910 patience=3/10
+[2026-05-04 16:02:40] FinalOurs-m0.6-S13 | Epoch 8/50 train_loss=0.105971 val_mse=0.186836 best_val=0.150910 patience=4/10
+[2026-05-04 16:02:46] FinalOurs-m0.6-S13 | Epoch 9/50 train_loss=0.104342 val_mse=0.195825 best_val=0.150910 patience=5/10
+[2026-05-04 16:02:52] FinalOurs-m0.6-S13 | Epoch 10/50 train_loss=0.102374 val_mse=0.200260 best_val=0.150910 patience=6/10
+[2026-05-04 16:02:59] FinalOurs-m0.6-S13 | Epoch 11/50 train_loss=0.099193 val_mse=0.173909 best_val=0.150910 patience=7/10
+[2026-05-04 16:03:05] FinalOurs-m0.6-S13 | Epoch 12/50 train_loss=0.098866 val_mse=0.196807 best_val=0.150910 patience=8/10
+[2026-05-04 16:03:11] FinalOurs-m0.6-S13 | Epoch 13/50 train_loss=0.097111 val_mse=0.196891 best_val=0.150910 patience=9/10
+[2026-05-04 16:03:17] FinalOurs-m0.6-S13 | Epoch 14/50 train_loss=0.096056 val_mse=0.223915 best_val=0.150910 patience=10/10
+[2026-05-04 16:03:17] FinalOurs-m0.6-S13 | Early stop at epoch 14, best=4
+[2026-05-04 16:03:18] FinalOurs-m0.6-S13 DONE | MSE=0.150910 RMSE=0.388472 MAE=0.326131 Pearson=0.528111 [best_epoch=4]
+    MSE=0.1509  Pearson=0.5281
+
+  [4/15] Holdout: S14
+[2026-05-04 16:03:24] FinalOurs-m0.6-S14 | Epoch 1/50 train_loss=0.155394 val_mse=0.159295 best_val=0.159295 patience=0/10
+[2026-05-04 16:03:30] FinalOurs-m0.6-S14 | Epoch 2/50 train_loss=0.133028 val_mse=0.159472 best_val=0.159295 patience=1/10
+[2026-05-04 16:03:36] FinalOurs-m0.6-S14 | Epoch 3/50 train_loss=0.124618 val_mse=0.164755 best_val=0.159295 patience=2/10
+[2026-05-04 16:03:42] FinalOurs-m0.6-S14 | Epoch 4/50 train_loss=0.120052 val_mse=0.117801 best_val=0.117801 patience=0/10
+[2026-05-04 16:03:48] FinalOurs-m0.6-S14 | Epoch 5/50 train_loss=0.114015 val_mse=0.238006 best_val=0.117801 patience=1/10
+[2026-05-04 16:03:55] FinalOurs-m0.6-S14 | Epoch 6/50 train_loss=0.109822 val_mse=0.149701 best_val=0.117801 patience=2/10
+[2026-05-04 16:04:01] FinalOurs-m0.6-S14 | Epoch 7/50 train_loss=0.107079 val_mse=0.333224 best_val=0.117801 patience=3/10
+[2026-05-04 16:04:07] FinalOurs-m0.6-S14 | Epoch 8/50 train_loss=0.103468 val_mse=0.201864 best_val=0.117801 patience=4/10
+[2026-05-04 16:04:13] FinalOurs-m0.6-S14 | Epoch 9/50 train_loss=0.101597 val_mse=0.308314 best_val=0.117801 patience=5/10
+[2026-05-04 16:04:19] FinalOurs-m0.6-S14 | Epoch 10/50 train_loss=0.100336 val_mse=0.250282 best_val=0.117801 patience=6/10
+[2026-05-04 16:04:26] FinalOurs-m0.6-S14 | Epoch 11/50 train_loss=0.096501 val_mse=0.277056 best_val=0.117801 patience=7/10
+[2026-05-04 16:04:32] FinalOurs-m0.6-S14 | Epoch 12/50 train_loss=0.095581 val_mse=0.182967 best_val=0.117801 patience=8/10
+[2026-05-04 16:04:38] FinalOurs-m0.6-S14 | Epoch 13/50 train_loss=0.094046 val_mse=0.286670 best_val=0.117801 patience=9/10
+[2026-05-04 16:04:44] FinalOurs-m0.6-S14 | Epoch 14/50 train_loss=0.092043 val_mse=0.245306 best_val=0.117801 patience=10/10
+[2026-05-04 16:04:44] FinalOurs-m0.6-S14 | Early stop at epoch 14, best=4
+[2026-05-04 16:04:44] FinalOurs-m0.6-S14 DONE | MSE=0.117801 RMSE=0.343221 MAE=0.319909 Pearson=0.918754 [best_epoch=4]
+    MSE=0.1178  Pearson=0.9188
+
+  [5/15] Holdout: S15
+[2026-05-04 16:04:51] FinalOurs-m0.6-S15 | Epoch 1/50 train_loss=0.156450 val_mse=0.102446 best_val=0.102446 patience=0/10
+[2026-05-04 16:04:57] FinalOurs-m0.6-S15 | Epoch 2/50 train_loss=0.130804 val_mse=0.159345 best_val=0.102446 patience=1/10
+[2026-05-04 16:05:03] FinalOurs-m0.6-S15 | Epoch 3/50 train_loss=0.124124 val_mse=0.153048 best_val=0.102446 patience=2/10
+[2026-05-04 16:05:09] FinalOurs-m0.6-S15 | Epoch 4/50 train_loss=0.119273 val_mse=0.206072 best_val=0.102446 patience=3/10
+[2026-05-04 16:05:15] FinalOurs-m0.6-S15 | Epoch 5/50 train_loss=0.113909 val_mse=0.104605 best_val=0.102446 patience=4/10
+[2026-05-04 16:05:21] FinalOurs-m0.6-S15 | Epoch 6/50 train_loss=0.109370 val_mse=0.118133 best_val=0.102446 patience=5/10
+[2026-05-04 16:05:28] FinalOurs-m0.6-S15 | Epoch 7/50 train_loss=0.106874 val_mse=0.111431 best_val=0.102446 patience=6/10
+[2026-05-04 16:05:34] FinalOurs-m0.6-S15 | Epoch 8/50 train_loss=0.102344 val_mse=0.102816 best_val=0.102446 patience=7/10
+[2026-05-04 16:05:40] FinalOurs-m0.6-S15 | Epoch 9/50 train_loss=0.099687 val_mse=0.078959 best_val=0.078959 patience=0/10
+[2026-05-04 16:05:46] FinalOurs-m0.6-S15 | Epoch 10/50 train_loss=0.096957 val_mse=0.110365 best_val=0.078959 patience=1/10
+[2026-05-04 16:05:52] FinalOurs-m0.6-S15 | Epoch 11/50 train_loss=0.094042 val_mse=0.110773 best_val=0.078959 patience=2/10
+[2026-05-04 16:05:59] FinalOurs-m0.6-S15 | Epoch 12/50 train_loss=0.092951 val_mse=0.104429 best_val=0.078959 patience=3/10
+[2026-05-04 16:06:05] FinalOurs-m0.6-S15 | Epoch 13/50 train_loss=0.091797 val_mse=0.118618 best_val=0.078959 patience=4/10
+[2026-05-04 16:06:11] FinalOurs-m0.6-S15 | Epoch 14/50 train_loss=0.091101 val_mse=0.124245 best_val=0.078959 patience=5/10
+[2026-05-04 16:06:17] FinalOurs-m0.6-S15 | Epoch 15/50 train_loss=0.088434 val_mse=0.099282 best_val=0.078959 patience=6/10
+[2026-05-04 16:06:24] FinalOurs-m0.6-S15 | Epoch 16/50 train_loss=0.086525 val_mse=0.120254 best_val=0.078959 patience=7/10
+[2026-05-04 16:06:30] FinalOurs-m0.6-S15 | Epoch 17/50 train_loss=0.086048 val_mse=0.083780 best_val=0.078959 patience=8/10
+[2026-05-04 16:06:36] FinalOurs-m0.6-S15 | Epoch 18/50 train_loss=0.084884 val_mse=0.129774 best_val=0.078959 patience=9/10
+[2026-05-04 16:06:42] FinalOurs-m0.6-S15 | Epoch 19/50 train_loss=0.083536 val_mse=0.153602 best_val=0.078959 patience=10/10
+[2026-05-04 16:06:42] FinalOurs-m0.6-S15 | Early stop at epoch 19, best=9
+[2026-05-04 16:06:42] FinalOurs-m0.6-S15 DONE | MSE=0.078959 RMSE=0.280997 MAE=0.250738 Pearson=0.921425 [best_epoch=9]
+    MSE=0.0790  Pearson=0.9214
+
+  [6/15] Holdout: S16
+[2026-05-04 16:06:49] FinalOurs-m0.6-S16 | Epoch 1/50 train_loss=0.162724 val_mse=0.018321 best_val=0.018321 patience=0/10
+[2026-05-04 16:06:55] FinalOurs-m0.6-S16 | Epoch 2/50 train_loss=0.135878 val_mse=0.034351 best_val=0.018321 patience=1/10
+[2026-05-04 16:07:01] FinalOurs-m0.6-S16 | Epoch 3/50 train_loss=0.128285 val_mse=0.047471 best_val=0.018321 patience=2/10
+[2026-05-04 16:07:07] FinalOurs-m0.6-S16 | Epoch 4/50 train_loss=0.121513 val_mse=0.069899 best_val=0.018321 patience=3/10
+[2026-05-04 16:07:13] FinalOurs-m0.6-S16 | Epoch 5/50 train_loss=0.118772 val_mse=0.048191 best_val=0.018321 patience=4/10
+[2026-05-04 16:07:20] FinalOurs-m0.6-S16 | Epoch 6/50 train_loss=0.113231 val_mse=0.084037 best_val=0.018321 patience=5/10
+[2026-05-04 16:07:26] FinalOurs-m0.6-S16 | Epoch 7/50 train_loss=0.110574 val_mse=0.074911 best_val=0.018321 patience=6/10
+[2026-05-04 16:07:32] FinalOurs-m0.6-S16 | Epoch 8/50 train_loss=0.106734 val_mse=0.087550 best_val=0.018321 patience=7/10
+[2026-05-04 16:07:38] FinalOurs-m0.6-S16 | Epoch 9/50 train_loss=0.103269 val_mse=0.095441 best_val=0.018321 patience=8/10
+[2026-05-04 16:07:44] FinalOurs-m0.6-S16 | Epoch 10/50 train_loss=0.102658 val_mse=0.058130 best_val=0.018321 patience=9/10
+[2026-05-04 16:07:51] FinalOurs-m0.6-S16 | Epoch 11/50 train_loss=0.101037 val_mse=0.035340 best_val=0.018321 patience=10/10
+[2026-05-04 16:07:51] FinalOurs-m0.6-S16 | Early stop at epoch 11, best=1
+[2026-05-04 16:07:51] FinalOurs-m0.6-S16 DONE | MSE=0.018321 RMSE=0.135355 MAE=0.107449 Pearson=0.951994 [best_epoch=1]
+    MSE=0.0183  Pearson=0.9520
+
+  [7/15] Holdout: S17
+[2026-05-04 16:07:57] FinalOurs-m0.6-S17 | Epoch 1/50 train_loss=0.156729 val_mse=0.086079 best_val=0.086079 patience=0/10
+[2026-05-04 16:08:03] FinalOurs-m0.6-S17 | Epoch 2/50 train_loss=0.133706 val_mse=0.061390 best_val=0.061390 patience=0/10
+[2026-05-04 16:08:10] FinalOurs-m0.6-S17 | Epoch 3/50 train_loss=0.126037 val_mse=0.070298 best_val=0.061390 patience=1/10
+[2026-05-04 16:08:16] FinalOurs-m0.6-S17 | Epoch 4/50 train_loss=0.120690 val_mse=0.059079 best_val=0.059079 patience=0/10
+[2026-05-04 16:08:22] FinalOurs-m0.6-S17 | Epoch 5/50 train_loss=0.116334 val_mse=0.066157 best_val=0.059079 patience=1/10
+[2026-05-04 16:08:28] FinalOurs-m0.6-S17 | Epoch 6/50 train_loss=0.112428 val_mse=0.053360 best_val=0.053360 patience=0/10
+[2026-05-04 16:08:34] FinalOurs-m0.6-S17 | Epoch 7/50 train_loss=0.108108 val_mse=0.067263 best_val=0.053360 patience=1/10
+[2026-05-04 16:08:40] FinalOurs-m0.6-S17 | Epoch 8/50 train_loss=0.103861 val_mse=0.042511 best_val=0.042511 patience=0/10
+[2026-05-04 16:08:47] FinalOurs-m0.6-S17 | Epoch 9/50 train_loss=0.101570 val_mse=0.056247 best_val=0.042511 patience=1/10
+[2026-05-04 16:08:53] FinalOurs-m0.6-S17 | Epoch 10/50 train_loss=0.100382 val_mse=0.061357 best_val=0.042511 patience=2/10
+[2026-05-04 16:08:59] FinalOurs-m0.6-S17 | Epoch 11/50 train_loss=0.098282 val_mse=0.076881 best_val=0.042511 patience=3/10
+[2026-05-04 16:09:05] FinalOurs-m0.6-S17 | Epoch 12/50 train_loss=0.094487 val_mse=0.104144 best_val=0.042511 patience=4/10
+[2026-05-04 16:09:12] FinalOurs-m0.6-S17 | Epoch 13/50 train_loss=0.092873 val_mse=0.040337 best_val=0.040337 patience=0/10
+[2026-05-04 16:09:18] FinalOurs-m0.6-S17 | Epoch 14/50 train_loss=0.092479 val_mse=0.041024 best_val=0.040337 patience=1/10
+[2026-05-04 16:09:24] FinalOurs-m0.6-S17 | Epoch 15/50 train_loss=0.090961 val_mse=0.054018 best_val=0.040337 patience=2/10
+[2026-05-04 16:09:30] FinalOurs-m0.6-S17 | Epoch 16/50 train_loss=0.088561 val_mse=0.040479 best_val=0.040337 patience=3/10
+[2026-05-04 16:09:37] FinalOurs-m0.6-S17 | Epoch 17/50 train_loss=0.087681 val_mse=0.108614 best_val=0.040337 patience=4/10
+[2026-05-04 16:09:43] FinalOurs-m0.6-S17 | Epoch 18/50 train_loss=0.087267 val_mse=0.062358 best_val=0.040337 patience=5/10
+[2026-05-04 16:09:49] FinalOurs-m0.6-S17 | Epoch 19/50 train_loss=0.085426 val_mse=0.048717 best_val=0.040337 patience=6/10
+[2026-05-04 16:09:56] FinalOurs-m0.6-S17 | Epoch 20/50 train_loss=0.083399 val_mse=0.059834 best_val=0.040337 patience=7/10
+[2026-05-04 16:10:02] FinalOurs-m0.6-S17 | Epoch 21/50 train_loss=0.084736 val_mse=0.061192 best_val=0.040337 patience=8/10
+[2026-05-04 16:10:08] FinalOurs-m0.6-S17 | Epoch 22/50 train_loss=0.083370 val_mse=0.074232 best_val=0.040337 patience=9/10
+[2026-05-04 16:10:14] FinalOurs-m0.6-S17 | Epoch 23/50 train_loss=0.082841 val_mse=0.043664 best_val=0.040337 patience=10/10
+[2026-05-04 16:10:14] FinalOurs-m0.6-S17 | Early stop at epoch 23, best=13
+[2026-05-04 16:10:15] FinalOurs-m0.6-S17 DONE | MSE=0.040337 RMSE=0.200840 MAE=0.129777 Pearson=0.919662 [best_epoch=13]
+    MSE=0.0403  Pearson=0.9197
+
+  [8/15] Holdout: S2
+[2026-05-04 16:10:21] FinalOurs-m0.6-S2 | Epoch 1/50 train_loss=0.146066 val_mse=0.282582 best_val=0.282582 patience=0/10
+[2026-05-04 16:10:27] FinalOurs-m0.6-S2 | Epoch 2/50 train_loss=0.123207 val_mse=0.333050 best_val=0.282582 patience=1/10
+[2026-05-04 16:10:34] FinalOurs-m0.6-S2 | Epoch 3/50 train_loss=0.115771 val_mse=0.303995 best_val=0.282582 patience=2/10
+[2026-05-04 16:10:40] FinalOurs-m0.6-S2 | Epoch 4/50 train_loss=0.110106 val_mse=0.351493 best_val=0.282582 patience=3/10
+[2026-05-04 16:10:46] FinalOurs-m0.6-S2 | Epoch 5/50 train_loss=0.103583 val_mse=0.338635 best_val=0.282582 patience=4/10
+[2026-05-04 16:10:52] FinalOurs-m0.6-S2 | Epoch 6/50 train_loss=0.098526 val_mse=0.342861 best_val=0.282582 patience=5/10
+[2026-05-04 16:10:59] FinalOurs-m0.6-S2 | Epoch 7/50 train_loss=0.095061 val_mse=0.334907 best_val=0.282582 patience=6/10
+[2026-05-04 16:11:05] FinalOurs-m0.6-S2 | Epoch 8/50 train_loss=0.093368 val_mse=0.329416 best_val=0.282582 patience=7/10
+[2026-05-04 16:11:11] FinalOurs-m0.6-S2 | Epoch 9/50 train_loss=0.090663 val_mse=0.377232 best_val=0.282582 patience=8/10
+[2026-05-04 16:11:17] FinalOurs-m0.6-S2 | Epoch 10/50 train_loss=0.091127 val_mse=0.413992 best_val=0.282582 patience=9/10
+[2026-05-04 16:11:24] FinalOurs-m0.6-S2 | Epoch 11/50 train_loss=0.087085 val_mse=0.336502 best_val=0.282582 patience=10/10
+[2026-05-04 16:11:24] FinalOurs-m0.6-S2 | Early stop at epoch 11, best=1
+[2026-05-04 16:11:24] FinalOurs-m0.6-S2 DONE | MSE=0.282582 RMSE=0.531584 MAE=0.430627 Pearson=-0.114521 [best_epoch=1]
+    MSE=0.2826  Pearson=-0.1145
+
+  [9/15] Holdout: S3
+[2026-05-04 16:11:30] FinalOurs-m0.6-S3 | Epoch 1/50 train_loss=0.155575 val_mse=0.156450 best_val=0.156450 patience=0/10
+[2026-05-04 16:11:36] FinalOurs-m0.6-S3 | Epoch 2/50 train_loss=0.129813 val_mse=0.181158 best_val=0.156450 patience=1/10
+[2026-05-04 16:11:43] FinalOurs-m0.6-S3 | Epoch 3/50 train_loss=0.122657 val_mse=0.187467 best_val=0.156450 patience=2/10
+[2026-05-04 16:11:49] FinalOurs-m0.6-S3 | Epoch 4/50 train_loss=0.117656 val_mse=0.174040 best_val=0.156450 patience=3/10
+[2026-05-04 16:11:55] FinalOurs-m0.6-S3 | Epoch 5/50 train_loss=0.113307 val_mse=0.178677 best_val=0.156450 patience=4/10
+[2026-05-04 16:12:02] FinalOurs-m0.6-S3 | Epoch 6/50 train_loss=0.109934 val_mse=0.161585 best_val=0.156450 patience=5/10
+[2026-05-04 16:12:08] FinalOurs-m0.6-S3 | Epoch 7/50 train_loss=0.107176 val_mse=0.208227 best_val=0.156450 patience=6/10
+[2026-05-04 16:12:14] FinalOurs-m0.6-S3 | Epoch 8/50 train_loss=0.104850 val_mse=0.166108 best_val=0.156450 patience=7/10
+[2026-05-04 16:12:21] FinalOurs-m0.6-S3 | Epoch 9/50 train_loss=0.103998 val_mse=0.188298 best_val=0.156450 patience=8/10
+[2026-05-04 16:12:27] FinalOurs-m0.6-S3 | Epoch 10/50 train_loss=0.101872 val_mse=0.181965 best_val=0.156450 patience=9/10
+[2026-05-04 16:12:33] FinalOurs-m0.6-S3 | Epoch 11/50 train_loss=0.100845 val_mse=0.167136 best_val=0.156450 patience=10/10
+[2026-05-04 16:12:33] FinalOurs-m0.6-S3 | Early stop at epoch 11, best=1
+[2026-05-04 16:12:33] FinalOurs-m0.6-S3 DONE | MSE=0.156450 RMSE=0.395538 MAE=0.358265 Pearson=0.535246 [best_epoch=1]
+    MSE=0.1565  Pearson=0.5352
+
+  [10/15] Holdout: S4
+[2026-05-04 16:12:40] FinalOurs-m0.6-S4 | Epoch 1/50 train_loss=0.159890 val_mse=0.195223 best_val=0.195223 patience=0/10
+[2026-05-04 16:12:46] FinalOurs-m0.6-S4 | Epoch 2/50 train_loss=0.138666 val_mse=0.279031 best_val=0.195223 patience=1/10
+[2026-05-04 16:12:52] FinalOurs-m0.6-S4 | Epoch 3/50 train_loss=0.130547 val_mse=0.202452 best_val=0.195223 patience=2/10
+[2026-05-04 16:12:59] FinalOurs-m0.6-S4 | Epoch 4/50 train_loss=0.124710 val_mse=0.200444 best_val=0.195223 patience=3/10
+[2026-05-04 16:13:05] FinalOurs-m0.6-S4 | Epoch 5/50 train_loss=0.120189 val_mse=0.158535 best_val=0.158535 patience=0/10
+[2026-05-04 16:13:11] FinalOurs-m0.6-S4 | Epoch 6/50 train_loss=0.117385 val_mse=0.088694 best_val=0.088694 patience=0/10
+[2026-05-04 16:13:17] FinalOurs-m0.6-S4 | Epoch 7/50 train_loss=0.114762 val_mse=0.207168 best_val=0.088694 patience=1/10
+[2026-05-04 16:13:24] FinalOurs-m0.6-S4 | Epoch 8/50 train_loss=0.112526 val_mse=0.159155 best_val=0.088694 patience=2/10
+[2026-05-04 16:13:30] FinalOurs-m0.6-S4 | Epoch 9/50 train_loss=0.109525 val_mse=0.191087 best_val=0.088694 patience=3/10
+[2026-05-04 16:13:36] FinalOurs-m0.6-S4 | Epoch 10/50 train_loss=0.108960 val_mse=0.252944 best_val=0.088694 patience=4/10
+[2026-05-04 16:13:42] FinalOurs-m0.6-S4 | Epoch 11/50 train_loss=0.106832 val_mse=0.174296 best_val=0.088694 patience=5/10
+[2026-05-04 16:13:49] FinalOurs-m0.6-S4 | Epoch 12/50 train_loss=0.106212 val_mse=0.355329 best_val=0.088694 patience=6/10
+[2026-05-04 16:13:55] FinalOurs-m0.6-S4 | Epoch 13/50 train_loss=0.104161 val_mse=0.174982 best_val=0.088694 patience=7/10
+[2026-05-04 16:14:01] FinalOurs-m0.6-S4 | Epoch 14/50 train_loss=0.104043 val_mse=0.185161 best_val=0.088694 patience=8/10
+[2026-05-04 16:14:08] FinalOurs-m0.6-S4 | Epoch 15/50 train_loss=0.103037 val_mse=0.386705 best_val=0.088694 patience=9/10
+[2026-05-04 16:14:14] FinalOurs-m0.6-S4 | Epoch 16/50 train_loss=0.101756 val_mse=0.220879 best_val=0.088694 patience=10/10
+[2026-05-04 16:14:14] FinalOurs-m0.6-S4 | Early stop at epoch 16, best=6
+[2026-05-04 16:14:14] FinalOurs-m0.6-S4 DONE | MSE=0.088694 RMSE=0.297816 MAE=0.277194 Pearson=0.881545 [best_epoch=6]
+    MSE=0.0887  Pearson=0.8815
+
+  [11/15] Holdout: S5
+[2026-05-04 16:14:21] FinalOurs-m0.6-S5 | Epoch 1/50 train_loss=0.145234 val_mse=0.179685 best_val=0.179685 patience=0/10
+[2026-05-04 16:14:27] FinalOurs-m0.6-S5 | Epoch 2/50 train_loss=0.124031 val_mse=0.192851 best_val=0.179685 patience=1/10
+[2026-05-04 16:14:33] FinalOurs-m0.6-S5 | Epoch 3/50 train_loss=0.118309 val_mse=0.175065 best_val=0.175065 patience=0/10
+[2026-05-04 16:14:39] FinalOurs-m0.6-S5 | Epoch 4/50 train_loss=0.112532 val_mse=0.210898 best_val=0.175065 patience=1/10
+[2026-05-04 16:14:46] FinalOurs-m0.6-S5 | Epoch 5/50 train_loss=0.107876 val_mse=0.147263 best_val=0.147263 patience=0/10
+[2026-05-04 16:14:52] FinalOurs-m0.6-S5 | Epoch 6/50 train_loss=0.104298 val_mse=0.187320 best_val=0.147263 patience=1/10
+[2026-05-04 16:14:58] FinalOurs-m0.6-S5 | Epoch 7/50 train_loss=0.100227 val_mse=0.150282 best_val=0.147263 patience=2/10
+[2026-05-04 16:15:05] FinalOurs-m0.6-S5 | Epoch 8/50 train_loss=0.096988 val_mse=0.200629 best_val=0.147263 patience=3/10
+[2026-05-04 16:15:11] FinalOurs-m0.6-S5 | Epoch 9/50 train_loss=0.096225 val_mse=0.137046 best_val=0.137046 patience=0/10
+[2026-05-04 16:15:17] FinalOurs-m0.6-S5 | Epoch 10/50 train_loss=0.094028 val_mse=0.164637 best_val=0.137046 patience=1/10
+[2026-05-04 16:15:23] FinalOurs-m0.6-S5 | Epoch 11/50 train_loss=0.092612 val_mse=0.136002 best_val=0.136002 patience=0/10
+[2026-05-04 16:15:30] FinalOurs-m0.6-S5 | Epoch 12/50 train_loss=0.089993 val_mse=0.101967 best_val=0.101967 patience=0/10
+[2026-05-04 16:15:36] FinalOurs-m0.6-S5 | Epoch 13/50 train_loss=0.089170 val_mse=0.114116 best_val=0.101967 patience=1/10
+[2026-05-04 16:15:42] FinalOurs-m0.6-S5 | Epoch 14/50 train_loss=0.088548 val_mse=0.142465 best_val=0.101967 patience=2/10
+[2026-05-04 16:15:49] FinalOurs-m0.6-S5 | Epoch 15/50 train_loss=0.088200 val_mse=0.175850 best_val=0.101967 patience=3/10
+[2026-05-04 16:15:55] FinalOurs-m0.6-S5 | Epoch 16/50 train_loss=0.086216 val_mse=0.104517 best_val=0.101967 patience=4/10
+[2026-05-04 16:16:01] FinalOurs-m0.6-S5 | Epoch 17/50 train_loss=0.084924 val_mse=0.190871 best_val=0.101967 patience=5/10
+[2026-05-04 16:16:07] FinalOurs-m0.6-S5 | Epoch 18/50 train_loss=0.083741 val_mse=0.138806 best_val=0.101967 patience=6/10
+[2026-05-04 16:16:14] FinalOurs-m0.6-S5 | Epoch 19/50 train_loss=0.083199 val_mse=0.156494 best_val=0.101967 patience=7/10
+[2026-05-04 16:16:20] FinalOurs-m0.6-S5 | Epoch 20/50 train_loss=0.083111 val_mse=0.173315 best_val=0.101967 patience=8/10
+[2026-05-04 16:16:26] FinalOurs-m0.6-S5 | Epoch 21/50 train_loss=0.080581 val_mse=0.136786 best_val=0.101967 patience=9/10
+[2026-05-04 16:16:32] FinalOurs-m0.6-S5 | Epoch 22/50 train_loss=0.081322 val_mse=0.107038 best_val=0.101967 patience=10/10
+[2026-05-04 16:16:32] FinalOurs-m0.6-S5 | Early stop at epoch 22, best=12
+[2026-05-04 16:16:33] FinalOurs-m0.6-S5 DONE | MSE=0.101967 RMSE=0.319322 MAE=0.272846 Pearson=0.762577 [best_epoch=12]
+    MSE=0.1020  Pearson=0.7626
+
+  [12/15] Holdout: S6
+[2026-05-04 16:16:39] FinalOurs-m0.6-S6 | Epoch 1/50 train_loss=0.150313 val_mse=0.131002 best_val=0.131002 patience=0/10
+[2026-05-04 16:16:45] FinalOurs-m0.6-S6 | Epoch 2/50 train_loss=0.129085 val_mse=0.163332 best_val=0.131002 patience=1/10
+[2026-05-04 16:16:52] FinalOurs-m0.6-S6 | Epoch 3/50 train_loss=0.122721 val_mse=0.155278 best_val=0.131002 patience=2/10
+[2026-05-04 16:16:58] FinalOurs-m0.6-S6 | Epoch 4/50 train_loss=0.118604 val_mse=0.126156 best_val=0.126156 patience=0/10
+[2026-05-04 16:17:04] FinalOurs-m0.6-S6 | Epoch 5/50 train_loss=0.111822 val_mse=0.140964 best_val=0.126156 patience=1/10
+[2026-05-04 16:17:10] FinalOurs-m0.6-S6 | Epoch 6/50 train_loss=0.107998 val_mse=0.145808 best_val=0.126156 patience=2/10
+[2026-05-04 16:17:17] FinalOurs-m0.6-S6 | Epoch 7/50 train_loss=0.104479 val_mse=0.118334 best_val=0.118334 patience=0/10
+[2026-05-04 16:17:23] FinalOurs-m0.6-S6 | Epoch 8/50 train_loss=0.101819 val_mse=0.139013 best_val=0.118334 patience=1/10
+[2026-05-04 16:17:29] FinalOurs-m0.6-S6 | Epoch 9/50 train_loss=0.098562 val_mse=0.172329 best_val=0.118334 patience=2/10
+[2026-05-04 16:17:36] FinalOurs-m0.6-S6 | Epoch 10/50 train_loss=0.095996 val_mse=0.148757 best_val=0.118334 patience=3/10
+[2026-05-04 16:17:42] FinalOurs-m0.6-S6 | Epoch 11/50 train_loss=0.094528 val_mse=0.168356 best_val=0.118334 patience=4/10
+[2026-05-04 16:17:48] FinalOurs-m0.6-S6 | Epoch 12/50 train_loss=0.091869 val_mse=0.161193 best_val=0.118334 patience=5/10
+[2026-05-04 16:17:54] FinalOurs-m0.6-S6 | Epoch 13/50 train_loss=0.091109 val_mse=0.186799 best_val=0.118334 patience=6/10
+[2026-05-04 16:18:01] FinalOurs-m0.6-S6 | Epoch 14/50 train_loss=0.089248 val_mse=0.163259 best_val=0.118334 patience=7/10
+[2026-05-04 16:18:07] FinalOurs-m0.6-S6 | Epoch 15/50 train_loss=0.087460 val_mse=0.126264 best_val=0.118334 patience=8/10
+[2026-05-04 16:18:13] FinalOurs-m0.6-S6 | Epoch 16/50 train_loss=0.086947 val_mse=0.159983 best_val=0.118334 patience=9/10
+[2026-05-04 16:18:19] FinalOurs-m0.6-S6 | Epoch 17/50 train_loss=0.084857 val_mse=0.182762 best_val=0.118334 patience=10/10
+[2026-05-04 16:18:19] FinalOurs-m0.6-S6 | Early stop at epoch 17, best=7
+[2026-05-04 16:18:20] FinalOurs-m0.6-S6 DONE | MSE=0.118334 RMSE=0.343997 MAE=0.308707 Pearson=0.697433 [best_epoch=7]
+    MSE=0.1183  Pearson=0.6974
+
+  [13/15] Holdout: S7
+[2026-05-04 16:18:26] FinalOurs-m0.6-S7 | Epoch 1/50 train_loss=0.139711 val_mse=0.766763 best_val=0.766763 patience=0/10
+[2026-05-04 16:18:32] FinalOurs-m0.6-S7 | Epoch 2/50 train_loss=0.121751 val_mse=0.779013 best_val=0.766763 patience=1/10
+[2026-05-04 16:18:39] FinalOurs-m0.6-S7 | Epoch 3/50 train_loss=0.114274 val_mse=0.985286 best_val=0.766763 patience=2/10
+[2026-05-04 16:18:45] FinalOurs-m0.6-S7 | Epoch 4/50 train_loss=0.110001 val_mse=1.092960 best_val=0.766763 patience=3/10
+[2026-05-04 16:18:51] FinalOurs-m0.6-S7 | Epoch 5/50 train_loss=0.105510 val_mse=0.768926 best_val=0.766763 patience=4/10
+[2026-05-04 16:18:58] FinalOurs-m0.6-S7 | Epoch 6/50 train_loss=0.101280 val_mse=0.672094 best_val=0.672094 patience=0/10
+[2026-05-04 16:19:04] FinalOurs-m0.6-S7 | Epoch 7/50 train_loss=0.098630 val_mse=0.596170 best_val=0.596170 patience=0/10
+[2026-05-04 16:19:10] FinalOurs-m0.6-S7 | Epoch 8/50 train_loss=0.096285 val_mse=0.689991 best_val=0.596170 patience=1/10
+[2026-05-04 16:19:16] FinalOurs-m0.6-S7 | Epoch 9/50 train_loss=0.093075 val_mse=0.766368 best_val=0.596170 patience=2/10
+[2026-05-04 16:19:23] FinalOurs-m0.6-S7 | Epoch 10/50 train_loss=0.092732 val_mse=1.018691 best_val=0.596170 patience=3/10
+[2026-05-04 16:19:29] FinalOurs-m0.6-S7 | Epoch 11/50 train_loss=0.089215 val_mse=1.042718 best_val=0.596170 patience=4/10
+[2026-05-04 16:19:35] FinalOurs-m0.6-S7 | Epoch 12/50 train_loss=0.088422 val_mse=0.686133 best_val=0.596170 patience=5/10
+[2026-05-04 16:19:41] FinalOurs-m0.6-S7 | Epoch 13/50 train_loss=0.087973 val_mse=1.119417 best_val=0.596170 patience=6/10
+[2026-05-04 16:19:48] FinalOurs-m0.6-S7 | Epoch 14/50 train_loss=0.086385 val_mse=0.676297 best_val=0.596170 patience=7/10
+[2026-05-04 16:19:54] FinalOurs-m0.6-S7 | Epoch 15/50 train_loss=0.086027 val_mse=1.097147 best_val=0.596170 patience=8/10
+[2026-05-04 16:20:00] FinalOurs-m0.6-S7 | Epoch 16/50 train_loss=0.084846 val_mse=0.939977 best_val=0.596170 patience=9/10
+[2026-05-04 16:20:06] FinalOurs-m0.6-S7 | Epoch 17/50 train_loss=0.084062 val_mse=1.211665 best_val=0.596170 patience=10/10
+[2026-05-04 16:20:06] FinalOurs-m0.6-S7 | Early stop at epoch 17, best=7
+[2026-05-04 16:20:07] FinalOurs-m0.6-S7 DONE | MSE=0.596170 RMSE=0.772120 MAE=0.742992 Pearson=0.911421 [best_epoch=7]
+    MSE=0.5962  Pearson=0.9114
+
+  [14/15] Holdout: S8
+[2026-05-04 16:20:13] FinalOurs-m0.6-S8 | Epoch 1/50 train_loss=0.154885 val_mse=0.140047 best_val=0.140047 patience=0/10
+[2026-05-04 16:20:19] FinalOurs-m0.6-S8 | Epoch 2/50 train_loss=0.136837 val_mse=0.156003 best_val=0.140047 patience=1/10
+[2026-05-04 16:20:26] FinalOurs-m0.6-S8 | Epoch 3/50 train_loss=0.131012 val_mse=0.128785 best_val=0.128785 patience=0/10
+[2026-05-04 16:20:32] FinalOurs-m0.6-S8 | Epoch 4/50 train_loss=0.127725 val_mse=0.140884 best_val=0.128785 patience=1/10
+[2026-05-04 16:20:38] FinalOurs-m0.6-S8 | Epoch 5/50 train_loss=0.124540 val_mse=0.131963 best_val=0.128785 patience=2/10
+[2026-05-04 16:20:45] FinalOurs-m0.6-S8 | Epoch 6/50 train_loss=0.122165 val_mse=0.140455 best_val=0.128785 patience=3/10
+[2026-05-04 16:20:51] FinalOurs-m0.6-S8 | Epoch 7/50 train_loss=0.119091 val_mse=0.091127 best_val=0.091127 patience=0/10
+[2026-05-04 16:20:57] FinalOurs-m0.6-S8 | Epoch 8/50 train_loss=0.117271 val_mse=0.117251 best_val=0.091127 patience=1/10
+[2026-05-04 16:21:03] FinalOurs-m0.6-S8 | Epoch 9/50 train_loss=0.116015 val_mse=0.096697 best_val=0.091127 patience=2/10
+[2026-05-04 16:21:10] FinalOurs-m0.6-S8 | Epoch 10/50 train_loss=0.113808 val_mse=0.119632 best_val=0.091127 patience=3/10
+[2026-05-04 16:21:16] FinalOurs-m0.6-S8 | Epoch 11/50 train_loss=0.113020 val_mse=0.094575 best_val=0.091127 patience=4/10
+[2026-05-04 16:21:22] FinalOurs-m0.6-S8 | Epoch 12/50 train_loss=0.110474 val_mse=0.123907 best_val=0.091127 patience=5/10
+[2026-05-04 16:21:28] FinalOurs-m0.6-S8 | Epoch 13/50 train_loss=0.109662 val_mse=0.095058 best_val=0.091127 patience=6/10
+[2026-05-04 16:21:35] FinalOurs-m0.6-S8 | Epoch 14/50 train_loss=0.108489 val_mse=0.083366 best_val=0.083366 patience=0/10
+[2026-05-04 16:21:41] FinalOurs-m0.6-S8 | Epoch 15/50 train_loss=0.107043 val_mse=0.123328 best_val=0.083366 patience=1/10
+[2026-05-04 16:21:47] FinalOurs-m0.6-S8 | Epoch 16/50 train_loss=0.105866 val_mse=0.087136 best_val=0.083366 patience=2/10
+[2026-05-04 16:21:54] FinalOurs-m0.6-S8 | Epoch 17/50 train_loss=0.104835 val_mse=0.104940 best_val=0.083366 patience=3/10
+[2026-05-04 16:22:00] FinalOurs-m0.6-S8 | Epoch 18/50 train_loss=0.104638 val_mse=0.118115 best_val=0.083366 patience=4/10
+[2026-05-04 16:22:06] FinalOurs-m0.6-S8 | Epoch 19/50 train_loss=0.104077 val_mse=0.104134 best_val=0.083366 patience=5/10
+[2026-05-04 16:22:13] FinalOurs-m0.6-S8 | Epoch 20/50 train_loss=0.103861 val_mse=0.092397 best_val=0.083366 patience=6/10
+[2026-05-04 16:22:19] FinalOurs-m0.6-S8 | Epoch 21/50 train_loss=0.102411 val_mse=0.076093 best_val=0.076093 patience=0/10
+[2026-05-04 16:22:25] FinalOurs-m0.6-S8 | Epoch 22/50 train_loss=0.101892 val_mse=0.068559 best_val=0.068559 patience=0/10
+[2026-05-04 16:22:32] FinalOurs-m0.6-S8 | Epoch 23/50 train_loss=0.101188 val_mse=0.083747 best_val=0.068559 patience=1/10
+[2026-05-04 16:22:38] FinalOurs-m0.6-S8 | Epoch 24/50 train_loss=0.100955 val_mse=0.069515 best_val=0.068559 patience=2/10
+[2026-05-04 16:22:44] FinalOurs-m0.6-S8 | Epoch 25/50 train_loss=0.099812 val_mse=0.084962 best_val=0.068559 patience=3/10
+[2026-05-04 16:22:50] FinalOurs-m0.6-S8 | Epoch 26/50 train_loss=0.099485 val_mse=0.082542 best_val=0.068559 patience=4/10
+[2026-05-04 16:22:56] FinalOurs-m0.6-S8 | Epoch 27/50 train_loss=0.099442 val_mse=0.085534 best_val=0.068559 patience=5/10
+[2026-05-04 16:23:03] FinalOurs-m0.6-S8 | Epoch 28/50 train_loss=0.099731 val_mse=0.081448 best_val=0.068559 patience=6/10
+[2026-05-04 16:23:09] FinalOurs-m0.6-S8 | Epoch 29/50 train_loss=0.098425 val_mse=0.071689 best_val=0.068559 patience=7/10
+[2026-05-04 16:23:15] FinalOurs-m0.6-S8 | Epoch 30/50 train_loss=0.098542 val_mse=0.079386 best_val=0.068559 patience=8/10
+[2026-05-04 16:23:21] FinalOurs-m0.6-S8 | Epoch 31/50 train_loss=0.097879 val_mse=0.092494 best_val=0.068559 patience=9/10
+[2026-05-04 16:23:27] FinalOurs-m0.6-S8 | Epoch 32/50 train_loss=0.096890 val_mse=0.066375 best_val=0.066375 patience=0/10
+[2026-05-04 16:23:34] FinalOurs-m0.6-S8 | Epoch 33/50 train_loss=0.096460 val_mse=0.088823 best_val=0.066375 patience=1/10
+[2026-05-04 16:23:40] FinalOurs-m0.6-S8 | Epoch 34/50 train_loss=0.097215 val_mse=0.081629 best_val=0.066375 patience=2/10
+[2026-05-04 16:23:46] FinalOurs-m0.6-S8 | Epoch 35/50 train_loss=0.096190 val_mse=0.069160 best_val=0.066375 patience=3/10
+[2026-05-04 16:23:52] FinalOurs-m0.6-S8 | Epoch 36/50 train_loss=0.096576 val_mse=0.067384 best_val=0.066375 patience=4/10
+[2026-05-04 16:23:59] FinalOurs-m0.6-S8 | Epoch 37/50 train_loss=0.095714 val_mse=0.077461 best_val=0.066375 patience=5/10
+[2026-05-04 16:24:05] FinalOurs-m0.6-S8 | Epoch 38/50 train_loss=0.095083 val_mse=0.077162 best_val=0.066375 patience=6/10
+[2026-05-04 16:24:11] FinalOurs-m0.6-S8 | Epoch 39/50 train_loss=0.093923 val_mse=0.060110 best_val=0.060110 patience=0/10
+[2026-05-04 16:24:17] FinalOurs-m0.6-S8 | Epoch 40/50 train_loss=0.093915 val_mse=0.084966 best_val=0.060110 patience=1/10
+[2026-05-04 16:24:24] FinalOurs-m0.6-S8 | Epoch 41/50 train_loss=0.093729 val_mse=0.081401 best_val=0.060110 patience=2/10
+[2026-05-04 16:24:30] FinalOurs-m0.6-S8 | Epoch 42/50 train_loss=0.093614 val_mse=0.081417 best_val=0.060110 patience=3/10
+[2026-05-04 16:24:36] FinalOurs-m0.6-S8 | Epoch 43/50 train_loss=0.093828 val_mse=0.072987 best_val=0.060110 patience=4/10
+[2026-05-04 16:24:42] FinalOurs-m0.6-S8 | Epoch 44/50 train_loss=0.091943 val_mse=0.067556 best_val=0.060110 patience=5/10
+[2026-05-04 16:24:48] FinalOurs-m0.6-S8 | Epoch 45/50 train_loss=0.092629 val_mse=0.082211 best_val=0.060110 patience=6/10
+[2026-05-04 16:24:55] FinalOurs-m0.6-S8 | Epoch 46/50 train_loss=0.093402 val_mse=0.086078 best_val=0.060110 patience=7/10
+[2026-05-04 16:25:01] FinalOurs-m0.6-S8 | Epoch 47/50 train_loss=0.092098 val_mse=0.067636 best_val=0.060110 patience=8/10
+[2026-05-04 16:25:07] FinalOurs-m0.6-S8 | Epoch 48/50 train_loss=0.091697 val_mse=0.114977 best_val=0.060110 patience=9/10
+[2026-05-04 16:25:13] FinalOurs-m0.6-S8 | Epoch 49/50 train_loss=0.091738 val_mse=0.100817 best_val=0.060110 patience=10/10
+[2026-05-04 16:25:13] FinalOurs-m0.6-S8 | Early stop at epoch 49, best=39
+[2026-05-04 16:25:14] FinalOurs-m0.6-S8 DONE | MSE=0.060110 RMSE=0.245172 MAE=0.197819 Pearson=0.860180 [best_epoch=39]
+    MSE=0.0601  Pearson=0.8602
+
+  [15/15] Holdout: S9
+[2026-05-04 16:25:20] FinalOurs-m0.6-S9 | Epoch 1/50 train_loss=0.152761 val_mse=0.182266 best_val=0.182266 patience=0/10
+[2026-05-04 16:25:26] FinalOurs-m0.6-S9 | Epoch 2/50 train_loss=0.128199 val_mse=0.218938 best_val=0.182266 patience=1/10
+[2026-05-04 16:25:33] FinalOurs-m0.6-S9 | Epoch 3/50 train_loss=0.120359 val_mse=0.215790 best_val=0.182266 patience=2/10
+[2026-05-04 16:25:39] FinalOurs-m0.6-S9 | Epoch 4/50 train_loss=0.115193 val_mse=0.226504 best_val=0.182266 patience=3/10
+[2026-05-04 16:25:45] FinalOurs-m0.6-S9 | Epoch 5/50 train_loss=0.112230 val_mse=0.278904 best_val=0.182266 patience=4/10
+[2026-05-04 16:25:52] FinalOurs-m0.6-S9 | Epoch 6/50 train_loss=0.109829 val_mse=0.236737 best_val=0.182266 patience=5/10
+[2026-05-04 16:25:58] FinalOurs-m0.6-S9 | Epoch 7/50 train_loss=0.107018 val_mse=0.309663 best_val=0.182266 patience=6/10
+[2026-05-04 16:26:05] FinalOurs-m0.6-S9 | Epoch 8/50 train_loss=0.105211 val_mse=0.248816 best_val=0.182266 patience=7/10
+[2026-05-04 16:26:11] FinalOurs-m0.6-S9 | Epoch 9/50 train_loss=0.103492 val_mse=0.285847 best_val=0.182266 patience=8/10
+[2026-05-04 16:26:17] FinalOurs-m0.6-S9 | Epoch 10/50 train_loss=0.101431 val_mse=0.300301 best_val=0.182266 patience=9/10
+[2026-05-04 16:26:23] FinalOurs-m0.6-S9 | Epoch 11/50 train_loss=0.101236 val_mse=0.280920 best_val=0.182266 patience=10/10
+[2026-05-04 16:26:23] FinalOurs-m0.6-S9 | Early stop at epoch 11, best=1
+[2026-05-04 16:26:24] FinalOurs-m0.6-S9 DONE | MSE=0.182266 RMSE=0.426926 MAE=0.375023 Pearson=0.322585 [best_epoch=1]
+    MSE=0.1823  Pearson=0.3226
+  WESAD_LABEL_MAP patched in-place: {1: 1.0, 2: 0.0, 3: 0.6}
+  WESAD_LABEL_MAP restored to default
+
+============================================================
+Final Ours LOSO: meditation = 0.7
+============================================================
+  WESAD_LABEL_MAP patched in-place: {1: 1.0, 2: 0.0, 3: 0.7}
+Subject S10: Age=28.0, Gender=1, BMI=24.0, HR=64.2
+Subject S11: Age=26.0, Gender=0, BMI=18.5, HR=63.9
+Subject S13: Age=28.0, Gender=1, BMI=25.0, HR=65.6
+Subject S14: Age=27.0, Gender=1, BMI=24.7, HR=64.9
+Subject S15: Age=28.0, Gender=1, BMI=24.0, HR=66.7
+Subject S16: Age=24.0, Gender=1, BMI=20.4, HR=63.5
+Subject S17: Age=29.0, Gender=0, BMI=20.2, HR=61.3
+Subject S2: Age=27.0, Gender=1, BMI=26.1, HR=64.6
+Subject S3: Age=27.0, Gender=1, BMI=23.1, HR=58.7
+Subject S4: Age=25.0, Gender=1, BMI=29.4, HR=60.0
+Subject S5: Age=35.0, Gender=1, BMI=22.4, HR=62.6
+Subject S6: Age=27.0, Gender=1, BMI=22.8, HR=62.9
+Subject S7: Age=28.0, Gender=1, BMI=21.9, HR=62.3
+Subject S8: Age=27.0, Gender=0, BMI=21.6, HR=64.3
+Subject S9: Age=26.0, Gender=1, BMI=22.9, HR=68.1
+  被试: ['S10', 'S11', 'S13', 'S14', 'S15', 'S16', 'S17', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9'] (15 人)
+[2026-05-04 16:26:54] >>> TCM checkpoint resolved to: /home/lora/repos/MulitiModal/tcm_ft_transformer/checkpoints/best_model.pth
+[2026-05-04 16:26:54] >>> TCM scaler resolved to: /home/lora/repos/MulitiModal/tcm_ft_transformer/scaler_params.npz
+
+  [1/15] Holdout: S10
+[2026-05-04 16:27:01] FinalOurs-m0.7-S10 | Epoch 1/50 train_loss=0.158514 val_mse=0.306126 best_val=0.306126 patience=0/10
+[2026-05-04 16:27:07] FinalOurs-m0.7-S10 | Epoch 2/50 train_loss=0.132649 val_mse=0.266099 best_val=0.266099 patience=0/10
+[2026-05-04 16:27:13] FinalOurs-m0.7-S10 | Epoch 3/50 train_loss=0.123421 val_mse=0.314376 best_val=0.266099 patience=1/10
+[2026-05-04 16:27:19] FinalOurs-m0.7-S10 | Epoch 4/50 train_loss=0.119040 val_mse=0.302337 best_val=0.266099 patience=2/10
+[2026-05-04 16:27:26] FinalOurs-m0.7-S10 | Epoch 5/50 train_loss=0.115309 val_mse=0.298708 best_val=0.266099 patience=3/10
+[2026-05-04 16:27:32] FinalOurs-m0.7-S10 | Epoch 6/50 train_loss=0.113402 val_mse=0.323975 best_val=0.266099 patience=4/10
+[2026-05-04 16:27:38] FinalOurs-m0.7-S10 | Epoch 7/50 train_loss=0.110230 val_mse=0.272981 best_val=0.266099 patience=5/10
+[2026-05-04 16:27:45] FinalOurs-m0.7-S10 | Epoch 8/50 train_loss=0.109284 val_mse=0.259564 best_val=0.259564 patience=0/10
+[2026-05-04 16:27:51] FinalOurs-m0.7-S10 | Epoch 9/50 train_loss=0.106728 val_mse=0.249190 best_val=0.249190 patience=0/10
+[2026-05-04 16:27:57] FinalOurs-m0.7-S10 | Epoch 10/50 train_loss=0.106132 val_mse=0.250089 best_val=0.249190 patience=1/10
+[2026-05-04 16:28:03] FinalOurs-m0.7-S10 | Epoch 11/50 train_loss=0.104196 val_mse=0.234374 best_val=0.234374 patience=0/10
+[2026-05-04 16:28:10] FinalOurs-m0.7-S10 | Epoch 12/50 train_loss=0.102808 val_mse=0.237694 best_val=0.234374 patience=1/10
+[2026-05-04 16:28:16] FinalOurs-m0.7-S10 | Epoch 13/50 train_loss=0.101548 val_mse=0.263406 best_val=0.234374 patience=2/10
+[2026-05-04 16:28:22] FinalOurs-m0.7-S10 | Epoch 14/50 train_loss=0.099266 val_mse=0.220812 best_val=0.220812 patience=0/10
+[2026-05-04 16:28:28] FinalOurs-m0.7-S10 | Epoch 15/50 train_loss=0.098952 val_mse=0.214858 best_val=0.214858 patience=0/10
+[2026-05-04 16:28:35] FinalOurs-m0.7-S10 | Epoch 16/50 train_loss=0.097067 val_mse=0.240686 best_val=0.214858 patience=1/10
+[2026-05-04 16:28:41] FinalOurs-m0.7-S10 | Epoch 17/50 train_loss=0.097354 val_mse=0.254450 best_val=0.214858 patience=2/10
+[2026-05-04 16:28:47] FinalOurs-m0.7-S10 | Epoch 18/50 train_loss=0.096665 val_mse=0.212434 best_val=0.212434 patience=0/10
+[2026-05-04 16:28:53] FinalOurs-m0.7-S10 | Epoch 19/50 train_loss=0.095721 val_mse=0.178832 best_val=0.178832 patience=0/10
+[2026-05-04 16:28:59] FinalOurs-m0.7-S10 | Epoch 20/50 train_loss=0.095468 val_mse=0.254375 best_val=0.178832 patience=1/10
+[2026-05-04 16:29:06] FinalOurs-m0.7-S10 | Epoch 21/50 train_loss=0.094730 val_mse=0.262644 best_val=0.178832 patience=2/10
+[2026-05-04 16:29:12] FinalOurs-m0.7-S10 | Epoch 22/50 train_loss=0.094277 val_mse=0.197320 best_val=0.178832 patience=3/10
+[2026-05-04 16:29:18] FinalOurs-m0.7-S10 | Epoch 23/50 train_loss=0.092575 val_mse=0.225693 best_val=0.178832 patience=4/10
+[2026-05-04 16:29:24] FinalOurs-m0.7-S10 | Epoch 24/50 train_loss=0.092681 val_mse=0.248818 best_val=0.178832 patience=5/10
+[2026-05-04 16:29:31] FinalOurs-m0.7-S10 | Epoch 25/50 train_loss=0.091483 val_mse=0.259072 best_val=0.178832 patience=6/10
+[2026-05-04 16:29:37] FinalOurs-m0.7-S10 | Epoch 26/50 train_loss=0.089891 val_mse=0.287620 best_val=0.178832 patience=7/10
+[2026-05-04 16:29:43] FinalOurs-m0.7-S10 | Epoch 27/50 train_loss=0.089809 val_mse=0.261851 best_val=0.178832 patience=8/10
+[2026-05-04 16:29:49] FinalOurs-m0.7-S10 | Epoch 28/50 train_loss=0.090762 val_mse=0.198238 best_val=0.178832 patience=9/10
+[2026-05-04 16:29:56] FinalOurs-m0.7-S10 | Epoch 29/50 train_loss=0.088372 val_mse=0.300676 best_val=0.178832 patience=10/10
+[2026-05-04 16:29:56] FinalOurs-m0.7-S10 | Early stop at epoch 29, best=19
+[2026-05-04 16:29:56] FinalOurs-m0.7-S10 DONE | MSE=0.178832 RMSE=0.422885 MAE=0.293377 Pearson=0.708610 [best_epoch=19]
+    MSE=0.1788  Pearson=0.7086
+
+  [2/15] Holdout: S11
+[2026-05-04 16:30:02] FinalOurs-m0.7-S11 | Epoch 1/50 train_loss=0.154932 val_mse=0.096300 best_val=0.096300 patience=0/10
+[2026-05-04 16:30:08] FinalOurs-m0.7-S11 | Epoch 2/50 train_loss=0.134876 val_mse=0.092226 best_val=0.092226 patience=0/10
+[2026-05-04 16:30:15] FinalOurs-m0.7-S11 | Epoch 3/50 train_loss=0.129819 val_mse=0.092333 best_val=0.092226 patience=1/10
+[2026-05-04 16:30:21] FinalOurs-m0.7-S11 | Epoch 4/50 train_loss=0.125897 val_mse=0.091260 best_val=0.091260 patience=0/10
+[2026-05-04 16:30:27] FinalOurs-m0.7-S11 | Epoch 5/50 train_loss=0.123509 val_mse=0.099246 best_val=0.091260 patience=1/10
+[2026-05-04 16:30:33] FinalOurs-m0.7-S11 | Epoch 6/50 train_loss=0.120278 val_mse=0.074769 best_val=0.074769 patience=0/10
+[2026-05-04 16:30:40] FinalOurs-m0.7-S11 | Epoch 7/50 train_loss=0.117417 val_mse=0.086658 best_val=0.074769 patience=1/10
+[2026-05-04 16:30:46] FinalOurs-m0.7-S11 | Epoch 8/50 train_loss=0.114330 val_mse=0.097649 best_val=0.074769 patience=2/10
+[2026-05-04 16:30:52] FinalOurs-m0.7-S11 | Epoch 9/50 train_loss=0.112839 val_mse=0.082697 best_val=0.074769 patience=3/10
+[2026-05-04 16:30:58] FinalOurs-m0.7-S11 | Epoch 10/50 train_loss=0.111521 val_mse=0.078306 best_val=0.074769 patience=4/10
+[2026-05-04 16:31:04] FinalOurs-m0.7-S11 | Epoch 11/50 train_loss=0.108121 val_mse=0.097233 best_val=0.074769 patience=5/10
+[2026-05-04 16:31:11] FinalOurs-m0.7-S11 | Epoch 12/50 train_loss=0.107853 val_mse=0.081649 best_val=0.074769 patience=6/10
+[2026-05-04 16:31:17] FinalOurs-m0.7-S11 | Epoch 13/50 train_loss=0.107026 val_mse=0.092775 best_val=0.074769 patience=7/10
+[2026-05-04 16:31:23] FinalOurs-m0.7-S11 | Epoch 14/50 train_loss=0.105452 val_mse=0.099539 best_val=0.074769 patience=8/10
+[2026-05-04 16:31:29] FinalOurs-m0.7-S11 | Epoch 15/50 train_loss=0.102852 val_mse=0.087940 best_val=0.074769 patience=9/10
+[2026-05-04 16:31:36] FinalOurs-m0.7-S11 | Epoch 16/50 train_loss=0.101883 val_mse=0.072524 best_val=0.072524 patience=0/10
+[2026-05-04 16:31:42] FinalOurs-m0.7-S11 | Epoch 17/50 train_loss=0.100832 val_mse=0.069501 best_val=0.069501 patience=0/10
+[2026-05-04 16:31:48] FinalOurs-m0.7-S11 | Epoch 18/50 train_loss=0.100288 val_mse=0.052249 best_val=0.052249 patience=0/10
+[2026-05-04 16:31:55] FinalOurs-m0.7-S11 | Epoch 19/50 train_loss=0.098354 val_mse=0.077511 best_val=0.052249 patience=1/10
+[2026-05-04 16:32:01] FinalOurs-m0.7-S11 | Epoch 20/50 train_loss=0.098425 val_mse=0.073494 best_val=0.052249 patience=2/10
+[2026-05-04 16:32:08] FinalOurs-m0.7-S11 | Epoch 21/50 train_loss=0.097297 val_mse=0.087214 best_val=0.052249 patience=3/10
+[2026-05-04 16:32:14] FinalOurs-m0.7-S11 | Epoch 22/50 train_loss=0.096499 val_mse=0.073116 best_val=0.052249 patience=4/10
+[2026-05-04 16:32:20] FinalOurs-m0.7-S11 | Epoch 23/50 train_loss=0.093574 val_mse=0.058415 best_val=0.052249 patience=5/10
+[2026-05-04 16:32:27] FinalOurs-m0.7-S11 | Epoch 24/50 train_loss=0.095181 val_mse=0.066902 best_val=0.052249 patience=6/10
+[2026-05-04 16:32:33] FinalOurs-m0.7-S11 | Epoch 25/50 train_loss=0.094944 val_mse=0.044837 best_val=0.044837 patience=0/10
+[2026-05-04 16:32:40] FinalOurs-m0.7-S11 | Epoch 26/50 train_loss=0.093696 val_mse=0.061778 best_val=0.044837 patience=1/10
+[2026-05-04 16:32:46] FinalOurs-m0.7-S11 | Epoch 27/50 train_loss=0.093413 val_mse=0.072279 best_val=0.044837 patience=2/10
+[2026-05-04 16:32:52] FinalOurs-m0.7-S11 | Epoch 28/50 train_loss=0.092255 val_mse=0.074909 best_val=0.044837 patience=3/10
+[2026-05-04 16:32:59] FinalOurs-m0.7-S11 | Epoch 29/50 train_loss=0.091589 val_mse=0.048753 best_val=0.044837 patience=4/10
+[2026-05-04 16:33:05] FinalOurs-m0.7-S11 | Epoch 30/50 train_loss=0.092117 val_mse=0.059556 best_val=0.044837 patience=5/10
+[2026-05-04 16:33:12] FinalOurs-m0.7-S11 | Epoch 31/50 train_loss=0.091081 val_mse=0.059591 best_val=0.044837 patience=6/10
+[2026-05-04 16:33:18] FinalOurs-m0.7-S11 | Epoch 32/50 train_loss=0.089569 val_mse=0.073038 best_val=0.044837 patience=7/10
+[2026-05-04 16:33:24] FinalOurs-m0.7-S11 | Epoch 33/50 train_loss=0.088977 val_mse=0.085059 best_val=0.044837 patience=8/10
+[2026-05-04 16:33:31] FinalOurs-m0.7-S11 | Epoch 34/50 train_loss=0.089996 val_mse=0.087191 best_val=0.044837 patience=9/10
+[2026-05-04 16:33:37] FinalOurs-m0.7-S11 | Epoch 35/50 train_loss=0.089367 val_mse=0.056678 best_val=0.044837 patience=10/10
+[2026-05-04 16:33:37] FinalOurs-m0.7-S11 | Early stop at epoch 35, best=25
+[2026-05-04 16:33:38] FinalOurs-m0.7-S11 DONE | MSE=0.044837 RMSE=0.211748 MAE=0.194931 Pearson=0.939010 [best_epoch=25]
+    MSE=0.0448  Pearson=0.9390
+
+  [3/15] Holdout: S13
+[2026-05-04 16:33:44] FinalOurs-m0.7-S13 | Epoch 1/50 train_loss=0.147503 val_mse=0.186661 best_val=0.186661 patience=0/10
+[2026-05-04 16:33:50] FinalOurs-m0.7-S13 | Epoch 2/50 train_loss=0.126279 val_mse=0.181644 best_val=0.181644 patience=0/10
+[2026-05-04 16:33:57] FinalOurs-m0.7-S13 | Epoch 3/50 train_loss=0.120990 val_mse=0.181624 best_val=0.181624 patience=0/10
+[2026-05-04 16:34:03] FinalOurs-m0.7-S13 | Epoch 4/50 train_loss=0.116777 val_mse=0.138185 best_val=0.138185 patience=0/10
+[2026-05-04 16:34:10] FinalOurs-m0.7-S13 | Epoch 5/50 train_loss=0.113528 val_mse=0.161897 best_val=0.138185 patience=1/10
+[2026-05-04 16:34:16] FinalOurs-m0.7-S13 | Epoch 6/50 train_loss=0.112055 val_mse=0.172098 best_val=0.138185 patience=2/10
+[2026-05-04 16:34:22] FinalOurs-m0.7-S13 | Epoch 7/50 train_loss=0.110075 val_mse=0.180361 best_val=0.138185 patience=3/10
+[2026-05-04 16:34:29] FinalOurs-m0.7-S13 | Epoch 8/50 train_loss=0.107930 val_mse=0.163672 best_val=0.138185 patience=4/10
+[2026-05-04 16:34:35] FinalOurs-m0.7-S13 | Epoch 9/50 train_loss=0.106450 val_mse=0.163967 best_val=0.138185 patience=5/10
+[2026-05-04 16:34:42] FinalOurs-m0.7-S13 | Epoch 10/50 train_loss=0.104309 val_mse=0.190850 best_val=0.138185 patience=6/10
+[2026-05-04 16:34:48] FinalOurs-m0.7-S13 | Epoch 11/50 train_loss=0.101513 val_mse=0.157070 best_val=0.138185 patience=7/10
+[2026-05-04 16:34:55] FinalOurs-m0.7-S13 | Epoch 12/50 train_loss=0.100853 val_mse=0.140622 best_val=0.138185 patience=8/10
+[2026-05-04 16:35:01] FinalOurs-m0.7-S13 | Epoch 13/50 train_loss=0.099500 val_mse=0.158043 best_val=0.138185 patience=9/10
+[2026-05-04 16:35:07] FinalOurs-m0.7-S13 | Epoch 14/50 train_loss=0.099407 val_mse=0.176185 best_val=0.138185 patience=10/10
+[2026-05-04 16:35:07] FinalOurs-m0.7-S13 | Early stop at epoch 14, best=4
+[2026-05-04 16:35:08] FinalOurs-m0.7-S13 DONE | MSE=0.138185 RMSE=0.371733 MAE=0.310649 Pearson=0.615901 [best_epoch=4]
+    MSE=0.1382  Pearson=0.6159
+
+  [4/15] Holdout: S14
+[2026-05-04 16:35:14] FinalOurs-m0.7-S14 | Epoch 1/50 train_loss=0.158078 val_mse=0.141305 best_val=0.141305 patience=0/10
+[2026-05-04 16:35:20] FinalOurs-m0.7-S14 | Epoch 2/50 train_loss=0.130362 val_mse=0.133173 best_val=0.133173 patience=0/10
+[2026-05-04 16:35:27] FinalOurs-m0.7-S14 | Epoch 3/50 train_loss=0.121717 val_mse=0.128405 best_val=0.128405 patience=0/10
+[2026-05-04 16:35:33] FinalOurs-m0.7-S14 | Epoch 4/50 train_loss=0.117368 val_mse=0.099086 best_val=0.099086 patience=0/10
+[2026-05-04 16:35:39] FinalOurs-m0.7-S14 | Epoch 5/50 train_loss=0.111339 val_mse=0.175756 best_val=0.099086 patience=1/10
+[2026-05-04 16:35:45] FinalOurs-m0.7-S14 | Epoch 6/50 train_loss=0.108074 val_mse=0.120751 best_val=0.099086 patience=2/10
+[2026-05-04 16:35:52] FinalOurs-m0.7-S14 | Epoch 7/50 train_loss=0.105890 val_mse=0.224106 best_val=0.099086 patience=3/10
+[2026-05-04 16:35:58] FinalOurs-m0.7-S14 | Epoch 8/50 train_loss=0.102882 val_mse=0.152592 best_val=0.099086 patience=4/10
+[2026-05-04 16:36:04] FinalOurs-m0.7-S14 | Epoch 9/50 train_loss=0.101751 val_mse=0.216446 best_val=0.099086 patience=5/10
+[2026-05-04 16:36:10] FinalOurs-m0.7-S14 | Epoch 10/50 train_loss=0.099633 val_mse=0.183453 best_val=0.099086 patience=6/10
+[2026-05-04 16:36:17] FinalOurs-m0.7-S14 | Epoch 11/50 train_loss=0.096692 val_mse=0.201708 best_val=0.099086 patience=7/10
+[2026-05-04 16:36:23] FinalOurs-m0.7-S14 | Epoch 12/50 train_loss=0.095711 val_mse=0.115551 best_val=0.099086 patience=8/10
+[2026-05-04 16:36:29] FinalOurs-m0.7-S14 | Epoch 13/50 train_loss=0.096108 val_mse=0.218989 best_val=0.099086 patience=9/10
+[2026-05-04 16:36:35] FinalOurs-m0.7-S14 | Epoch 14/50 train_loss=0.095065 val_mse=0.160674 best_val=0.099086 patience=10/10
+[2026-05-04 16:36:35] FinalOurs-m0.7-S14 | Early stop at epoch 14, best=4
+[2026-05-04 16:36:36] FinalOurs-m0.7-S14 DONE | MSE=0.099086 RMSE=0.314779 MAE=0.299646 Pearson=0.913209 [best_epoch=4]
+    MSE=0.0991  Pearson=0.9132
+
+  [5/15] Holdout: S15
+[2026-05-04 16:36:42] FinalOurs-m0.7-S15 | Epoch 1/50 train_loss=0.156156 val_mse=0.134251 best_val=0.134251 patience=0/10
+[2026-05-04 16:36:48] FinalOurs-m0.7-S15 | Epoch 2/50 train_loss=0.134035 val_mse=0.179458 best_val=0.134251 patience=1/10
+[2026-05-04 16:36:54] FinalOurs-m0.7-S15 | Epoch 3/50 train_loss=0.126928 val_mse=0.177133 best_val=0.134251 patience=2/10
+[2026-05-04 16:37:01] FinalOurs-m0.7-S15 | Epoch 4/50 train_loss=0.120499 val_mse=0.185595 best_val=0.134251 patience=3/10
+[2026-05-04 16:37:07] FinalOurs-m0.7-S15 | Epoch 5/50 train_loss=0.116484 val_mse=0.112789 best_val=0.112789 patience=0/10
+[2026-05-04 16:37:13] FinalOurs-m0.7-S15 | Epoch 6/50 train_loss=0.112146 val_mse=0.150463 best_val=0.112789 patience=1/10
+[2026-05-04 16:37:19] FinalOurs-m0.7-S15 | Epoch 7/50 train_loss=0.109915 val_mse=0.142689 best_val=0.112789 patience=2/10
+[2026-05-04 16:37:26] FinalOurs-m0.7-S15 | Epoch 8/50 train_loss=0.105423 val_mse=0.149102 best_val=0.112789 patience=3/10
+[2026-05-04 16:37:32] FinalOurs-m0.7-S15 | Epoch 9/50 train_loss=0.104082 val_mse=0.108626 best_val=0.108626 patience=0/10
+[2026-05-04 16:37:38] FinalOurs-m0.7-S15 | Epoch 10/50 train_loss=0.102455 val_mse=0.120750 best_val=0.108626 patience=1/10
+[2026-05-04 16:37:44] FinalOurs-m0.7-S15 | Epoch 11/50 train_loss=0.099828 val_mse=0.160263 best_val=0.108626 patience=2/10
+[2026-05-04 16:37:51] FinalOurs-m0.7-S15 | Epoch 12/50 train_loss=0.098676 val_mse=0.176062 best_val=0.108626 patience=3/10
+[2026-05-04 16:37:57] FinalOurs-m0.7-S15 | Epoch 13/50 train_loss=0.097974 val_mse=0.168516 best_val=0.108626 patience=4/10
+[2026-05-04 16:38:04] FinalOurs-m0.7-S15 | Epoch 14/50 train_loss=0.098154 val_mse=0.189473 best_val=0.108626 patience=5/10
+[2026-05-04 16:38:10] FinalOurs-m0.7-S15 | Epoch 15/50 train_loss=0.095508 val_mse=0.132508 best_val=0.108626 patience=6/10
+[2026-05-04 16:38:16] FinalOurs-m0.7-S15 | Epoch 16/50 train_loss=0.094625 val_mse=0.142787 best_val=0.108626 patience=7/10
+[2026-05-04 16:38:23] FinalOurs-m0.7-S15 | Epoch 17/50 train_loss=0.094858 val_mse=0.130746 best_val=0.108626 patience=8/10
+[2026-05-04 16:38:29] FinalOurs-m0.7-S15 | Epoch 18/50 train_loss=0.093784 val_mse=0.185533 best_val=0.108626 patience=9/10
+[2026-05-04 16:38:35] FinalOurs-m0.7-S15 | Epoch 19/50 train_loss=0.092022 val_mse=0.174796 best_val=0.108626 patience=10/10
+[2026-05-04 16:38:35] FinalOurs-m0.7-S15 | Early stop at epoch 19, best=9
+[2026-05-04 16:38:36] FinalOurs-m0.7-S15 DONE | MSE=0.108626 RMSE=0.329584 MAE=0.250304 Pearson=0.925852 [best_epoch=9]
+    MSE=0.1086  Pearson=0.9259
+
+  [6/15] Holdout: S16
+[2026-05-04 16:38:42] FinalOurs-m0.7-S16 | Epoch 1/50 train_loss=0.155281 val_mse=0.018080 best_val=0.018080 patience=0/10
+[2026-05-04 16:38:48] FinalOurs-m0.7-S16 | Epoch 2/50 train_loss=0.131186 val_mse=0.028660 best_val=0.018080 patience=1/10
+[2026-05-04 16:38:54] FinalOurs-m0.7-S16 | Epoch 3/50 train_loss=0.124569 val_mse=0.037848 best_val=0.018080 patience=2/10
+[2026-05-04 16:39:01] FinalOurs-m0.7-S16 | Epoch 4/50 train_loss=0.117289 val_mse=0.067227 best_val=0.018080 patience=3/10
+[2026-05-04 16:39:07] FinalOurs-m0.7-S16 | Epoch 5/50 train_loss=0.114447 val_mse=0.035845 best_val=0.018080 patience=4/10
+[2026-05-04 16:39:13] FinalOurs-m0.7-S16 | Epoch 6/50 train_loss=0.109603 val_mse=0.081465 best_val=0.018080 patience=5/10
+[2026-05-04 16:39:19] FinalOurs-m0.7-S16 | Epoch 7/50 train_loss=0.106930 val_mse=0.054901 best_val=0.018080 patience=6/10
+[2026-05-04 16:39:26] FinalOurs-m0.7-S16 | Epoch 8/50 train_loss=0.103993 val_mse=0.097812 best_val=0.018080 patience=7/10
+[2026-05-04 16:39:32] FinalOurs-m0.7-S16 | Epoch 9/50 train_loss=0.099699 val_mse=0.085270 best_val=0.018080 patience=8/10
+[2026-05-04 16:39:38] FinalOurs-m0.7-S16 | Epoch 10/50 train_loss=0.100264 val_mse=0.069664 best_val=0.018080 patience=9/10
+[2026-05-04 16:39:44] FinalOurs-m0.7-S16 | Epoch 11/50 train_loss=0.097770 val_mse=0.034167 best_val=0.018080 patience=10/10
+[2026-05-04 16:39:44] FinalOurs-m0.7-S16 | Early stop at epoch 11, best=1
+[2026-05-04 16:39:45] FinalOurs-m0.7-S16 DONE | MSE=0.018080 RMSE=0.134460 MAE=0.092857 Pearson=0.955168 [best_epoch=1]
+    MSE=0.0181  Pearson=0.9552
+
+  [7/15] Holdout: S17
+[2026-05-04 16:39:51] FinalOurs-m0.7-S17 | Epoch 1/50 train_loss=0.155306 val_mse=0.073040 best_val=0.073040 patience=0/10
+[2026-05-04 16:39:57] FinalOurs-m0.7-S17 | Epoch 2/50 train_loss=0.135528 val_mse=0.051593 best_val=0.051593 patience=0/10
+[2026-05-04 16:40:03] FinalOurs-m0.7-S17 | Epoch 3/50 train_loss=0.127829 val_mse=0.065064 best_val=0.051593 patience=1/10
+[2026-05-04 16:40:10] FinalOurs-m0.7-S17 | Epoch 4/50 train_loss=0.121331 val_mse=0.052000 best_val=0.051593 patience=2/10
+[2026-05-04 16:40:16] FinalOurs-m0.7-S17 | Epoch 5/50 train_loss=0.115874 val_mse=0.057834 best_val=0.051593 patience=3/10
+[2026-05-04 16:40:23] FinalOurs-m0.7-S17 | Epoch 6/50 train_loss=0.111449 val_mse=0.043268 best_val=0.043268 patience=0/10
+[2026-05-04 16:40:29] FinalOurs-m0.7-S17 | Epoch 7/50 train_loss=0.108017 val_mse=0.056036 best_val=0.043268 patience=1/10
+[2026-05-04 16:40:35] FinalOurs-m0.7-S17 | Epoch 8/50 train_loss=0.104724 val_mse=0.040149 best_val=0.040149 patience=0/10
+[2026-05-04 16:40:42] FinalOurs-m0.7-S17 | Epoch 9/50 train_loss=0.102908 val_mse=0.053993 best_val=0.040149 patience=1/10
+[2026-05-04 16:40:48] FinalOurs-m0.7-S17 | Epoch 10/50 train_loss=0.101814 val_mse=0.041291 best_val=0.040149 patience=2/10
+[2026-05-04 16:40:55] FinalOurs-m0.7-S17 | Epoch 11/50 train_loss=0.100443 val_mse=0.072067 best_val=0.040149 patience=3/10
+[2026-05-04 16:41:01] FinalOurs-m0.7-S17 | Epoch 12/50 train_loss=0.098993 val_mse=0.071252 best_val=0.040149 patience=4/10
+[2026-05-04 16:41:08] FinalOurs-m0.7-S17 | Epoch 13/50 train_loss=0.097310 val_mse=0.030236 best_val=0.030236 patience=0/10
+[2026-05-04 16:41:14] FinalOurs-m0.7-S17 | Epoch 14/50 train_loss=0.097548 val_mse=0.041381 best_val=0.030236 patience=1/10
+[2026-05-04 16:41:20] FinalOurs-m0.7-S17 | Epoch 15/50 train_loss=0.095333 val_mse=0.040459 best_val=0.030236 patience=2/10
+[2026-05-04 16:41:27] FinalOurs-m0.7-S17 | Epoch 16/50 train_loss=0.094645 val_mse=0.031891 best_val=0.030236 patience=3/10
+[2026-05-04 16:41:33] FinalOurs-m0.7-S17 | Epoch 17/50 train_loss=0.094052 val_mse=0.091051 best_val=0.030236 patience=4/10
+[2026-05-04 16:41:39] FinalOurs-m0.7-S17 | Epoch 18/50 train_loss=0.094173 val_mse=0.047722 best_val=0.030236 patience=5/10
+[2026-05-04 16:41:45] FinalOurs-m0.7-S17 | Epoch 19/50 train_loss=0.091936 val_mse=0.060091 best_val=0.030236 patience=6/10
+[2026-05-04 16:41:51] FinalOurs-m0.7-S17 | Epoch 20/50 train_loss=0.089846 val_mse=0.048856 best_val=0.030236 patience=7/10
+[2026-05-04 16:41:57] FinalOurs-m0.7-S17 | Epoch 21/50 train_loss=0.091820 val_mse=0.034927 best_val=0.030236 patience=8/10
+[2026-05-04 16:42:04] FinalOurs-m0.7-S17 | Epoch 22/50 train_loss=0.090672 val_mse=0.057557 best_val=0.030236 patience=9/10
+[2026-05-04 16:42:10] FinalOurs-m0.7-S17 | Epoch 23/50 train_loss=0.090254 val_mse=0.045483 best_val=0.030236 patience=10/10
+[2026-05-04 16:42:10] FinalOurs-m0.7-S17 | Early stop at epoch 23, best=13
+[2026-05-04 16:42:10] FinalOurs-m0.7-S17 DONE | MSE=0.030236 RMSE=0.173886 MAE=0.131321 Pearson=0.927186 [best_epoch=13]
+    MSE=0.0302  Pearson=0.9272
+
+  [8/15] Holdout: S2
+[2026-05-04 16:42:16] FinalOurs-m0.7-S2 | Epoch 1/50 train_loss=0.149040 val_mse=0.232106 best_val=0.232106 patience=0/10
+[2026-05-04 16:42:22] FinalOurs-m0.7-S2 | Epoch 2/50 train_loss=0.120960 val_mse=0.224270 best_val=0.224270 patience=0/10
+[2026-05-04 16:42:29] FinalOurs-m0.7-S2 | Epoch 3/50 train_loss=0.113383 val_mse=0.241360 best_val=0.224270 patience=1/10
+[2026-05-04 16:42:35] FinalOurs-m0.7-S2 | Epoch 4/50 train_loss=0.108640 val_mse=0.247581 best_val=0.224270 patience=2/10
+[2026-05-04 16:42:41] FinalOurs-m0.7-S2 | Epoch 5/50 train_loss=0.103399 val_mse=0.249513 best_val=0.224270 patience=3/10
+[2026-05-04 16:42:47] FinalOurs-m0.7-S2 | Epoch 6/50 train_loss=0.099227 val_mse=0.267353 best_val=0.224270 patience=4/10
+[2026-05-04 16:42:53] FinalOurs-m0.7-S2 | Epoch 7/50 train_loss=0.096402 val_mse=0.265466 best_val=0.224270 patience=5/10
+[2026-05-04 16:42:59] FinalOurs-m0.7-S2 | Epoch 8/50 train_loss=0.094892 val_mse=0.248928 best_val=0.224270 patience=6/10
+[2026-05-04 16:43:05] FinalOurs-m0.7-S2 | Epoch 9/50 train_loss=0.092540 val_mse=0.300236 best_val=0.224270 patience=7/10
+[2026-05-04 16:43:11] FinalOurs-m0.7-S2 | Epoch 10/50 train_loss=0.093441 val_mse=0.279430 best_val=0.224270 patience=8/10
+[2026-05-04 16:43:18] FinalOurs-m0.7-S2 | Epoch 11/50 train_loss=0.089073 val_mse=0.261133 best_val=0.224270 patience=9/10
+[2026-05-04 16:43:24] FinalOurs-m0.7-S2 | Epoch 12/50 train_loss=0.088802 val_mse=0.294744 best_val=0.224270 patience=10/10
+[2026-05-04 16:43:24] FinalOurs-m0.7-S2 | Early stop at epoch 12, best=2
+[2026-05-04 16:43:24] FinalOurs-m0.7-S2 DONE | MSE=0.224270 RMSE=0.473571 MAE=0.402780 Pearson=-0.124108 [best_epoch=2]
+    MSE=0.2243  Pearson=-0.1241
+
+  [9/15] Holdout: S3
+[2026-05-04 16:43:30] FinalOurs-m0.7-S3 | Epoch 1/50 train_loss=0.148004 val_mse=0.179794 best_val=0.179794 patience=0/10
+[2026-05-04 16:43:36] FinalOurs-m0.7-S3 | Epoch 2/50 train_loss=0.121795 val_mse=0.196327 best_val=0.179794 patience=1/10
+[2026-05-04 16:43:42] FinalOurs-m0.7-S3 | Epoch 3/50 train_loss=0.115207 val_mse=0.214338 best_val=0.179794 patience=2/10
+[2026-05-04 16:43:49] FinalOurs-m0.7-S3 | Epoch 4/50 train_loss=0.109479 val_mse=0.190544 best_val=0.179794 patience=3/10
+[2026-05-04 16:43:55] FinalOurs-m0.7-S3 | Epoch 5/50 train_loss=0.104277 val_mse=0.187690 best_val=0.179794 patience=4/10
+[2026-05-04 16:44:01] FinalOurs-m0.7-S3 | Epoch 6/50 train_loss=0.099972 val_mse=0.175549 best_val=0.175549 patience=0/10
+[2026-05-04 16:44:07] FinalOurs-m0.7-S3 | Epoch 7/50 train_loss=0.096637 val_mse=0.233428 best_val=0.175549 patience=1/10
+[2026-05-04 16:44:13] FinalOurs-m0.7-S3 | Epoch 8/50 train_loss=0.094312 val_mse=0.175489 best_val=0.175489 patience=0/10
+[2026-05-04 16:44:19] FinalOurs-m0.7-S3 | Epoch 9/50 train_loss=0.092457 val_mse=0.221069 best_val=0.175489 patience=1/10
+[2026-05-04 16:44:26] FinalOurs-m0.7-S3 | Epoch 10/50 train_loss=0.088815 val_mse=0.236813 best_val=0.175489 patience=2/10
+[2026-05-04 16:44:32] FinalOurs-m0.7-S3 | Epoch 11/50 train_loss=0.088453 val_mse=0.202427 best_val=0.175489 patience=3/10
+[2026-05-04 16:44:38] FinalOurs-m0.7-S3 | Epoch 12/50 train_loss=0.087130 val_mse=0.203739 best_val=0.175489 patience=4/10
+[2026-05-04 16:44:44] FinalOurs-m0.7-S3 | Epoch 13/50 train_loss=0.085635 val_mse=0.207021 best_val=0.175489 patience=5/10
+[2026-05-04 16:44:50] FinalOurs-m0.7-S3 | Epoch 14/50 train_loss=0.084841 val_mse=0.251791 best_val=0.175489 patience=6/10
+[2026-05-04 16:44:57] FinalOurs-m0.7-S3 | Epoch 15/50 train_loss=0.083024 val_mse=0.188287 best_val=0.175489 patience=7/10
+[2026-05-04 16:45:03] FinalOurs-m0.7-S3 | Epoch 16/50 train_loss=0.082255 val_mse=0.178892 best_val=0.175489 patience=8/10
+[2026-05-04 16:45:09] FinalOurs-m0.7-S3 | Epoch 17/50 train_loss=0.082257 val_mse=0.177794 best_val=0.175489 patience=9/10
+[2026-05-04 16:45:15] FinalOurs-m0.7-S3 | Epoch 18/50 train_loss=0.079733 val_mse=0.207788 best_val=0.175489 patience=10/10
+[2026-05-04 16:45:15] FinalOurs-m0.7-S3 | Early stop at epoch 18, best=8
+[2026-05-04 16:45:15] FinalOurs-m0.7-S3 DONE | MSE=0.175489 RMSE=0.418914 MAE=0.366830 Pearson=0.327888 [best_epoch=8]
+    MSE=0.1755  Pearson=0.3279
+
+  [10/15] Holdout: S4
+[2026-05-04 16:45:22] FinalOurs-m0.7-S4 | Epoch 1/50 train_loss=0.151739 val_mse=0.158810 best_val=0.158810 patience=0/10
+[2026-05-04 16:45:28] FinalOurs-m0.7-S4 | Epoch 2/50 train_loss=0.132415 val_mse=0.154936 best_val=0.154936 patience=0/10
+[2026-05-04 16:45:34] FinalOurs-m0.7-S4 | Epoch 3/50 train_loss=0.124320 val_mse=0.141702 best_val=0.141702 patience=0/10
+[2026-05-04 16:45:41] FinalOurs-m0.7-S4 | Epoch 4/50 train_loss=0.117756 val_mse=0.123301 best_val=0.123301 patience=0/10
+[2026-05-04 16:45:47] FinalOurs-m0.7-S4 | Epoch 5/50 train_loss=0.112855 val_mse=0.108839 best_val=0.108839 patience=0/10
+[2026-05-04 16:45:53] FinalOurs-m0.7-S4 | Epoch 6/50 train_loss=0.108464 val_mse=0.084772 best_val=0.084772 patience=0/10
+[2026-05-04 16:45:59] FinalOurs-m0.7-S4 | Epoch 7/50 train_loss=0.106006 val_mse=0.144791 best_val=0.084772 patience=1/10
+[2026-05-04 16:46:05] FinalOurs-m0.7-S4 | Epoch 8/50 train_loss=0.103716 val_mse=0.147784 best_val=0.084772 patience=2/10
+[2026-05-04 16:46:12] FinalOurs-m0.7-S4 | Epoch 9/50 train_loss=0.099989 val_mse=0.169266 best_val=0.084772 patience=3/10
+[2026-05-04 16:46:18] FinalOurs-m0.7-S4 | Epoch 10/50 train_loss=0.099224 val_mse=0.202886 best_val=0.084772 patience=4/10
+[2026-05-04 16:46:24] FinalOurs-m0.7-S4 | Epoch 11/50 train_loss=0.096632 val_mse=0.198029 best_val=0.084772 patience=5/10
+[2026-05-04 16:46:30] FinalOurs-m0.7-S4 | Epoch 12/50 train_loss=0.095577 val_mse=0.271141 best_val=0.084772 patience=6/10
+[2026-05-04 16:46:36] FinalOurs-m0.7-S4 | Epoch 13/50 train_loss=0.093336 val_mse=0.215142 best_val=0.084772 patience=7/10
+[2026-05-04 16:46:43] FinalOurs-m0.7-S4 | Epoch 14/50 train_loss=0.092866 val_mse=0.310915 best_val=0.084772 patience=8/10
+[2026-05-04 16:46:49] FinalOurs-m0.7-S4 | Epoch 15/50 train_loss=0.091448 val_mse=0.388486 best_val=0.084772 patience=9/10
+[2026-05-04 16:46:55] FinalOurs-m0.7-S4 | Epoch 16/50 train_loss=0.089876 val_mse=0.333709 best_val=0.084772 patience=10/10
+[2026-05-04 16:46:55] FinalOurs-m0.7-S4 | Early stop at epoch 16, best=6
+[2026-05-04 16:46:55] FinalOurs-m0.7-S4 DONE | MSE=0.084772 RMSE=0.291156 MAE=0.239577 Pearson=0.866624 [best_epoch=6]
+    MSE=0.0848  Pearson=0.8666
+
+  [11/15] Holdout: S5
+[2026-05-04 16:47:02] FinalOurs-m0.7-S5 | Epoch 1/50 train_loss=0.150712 val_mse=0.146357 best_val=0.146357 patience=0/10
+[2026-05-04 16:47:08] FinalOurs-m0.7-S5 | Epoch 2/50 train_loss=0.126724 val_mse=0.159097 best_val=0.146357 patience=1/10
+[2026-05-04 16:47:14] FinalOurs-m0.7-S5 | Epoch 3/50 train_loss=0.121237 val_mse=0.163164 best_val=0.146357 patience=2/10
+[2026-05-04 16:47:21] FinalOurs-m0.7-S5 | Epoch 4/50 train_loss=0.116423 val_mse=0.200544 best_val=0.146357 patience=3/10
+[2026-05-04 16:47:27] FinalOurs-m0.7-S5 | Epoch 5/50 train_loss=0.112713 val_mse=0.124163 best_val=0.124163 patience=0/10
+[2026-05-04 16:47:34] FinalOurs-m0.7-S5 | Epoch 6/50 train_loss=0.109581 val_mse=0.160128 best_val=0.124163 patience=1/10
+[2026-05-04 16:47:40] FinalOurs-m0.7-S5 | Epoch 7/50 train_loss=0.107403 val_mse=0.139139 best_val=0.124163 patience=2/10
+[2026-05-04 16:47:46] FinalOurs-m0.7-S5 | Epoch 8/50 train_loss=0.104752 val_mse=0.197617 best_val=0.124163 patience=3/10
+[2026-05-04 16:47:53] FinalOurs-m0.7-S5 | Epoch 9/50 train_loss=0.104049 val_mse=0.158613 best_val=0.124163 patience=4/10
+[2026-05-04 16:47:59] FinalOurs-m0.7-S5 | Epoch 10/50 train_loss=0.102024 val_mse=0.156774 best_val=0.124163 patience=5/10
+[2026-05-04 16:48:05] FinalOurs-m0.7-S5 | Epoch 11/50 train_loss=0.100065 val_mse=0.136338 best_val=0.124163 patience=6/10
+[2026-05-04 16:48:11] FinalOurs-m0.7-S5 | Epoch 12/50 train_loss=0.097203 val_mse=0.097650 best_val=0.097650 patience=0/10
+[2026-05-04 16:48:17] FinalOurs-m0.7-S5 | Epoch 13/50 train_loss=0.096935 val_mse=0.123475 best_val=0.097650 patience=1/10
+[2026-05-04 16:48:24] FinalOurs-m0.7-S5 | Epoch 14/50 train_loss=0.095704 val_mse=0.150001 best_val=0.097650 patience=2/10
+[2026-05-04 16:48:30] FinalOurs-m0.7-S5 | Epoch 15/50 train_loss=0.095539 val_mse=0.164919 best_val=0.097650 patience=3/10
+[2026-05-04 16:48:36] FinalOurs-m0.7-S5 | Epoch 16/50 train_loss=0.093843 val_mse=0.103822 best_val=0.097650 patience=4/10
+[2026-05-04 16:48:42] FinalOurs-m0.7-S5 | Epoch 17/50 train_loss=0.092764 val_mse=0.177293 best_val=0.097650 patience=5/10
+[2026-05-04 16:48:48] FinalOurs-m0.7-S5 | Epoch 18/50 train_loss=0.091607 val_mse=0.103606 best_val=0.097650 patience=6/10
+[2026-05-04 16:48:55] FinalOurs-m0.7-S5 | Epoch 19/50 train_loss=0.091283 val_mse=0.158409 best_val=0.097650 patience=7/10
+[2026-05-04 16:49:01] FinalOurs-m0.7-S5 | Epoch 20/50 train_loss=0.090877 val_mse=0.150635 best_val=0.097650 patience=8/10
+[2026-05-04 16:49:07] FinalOurs-m0.7-S5 | Epoch 21/50 train_loss=0.088836 val_mse=0.132752 best_val=0.097650 patience=9/10
+[2026-05-04 16:49:13] FinalOurs-m0.7-S5 | Epoch 22/50 train_loss=0.089082 val_mse=0.116860 best_val=0.097650 patience=10/10
+[2026-05-04 16:49:13] FinalOurs-m0.7-S5 | Early stop at epoch 22, best=12
+[2026-05-04 16:49:14] FinalOurs-m0.7-S5 DONE | MSE=0.097650 RMSE=0.312491 MAE=0.270461 Pearson=0.750994 [best_epoch=12]
+    MSE=0.0977  Pearson=0.7510
+
+  [12/15] Holdout: S6
+[2026-05-04 16:49:20] FinalOurs-m0.7-S6 | Epoch 1/50 train_loss=0.148737 val_mse=0.129155 best_val=0.129155 patience=0/10
+[2026-05-04 16:49:26] FinalOurs-m0.7-S6 | Epoch 2/50 train_loss=0.127805 val_mse=0.148191 best_val=0.129155 patience=1/10
+[2026-05-04 16:49:32] FinalOurs-m0.7-S6 | Epoch 3/50 train_loss=0.122297 val_mse=0.149481 best_val=0.129155 patience=2/10
+[2026-05-04 16:49:39] FinalOurs-m0.7-S6 | Epoch 4/50 train_loss=0.118691 val_mse=0.123587 best_val=0.123587 patience=0/10
+[2026-05-04 16:49:45] FinalOurs-m0.7-S6 | Epoch 5/50 train_loss=0.112181 val_mse=0.147416 best_val=0.123587 patience=1/10
+[2026-05-04 16:49:51] FinalOurs-m0.7-S6 | Epoch 6/50 train_loss=0.109045 val_mse=0.116805 best_val=0.116805 patience=0/10
+[2026-05-04 16:49:58] FinalOurs-m0.7-S6 | Epoch 7/50 train_loss=0.105677 val_mse=0.106138 best_val=0.106138 patience=0/10
+[2026-05-04 16:50:04] FinalOurs-m0.7-S6 | Epoch 8/50 train_loss=0.103421 val_mse=0.129385 best_val=0.106138 patience=1/10
+[2026-05-04 16:50:10] FinalOurs-m0.7-S6 | Epoch 9/50 train_loss=0.100975 val_mse=0.158846 best_val=0.106138 patience=2/10
+[2026-05-04 16:50:16] FinalOurs-m0.7-S6 | Epoch 10/50 train_loss=0.098585 val_mse=0.126152 best_val=0.106138 patience=3/10
+[2026-05-04 16:50:23] FinalOurs-m0.7-S6 | Epoch 11/50 train_loss=0.097310 val_mse=0.134194 best_val=0.106138 patience=4/10
+[2026-05-04 16:50:29] FinalOurs-m0.7-S6 | Epoch 12/50 train_loss=0.095616 val_mse=0.144738 best_val=0.106138 patience=5/10
+[2026-05-04 16:50:35] FinalOurs-m0.7-S6 | Epoch 13/50 train_loss=0.095414 val_mse=0.143981 best_val=0.106138 patience=6/10
+[2026-05-04 16:50:41] FinalOurs-m0.7-S6 | Epoch 14/50 train_loss=0.093093 val_mse=0.129027 best_val=0.106138 patience=7/10
+[2026-05-04 16:50:47] FinalOurs-m0.7-S6 | Epoch 15/50 train_loss=0.091745 val_mse=0.100324 best_val=0.100324 patience=0/10
+[2026-05-04 16:50:54] FinalOurs-m0.7-S6 | Epoch 16/50 train_loss=0.092317 val_mse=0.133326 best_val=0.100324 patience=1/10
+[2026-05-04 16:51:00] FinalOurs-m0.7-S6 | Epoch 17/50 train_loss=0.090140 val_mse=0.139929 best_val=0.100324 patience=2/10
+[2026-05-04 16:51:06] FinalOurs-m0.7-S6 | Epoch 18/50 train_loss=0.090090 val_mse=0.108516 best_val=0.100324 patience=3/10
+[2026-05-04 16:51:12] FinalOurs-m0.7-S6 | Epoch 19/50 train_loss=0.088784 val_mse=0.155141 best_val=0.100324 patience=4/10
+[2026-05-04 16:51:18] FinalOurs-m0.7-S6 | Epoch 20/50 train_loss=0.088879 val_mse=0.116156 best_val=0.100324 patience=5/10
+[2026-05-04 16:51:24] FinalOurs-m0.7-S6 | Epoch 21/50 train_loss=0.086895 val_mse=0.152674 best_val=0.100324 patience=6/10
+[2026-05-04 16:51:31] FinalOurs-m0.7-S6 | Epoch 22/50 train_loss=0.087283 val_mse=0.118107 best_val=0.100324 patience=7/10
+[2026-05-04 16:51:37] FinalOurs-m0.7-S6 | Epoch 23/50 train_loss=0.084857 val_mse=0.120727 best_val=0.100324 patience=8/10
+[2026-05-04 16:51:43] FinalOurs-m0.7-S6 | Epoch 24/50 train_loss=0.085049 val_mse=0.123389 best_val=0.100324 patience=9/10
+[2026-05-04 16:51:49] FinalOurs-m0.7-S6 | Epoch 25/50 train_loss=0.084834 val_mse=0.122392 best_val=0.100324 patience=10/10
+[2026-05-04 16:51:49] FinalOurs-m0.7-S6 | Early stop at epoch 25, best=15
+[2026-05-04 16:51:50] FinalOurs-m0.7-S6 DONE | MSE=0.100324 RMSE=0.316740 MAE=0.288775 Pearson=0.802424 [best_epoch=15]
+    MSE=0.1003  Pearson=0.8024
+
+  [13/15] Holdout: S7
+[2026-05-04 16:51:56] FinalOurs-m0.7-S7 | Epoch 1/50 train_loss=0.143406 val_mse=0.748246 best_val=0.748246 patience=0/10
+[2026-05-04 16:52:02] FinalOurs-m0.7-S7 | Epoch 2/50 train_loss=0.119807 val_mse=0.736778 best_val=0.736778 patience=0/10
+[2026-05-04 16:52:08] FinalOurs-m0.7-S7 | Epoch 3/50 train_loss=0.112135 val_mse=0.924326 best_val=0.736778 patience=1/10
+[2026-05-04 16:52:14] FinalOurs-m0.7-S7 | Epoch 4/50 train_loss=0.107224 val_mse=0.951070 best_val=0.736778 patience=2/10
+[2026-05-04 16:52:21] FinalOurs-m0.7-S7 | Epoch 5/50 train_loss=0.102265 val_mse=0.523719 best_val=0.523719 patience=0/10
+[2026-05-04 16:52:27] FinalOurs-m0.7-S7 | Epoch 6/50 train_loss=0.097906 val_mse=0.612069 best_val=0.523719 patience=1/10
+[2026-05-04 16:52:33] FinalOurs-m0.7-S7 | Epoch 7/50 train_loss=0.094993 val_mse=0.687134 best_val=0.523719 patience=2/10
+[2026-05-04 16:52:39] FinalOurs-m0.7-S7 | Epoch 8/50 train_loss=0.092764 val_mse=0.679523 best_val=0.523719 patience=3/10
+[2026-05-04 16:52:45] FinalOurs-m0.7-S7 | Epoch 9/50 train_loss=0.089663 val_mse=1.164353 best_val=0.523719 patience=4/10
+[2026-05-04 16:52:52] FinalOurs-m0.7-S7 | Epoch 10/50 train_loss=0.088852 val_mse=1.332367 best_val=0.523719 patience=5/10
+[2026-05-04 16:52:58] FinalOurs-m0.7-S7 | Epoch 11/50 train_loss=0.085850 val_mse=0.896741 best_val=0.523719 patience=6/10
+[2026-05-04 16:53:04] FinalOurs-m0.7-S7 | Epoch 12/50 train_loss=0.085015 val_mse=0.971272 best_val=0.523719 patience=7/10
+[2026-05-04 16:53:10] FinalOurs-m0.7-S7 | Epoch 13/50 train_loss=0.085096 val_mse=0.986631 best_val=0.523719 patience=8/10
+[2026-05-04 16:53:16] FinalOurs-m0.7-S7 | Epoch 14/50 train_loss=0.083493 val_mse=1.262503 best_val=0.523719 patience=9/10
+[2026-05-04 16:53:23] FinalOurs-m0.7-S7 | Epoch 15/50 train_loss=0.082685 val_mse=1.642241 best_val=0.523719 patience=10/10
+[2026-05-04 16:53:23] FinalOurs-m0.7-S7 | Early stop at epoch 15, best=5
+[2026-05-04 16:53:23] FinalOurs-m0.7-S7 DONE | MSE=0.523719 RMSE=0.723684 MAE=0.664648 Pearson=0.909681 [best_epoch=5]
+    MSE=0.5237  Pearson=0.9097
+
+  [14/15] Holdout: S8
+[2026-05-04 16:53:29] FinalOurs-m0.7-S8 | Epoch 1/50 train_loss=0.149967 val_mse=0.127823 best_val=0.127823 patience=0/10
+[2026-05-04 16:53:35] FinalOurs-m0.7-S8 | Epoch 2/50 train_loss=0.128028 val_mse=0.137418 best_val=0.127823 patience=1/10
+[2026-05-04 16:53:42] FinalOurs-m0.7-S8 | Epoch 3/50 train_loss=0.121954 val_mse=0.114935 best_val=0.114935 patience=0/10
+[2026-05-04 16:53:48] FinalOurs-m0.7-S8 | Epoch 4/50 train_loss=0.117793 val_mse=0.121094 best_val=0.114935 patience=1/10
+[2026-05-04 16:53:54] FinalOurs-m0.7-S8 | Epoch 5/50 train_loss=0.113563 val_mse=0.112196 best_val=0.112196 patience=0/10
+[2026-05-04 16:54:00] FinalOurs-m0.7-S8 | Epoch 6/50 train_loss=0.110299 val_mse=0.113572 best_val=0.112196 patience=1/10
+[2026-05-04 16:54:06] FinalOurs-m0.7-S8 | Epoch 7/50 train_loss=0.106784 val_mse=0.093602 best_val=0.093602 patience=0/10
+[2026-05-04 16:54:13] FinalOurs-m0.7-S8 | Epoch 8/50 train_loss=0.105029 val_mse=0.096099 best_val=0.093602 patience=1/10
+[2026-05-04 16:54:19] FinalOurs-m0.7-S8 | Epoch 9/50 train_loss=0.102681 val_mse=0.087569 best_val=0.087569 patience=0/10
+[2026-05-04 16:54:25] FinalOurs-m0.7-S8 | Epoch 10/50 train_loss=0.100486 val_mse=0.105203 best_val=0.087569 patience=1/10
+[2026-05-04 16:54:31] FinalOurs-m0.7-S8 | Epoch 11/50 train_loss=0.098627 val_mse=0.092192 best_val=0.087569 patience=2/10
+[2026-05-04 16:54:37] FinalOurs-m0.7-S8 | Epoch 12/50 train_loss=0.096316 val_mse=0.100223 best_val=0.087569 patience=3/10
+[2026-05-04 16:54:43] FinalOurs-m0.7-S8 | Epoch 13/50 train_loss=0.095739 val_mse=0.087496 best_val=0.087496 patience=0/10
+[2026-05-04 16:54:50] FinalOurs-m0.7-S8 | Epoch 14/50 train_loss=0.094346 val_mse=0.077204 best_val=0.077204 patience=0/10
+[2026-05-04 16:54:56] FinalOurs-m0.7-S8 | Epoch 15/50 train_loss=0.092121 val_mse=0.097009 best_val=0.077204 patience=1/10
+[2026-05-04 16:55:02] FinalOurs-m0.7-S8 | Epoch 16/50 train_loss=0.091512 val_mse=0.081146 best_val=0.077204 patience=2/10
+[2026-05-04 16:55:08] FinalOurs-m0.7-S8 | Epoch 17/50 train_loss=0.090266 val_mse=0.081991 best_val=0.077204 patience=3/10
+[2026-05-04 16:55:14] FinalOurs-m0.7-S8 | Epoch 18/50 train_loss=0.089533 val_mse=0.094334 best_val=0.077204 patience=4/10
+[2026-05-04 16:55:21] FinalOurs-m0.7-S8 | Epoch 19/50 train_loss=0.089866 val_mse=0.084097 best_val=0.077204 patience=5/10
+[2026-05-04 16:55:27] FinalOurs-m0.7-S8 | Epoch 20/50 train_loss=0.088533 val_mse=0.075793 best_val=0.075793 patience=0/10
+[2026-05-04 16:55:33] FinalOurs-m0.7-S8 | Epoch 21/50 train_loss=0.087606 val_mse=0.069250 best_val=0.069250 patience=0/10
+[2026-05-04 16:55:39] FinalOurs-m0.7-S8 | Epoch 22/50 train_loss=0.086922 val_mse=0.076156 best_val=0.069250 patience=1/10
+[2026-05-04 16:55:45] FinalOurs-m0.7-S8 | Epoch 23/50 train_loss=0.086000 val_mse=0.078391 best_val=0.069250 patience=2/10
+[2026-05-04 16:55:51] FinalOurs-m0.7-S8 | Epoch 24/50 train_loss=0.085722 val_mse=0.071237 best_val=0.069250 patience=3/10
+[2026-05-04 16:55:58] FinalOurs-m0.7-S8 | Epoch 25/50 train_loss=0.084679 val_mse=0.075367 best_val=0.069250 patience=4/10
+[2026-05-04 16:56:04] FinalOurs-m0.7-S8 | Epoch 26/50 train_loss=0.084678 val_mse=0.071136 best_val=0.069250 patience=5/10
+[2026-05-04 16:56:10] FinalOurs-m0.7-S8 | Epoch 27/50 train_loss=0.083866 val_mse=0.122320 best_val=0.069250 patience=6/10
+[2026-05-04 16:56:16] FinalOurs-m0.7-S8 | Epoch 28/50 train_loss=0.083064 val_mse=0.079225 best_val=0.069250 patience=7/10
+[2026-05-04 16:56:22] FinalOurs-m0.7-S8 | Epoch 29/50 train_loss=0.082230 val_mse=0.078588 best_val=0.069250 patience=8/10
+[2026-05-04 16:56:29] FinalOurs-m0.7-S8 | Epoch 30/50 train_loss=0.081875 val_mse=0.053073 best_val=0.053073 patience=0/10
+[2026-05-04 16:56:35] FinalOurs-m0.7-S8 | Epoch 31/50 train_loss=0.080938 val_mse=0.075917 best_val=0.053073 patience=1/10
+[2026-05-04 16:56:42] FinalOurs-m0.7-S8 | Epoch 32/50 train_loss=0.080449 val_mse=0.079447 best_val=0.053073 patience=2/10
+[2026-05-04 16:56:48] FinalOurs-m0.7-S8 | Epoch 33/50 train_loss=0.079819 val_mse=0.057446 best_val=0.053073 patience=3/10
+[2026-05-04 16:56:54] FinalOurs-m0.7-S8 | Epoch 34/50 train_loss=0.079770 val_mse=0.092764 best_val=0.053073 patience=4/10
+[2026-05-04 16:57:01] FinalOurs-m0.7-S8 | Epoch 35/50 train_loss=0.078262 val_mse=0.084655 best_val=0.053073 patience=5/10
+[2026-05-04 16:57:07] FinalOurs-m0.7-S8 | Epoch 36/50 train_loss=0.078871 val_mse=0.079715 best_val=0.053073 patience=6/10
+[2026-05-04 16:57:13] FinalOurs-m0.7-S8 | Epoch 37/50 train_loss=0.078229 val_mse=0.055235 best_val=0.053073 patience=7/10
+[2026-05-04 16:57:19] FinalOurs-m0.7-S8 | Epoch 38/50 train_loss=0.077094 val_mse=0.089850 best_val=0.053073 patience=8/10
+[2026-05-04 16:57:25] FinalOurs-m0.7-S8 | Epoch 39/50 train_loss=0.077119 val_mse=0.057086 best_val=0.053073 patience=9/10
+[2026-05-04 16:57:31] FinalOurs-m0.7-S8 | Epoch 40/50 train_loss=0.076899 val_mse=0.119278 best_val=0.053073 patience=10/10
+[2026-05-04 16:57:31] FinalOurs-m0.7-S8 | Early stop at epoch 40, best=30
+[2026-05-04 16:57:32] FinalOurs-m0.7-S8 DONE | MSE=0.053073 RMSE=0.230375 MAE=0.190458 Pearson=0.877553 [best_epoch=30]
+    MSE=0.0531  Pearson=0.8776
+
+  [15/15] Holdout: S9
+[2026-05-04 16:57:38] FinalOurs-m0.7-S9 | Epoch 1/50 train_loss=0.157470 val_mse=0.180156 best_val=0.180156 patience=0/10
+[2026-05-04 16:57:44] FinalOurs-m0.7-S9 | Epoch 2/50 train_loss=0.128574 val_mse=0.201939 best_val=0.180156 patience=1/10
+[2026-05-04 16:57:51] FinalOurs-m0.7-S9 | Epoch 3/50 train_loss=0.121729 val_mse=0.195304 best_val=0.180156 patience=2/10
+[2026-05-04 16:57:57] FinalOurs-m0.7-S9 | Epoch 4/50 train_loss=0.115012 val_mse=0.227044 best_val=0.180156 patience=3/10
+[2026-05-04 16:58:04] FinalOurs-m0.7-S9 | Epoch 5/50 train_loss=0.111306 val_mse=0.224729 best_val=0.180156 patience=4/10
+[2026-05-04 16:58:10] FinalOurs-m0.7-S9 | Epoch 6/50 train_loss=0.109338 val_mse=0.245197 best_val=0.180156 patience=5/10
+[2026-05-04 16:58:16] FinalOurs-m0.7-S9 | Epoch 7/50 train_loss=0.106504 val_mse=0.273480 best_val=0.180156 patience=6/10
+[2026-05-04 16:58:22] FinalOurs-m0.7-S9 | Epoch 8/50 train_loss=0.104227 val_mse=0.266879 best_val=0.180156 patience=7/10
+[2026-05-04 16:58:29] FinalOurs-m0.7-S9 | Epoch 9/50 train_loss=0.102160 val_mse=0.258565 best_val=0.180156 patience=8/10
+[2026-05-04 16:58:35] FinalOurs-m0.7-S9 | Epoch 10/50 train_loss=0.098935 val_mse=0.297827 best_val=0.180156 patience=9/10
+[2026-05-04 16:58:41] FinalOurs-m0.7-S9 | Epoch 11/50 train_loss=0.098554 val_mse=0.273153 best_val=0.180156 patience=10/10
+[2026-05-04 16:58:41] FinalOurs-m0.7-S9 | Early stop at epoch 11, best=1
+[2026-05-04 16:58:41] FinalOurs-m0.7-S9 DONE | MSE=0.180156 RMSE=0.424448 MAE=0.360677 Pearson=0.336855 [best_epoch=1]
+    MSE=0.1802  Pearson=0.3369
+  WESAD_LABEL_MAP patched in-place: {1: 1.0, 2: 0.0, 3: 0.6}
+  WESAD_LABEL_MAP restored to default
+
+============================================================
+敏感性分析结果汇总
+============================================================
+  Meditation       MSE (mean±std)   Pearson r (mean±std)
+----------------------------------------------------------
+         0.5     0.1571 ± 0.1209   0.6754 ± 0.2978
+         0.6     0.1524 ± 0.1395   0.7234 ± 0.2874
+         0.7     0.1372 ± 0.1187   0.7155 ± 0.2989
+
+结果已保存: /home/lora/repos/MulitiModal/paper/results/sensitivity_analysis.json

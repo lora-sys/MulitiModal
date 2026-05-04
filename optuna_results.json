@@ -1,0 +1,10 @@
+{
+  "best_trial": 17,
+  "best_value": 0.29525914301297496,
+  "best_params": {
+    "n_layers": 3,
+    "dropout": 0.1,
+    "learning_rate": 0.0021346559208986248
+  },
+  "n_trials": 22
+}

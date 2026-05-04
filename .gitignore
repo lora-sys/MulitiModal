@@ -28,3 +28,4 @@ training_output.log
 /results
 .opencode
 data
+tcm_ft_transformer/results
