@@ -5,7 +5,8 @@
 
 运行方式：
   cd /path/to/MulitiModal
-  python scripts/run_early_fusion_loso.py --device cuda
+  python scripts/run_early_fusion_loso.py
+  python scripts/run_early_fusion_loso.py --smoke   # 冒烟测试 (2折×2epochs)
 
 输出：
   - paper/results/early_fusion_loso.json
@@ -19,7 +20,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from pathlib import Path
-from datetime import datetime
 
 PROJ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJ))
@@ -32,6 +32,22 @@ from run_experiments import (
     _unpack_batch, _run_forward, regression_metrics,
     _strip_for_json, timestamp
 )
+
+
+def _auto_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _find_file(filename: str, search_dirs: list) -> Path | None:
+    for d in search_dirs:
+        candidate = d / filename
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def train_early_fusion_fold(
@@ -69,7 +85,6 @@ def train_early_fusion_fold(
         n_items = 0
         for batch in train_loader:
             dynamic_x, static_x, target = _unpack_batch(batch, device)
-            # Early Fusion forward: skip TCM/gates
             z_raw = model.dynamic_encoder(dynamic_x)
             final_input = torch.cat([z_raw.detach(), static_x], dim=-1)  # [B, 132]
             pred = model.forward_from_final_input(final_input)
@@ -129,14 +144,6 @@ def train_early_fusion_fold(
     }
 
 
-def _auto_device() -> str:
-    if torch.cuda.is_available():
-        return "cuda"
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", type=str, default="")
@@ -145,7 +152,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
-    parser.add_argument("--smoke", action="store_true", help="冒烟测试: 2 折 × 2 epochs, 快速验证流程")
+    parser.add_argument("--scaler-path", type=str, default="", help="WESAD scaler 路径 (可选，自动搜索)")
+    parser.add_argument("--smoke", action="store_true", help="冒烟测试: 2 折 × 2 epochs")
     args = parser.parse_args()
     device = args.device or _auto_device()
 
@@ -153,14 +161,25 @@ def main():
     epochs = 2 if smoke else args.epochs
     patience = 1 if smoke else args.patience
 
+    # --- 自动搜索 scaler ---
+    if args.scaler_path:
+        scaler_path = Path(args.scaler_path)
+    else:
+        search = [PROJ / "tcm_ft_transformer", PROJ / "tcm_ft_transformer" / "checkpoints", PROJ / "checkpoints"]
+        scaler_path = _find_file("scaler_params.npz", search)
+        if scaler_path is None:
+            # fallback: 传一个不存在的路径，load_scaler_npz 会用 identity scaler
+            scaler_path = PROJ / "scaler_params.npz"
+
     print("=" * 60)
     print(f"Early Fusion LOSO {'(SMOKE)' if smoke else '(快速版)'}")
     print(f"Device: {device}")
+    print(f"Scaler: {scaler_path} (exists={scaler_path.exists()})")
     print("=" * 60)
 
     # 加载数据
-    dataset = WESADDataset(PROJ / "data" / "wesad")
-    unique_subjects = sorted(set(s for s in dataset.subject_ids))
+    dataset = WESADDataset(PROJ / "data" / "wesad", scaler_path)
+    unique_subjects = sorted(set(s for s in dataset.sample_subject_ids))
     if smoke:
         unique_subjects = unique_subjects[:2]
     print(f"被试: {unique_subjects} (共 {len(unique_subjects)} 人)")
@@ -171,8 +190,8 @@ def main():
     fold_results = []
     for i, holdout in enumerate(unique_subjects):
         print(f"\n[{i+1}/{len(unique_subjects)}] Holdout: {holdout}")
-        train_idx = [j for j, s in enumerate(dataset.subject_ids) if s != holdout]
-        val_idx = [j for j, s in enumerate(dataset.subject_ids) if s == holdout]
+        train_idx = [j for j, s in enumerate(dataset.sample_subject_ids) if s != holdout]
+        val_idx = [j for j, s in enumerate(dataset.sample_subject_ids) if s == holdout]
 
         result = train_early_fusion_fold(
             dataset=dataset,

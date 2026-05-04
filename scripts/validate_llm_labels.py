@@ -7,6 +7,7 @@ LLM 标签质量验证实验
 运行方式：
   cd /path/to/MulitiModal
   python scripts/validate_llm_labels.py
+  python scripts/validate_llm_labels.py --smoke   # 冒烟测试 (20 条)
 
 输出：
   - Top-1 体质类型一致率
@@ -18,11 +19,12 @@ LLM 标签质量验证实验
 import os
 import sys
 import argparse
+import json
 import numpy as np
 import pandas as pd
 import torch
 from pathlib import Path
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr, entropy
 from sklearn.metrics import confusion_matrix
 
 # 添加项目路径
@@ -35,11 +37,8 @@ from config import DATA_CONFIG
 # ============================================================
 # 配置
 # ============================================================
-N_SAMPLE = 500           # 抽样数量
-RANDOM_SEED = 42         # 随机种子
-CHECKPOINT_PATH = PROJ / "tcm_ft_transformer" / "checkpoints" / "best_model.pth"
-SCALER_PATH = PROJ / "tcm_ft_transformer" / "scaler_params.npz"
-DATA_PATH = PROJ / "vital_signs_dataset_final.csv"
+N_SAMPLE = 500
+RANDOM_SEED = 42
 
 CONSTITUTION_NAMES = [
     "平和质", "气虚质", "阳虚质", "阴虚质",
@@ -47,29 +46,86 @@ CONSTITUTION_NAMES = [
 ]
 
 
+def _find_file(filename: str, search_dirs: list[Path]) -> Path | None:
+    """在多个目录中搜索文件，返回第一个找到的路径。"""
+    for d in search_dirs:
+        candidate = d / filename
+        if candidate.exists():
+            return candidate
+        # 也搜索子目录 (最多 2 层)
+        for sub in d.iterdir():
+            if sub.is_dir():
+                candidate = sub / filename
+                if candidate.exists():
+                    return candidate
+                for sub2 in sub.iterdir():
+                    if sub2.is_dir():
+                        candidate = sub2 / filename
+                        if candidate.exists():
+                            return candidate
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--smoke", action="store_true", help="冒烟测试: 只用 20 条样本快速验证")
+    parser.add_argument("--data-path", type=str, default="", help="vital_signs_dataset_final.csv 路径")
+    parser.add_argument("--checkpoint", type=str, default="", help="FT-Transformer checkpoint 路径")
+    parser.add_argument("--scaler-path", type=str, default="", help="scaler_params.npz 路径")
     args = parser.parse_args()
 
     n_sample = 20 if args.smoke else N_SAMPLE
 
+    # --- 自动搜索文件 ---
+    search_dirs = [PROJ, PROJ / "tcm_ft_transformer", PROJ / "tcm_ft_transformer" / "data",
+                   PROJ / "checkpoints", PROJ / "tcm_ft_transformer" / "checkpoints"]
+
+    if args.data_path:
+        data_path = Path(args.data_path)
+    else:
+        data_path = _find_file("vital_signs_dataset_final.csv", search_dirs)
+    if data_path is None or not data_path.exists():
+        print("ERROR: 找不到 vital_signs_dataset_final.csv")
+        print("请用 --data-path 指定路径")
+        sys.exit(1)
+
+    if args.checkpoint:
+        checkpoint_path = Path(args.checkpoint)
+    else:
+        checkpoint_path = _find_file("best_model.pth", search_dirs)
+    if checkpoint_path is None or not checkpoint_path.exists():
+        print("ERROR: 找不到 FT-Transformer checkpoint (best_model.pth)")
+        print("请用 --checkpoint 指定路径")
+        sys.exit(1)
+
+    if args.scaler_path:
+        scaler_path = Path(args.scaler_path)
+    else:
+        scaler_path = _find_file("scaler_params.npz", search_dirs)
+    if scaler_path is None or not scaler_path.exists():
+        print("ERROR: 找不到 scaler_params.npz")
+        print("请用 --scaler-path 指定路径")
+        sys.exit(1)
+
     print("=" * 60)
     print(f"LLM 标签质量验证实验{' (SMOKE)' if args.smoke else ''}")
+    print(f"  数据: {data_path}")
+    print(f"  模型: {checkpoint_path}")
+    print(f"  Scaler: {scaler_path}")
     print("=" * 60)
 
     # ----------------------------------------------------------
     # 1. 加载数据
     # ----------------------------------------------------------
-    print(f"\n[1] 加载数据: {DATA_PATH}")
-    df = pd.read_csv(DATA_PATH)
+    print(f"\n[1] 加载数据...")
+    df = pd.read_csv(data_path)
     print(f"    总样本数: {len(df)}")
 
     n_features = DATA_CONFIG["n_features"]
     n_classes = DATA_CONFIG["n_classes"]
 
     X = df.iloc[:, :n_features].values.astype(np.float32)
-    y_llm = df.iloc[:, -n_classes:].values.astype(np.float32)  # LLM 生成的标签
+    y_llm = df.iloc[:, -n_classes:].values.astype(np.float32)
 
     # 标签归一化（与训练时一致：epsilon 平滑 + 行归一化）
     epsilon = 0.01
@@ -79,8 +135,8 @@ def main():
     # ----------------------------------------------------------
     # 2. 加载标准化参数
     # ----------------------------------------------------------
-    print(f"\n[2] 加载标准化参数: {SCALER_PATH}")
-    scaler = np.load(SCALER_PATH)
+    print(f"\n[2] 加载标准化参数...")
+    scaler = np.load(scaler_path)
     X_scaled = (X - scaler["mean"]) / scaler["std"]
 
     # ----------------------------------------------------------
@@ -95,7 +151,7 @@ def main():
     # ----------------------------------------------------------
     # 4. 加载 FT-Transformer 并推理
     # ----------------------------------------------------------
-    print(f"\n[4] 加载 FT-Transformer: {CHECKPOINT_PATH}")
+    print(f"\n[4] 加载 FT-Transformer...")
     if torch.cuda.is_available():
         device = torch.device("cuda")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -111,7 +167,7 @@ def main():
         n_layers=3,
         dropout=0.3
     )
-    checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if "model_state_dict" in checkpoint:
         model.load_state_dict(checkpoint["model_state_dict"])
     else:
@@ -123,7 +179,7 @@ def main():
     # 推理
     with torch.no_grad():
         X_tensor = torch.FloatTensor(X_sample).to(device)
-        y_pred = model(X_tensor).cpu().numpy()  # (N_SAMPLE, 9)
+        y_pred = model(X_tensor).cpu().numpy()  # (n_sample, 9)
 
     # ----------------------------------------------------------
     # 5. 计算指标
@@ -149,8 +205,7 @@ def main():
     mean_pearson = np.mean(pearson_per_dim)
     print(f"\n    平均 Pearson r (9维): {mean_pearson:.4f}")
 
-    # 整体分布的 KL 散度（可选）
-    from scipy.stats import entropy
+    # KL 散度
     kl_divs = []
     for i in range(n_sample):
         kl = entropy(y_llm_sample[i], y_pred[i])
@@ -180,7 +235,6 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "llm_label_validation.json"
 
-    import json
     result = {
         "n_sample": n_sample,
         "random_seed": RANDOM_SEED,

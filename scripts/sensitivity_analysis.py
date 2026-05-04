@@ -8,7 +8,8 @@
 
 运行方式：
   cd /path/to/MulitiModal
-  python scripts/sensitivity_analysis.py --device cuda
+  python scripts/sensitivity_analysis.py
+  python scripts/sensitivity_analysis.py --smoke   # 冒烟测试 (1组×2折×2epochs)
 
 输出：
   - paper/results/sensitivity_analysis.json
@@ -49,19 +50,19 @@ def _auto_device() -> str:
     return "cpu"
 
 
-def patch_label_map(meditation_val: float):
-    """In-place patch WESAD_LABEL_MAP in both src.config and src.data_loader.
+def _find_file(filename: str, search_dirs: list) -> Path | None:
+    for d in search_dirs:
+        candidate = d / filename
+        if candidate.exists():
+            return candidate
+    return None
 
-    Python module-level imports create name bindings to the *same dict object*.
-    Replacing the dict (e.g. via importlib.reload) breaks the binding — the
-    data_loader still sees the old values.  We must mutate the dict in-place
-    AND update the reference in data_loader's namespace.
-    """
+
+def patch_label_map(meditation_val: float):
+    """In-place patch WESAD_LABEL_MAP in both src.config and src.data_loader."""
     new_map = {1: 1.0, 2: 0.0, 3: meditation_val}
-    # Patch src.config (canonical source)
     _cfg.WESAD_LABEL_MAP.clear()
     _cfg.WESAD_LABEL_MAP.update(new_map)
-    # Patch data_loader's imported reference (module-level `from src.config import WESAD_LABEL_MAP`)
     _dl.WESAD_LABEL_MAP = new_map
     print(f"  WESAD_LABEL_MAP patched in-place: {new_map}")
 
@@ -80,6 +81,8 @@ def run_final_ours_loso(
     batch_size: int,
     lr: float,
     weight_decay: float,
+    wesad_dir: Path,
+    scaler_path: Path,
     max_subjects: int = 0,
 ) -> dict:
     """只跑 Final Ours 的 LOSO (max_subjects=0 表示全部)"""
@@ -89,8 +92,8 @@ def run_final_ours_loso(
 
     patch_label_map(meditation_val)
 
-    dataset = WESADDataset(PROJ / "data" / "wesad")
-    unique_subjects = sorted(set(s for s in dataset.subject_ids))
+    dataset = WESADDataset(wesad_dir, scaler_path)
+    unique_subjects = sorted(set(s for s in dataset.sample_subject_ids))
     if max_subjects > 0:
         unique_subjects = unique_subjects[:max_subjects]
     print(f"  被试: {unique_subjects} ({len(unique_subjects)} 人)")
@@ -106,8 +109,8 @@ def run_final_ours_loso(
 
     for i, holdout in enumerate(unique_subjects):
         print(f"\n  [{i+1}/{len(unique_subjects)}] Holdout: {holdout}")
-        train_idx = [j for j, s in enumerate(dataset.subject_ids) if s != holdout]
-        val_idx = [j for j, s in enumerate(dataset.subject_ids) if s == holdout]
+        train_idx = [j for j, s in enumerate(dataset.sample_subject_ids) if s != holdout]
+        val_idx = [j for j, s in enumerate(dataset.sample_subject_ids) if s == holdout]
 
         result = train_eval_step(
             step_name=f"FinalOurs-m{meditation_val}-{holdout}",
@@ -166,6 +169,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=5e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
+    parser.add_argument("--scaler-path", type=str, default="", help="WESAD scaler 路径 (可选，自动搜索)")
     parser.add_argument("--smoke", action="store_true", help="冒烟测试: 1 组 × 2 折 × 2 epochs")
     args = parser.parse_args()
     device = args.device or _auto_device()
@@ -176,9 +180,21 @@ def main():
     smoke_subjects = 2
     meditation_values = [0.6] if smoke else MEDITATION_VALUES
 
+    # --- 自动搜索 scaler ---
+    if args.scaler_path:
+        scaler_path = Path(args.scaler_path)
+    else:
+        search = [PROJ / "tcm_ft_transformer", PROJ / "tcm_ft_transformer" / "checkpoints", PROJ / "checkpoints"]
+        scaler_path = _find_file("scaler_params.npz", search)
+        if scaler_path is None:
+            scaler_path = PROJ / "scaler_params.npz"
+
+    wesad_dir = PROJ / "data" / "wesad"
+
     print("=" * 60)
     print(f"敏感性分析 {'(SMOKE)' if smoke else '(快速版: 只跑 Final Ours)'}")
     print(f"Device: {device}")
+    print(f"Scaler: {scaler_path} (exists={scaler_path.exists()})")
     print("=" * 60)
 
     all_results = {}
@@ -191,6 +207,8 @@ def main():
             batch_size=args.batch_size,
             lr=args.lr,
             weight_decay=args.weight_decay,
+            wesad_dir=wesad_dir,
+            scaler_path=scaler_path,
             max_subjects=smoke_subjects if smoke else 0,
         )
         all_results[str(med_val)] = summary
