@@ -92,9 +92,12 @@ def main():
     if args.checkpoint:
         checkpoint_path = Path(args.checkpoint)
     else:
-        checkpoint_path = _find_file("best_model.pth", search_dirs)
+        # 优先找 4 维模型 (best_tcm_model.pth)，再 fallback 到 best_model.pth
+        checkpoint_path = _find_file("best_tcm_model.pth", search_dirs)
+        if checkpoint_path is None:
+            checkpoint_path = _find_file("best_model.pth", search_dirs)
     if checkpoint_path is None or not checkpoint_path.exists():
-        print("ERROR: 找不到 FT-Transformer checkpoint (best_model.pth)")
+        print("ERROR: 找不到 FT-Transformer checkpoint")
         print("请用 --checkpoint 指定路径")
         sys.exit(1)
 
@@ -121,10 +124,20 @@ def main():
     df = pd.read_csv(data_path)
     print(f"    总样本数: {len(df)}")
 
-    n_features = DATA_CONFIG["n_features"]
-    n_classes = DATA_CONFIG["n_classes"]
+    n_features = DATA_CONFIG["n_features"]  # 4: Age, Gender, BMI, HR
+    n_classes = DATA_CONFIG["n_classes"]    # 9
 
-    X = df.iloc[:, :n_features].values.astype(np.float32)
+    # Encode string columns (e.g. Gender: 'Male'→1, 'Female'→0)
+    df_feat = df.iloc[:, :n_features].copy()
+    for col in df_feat.columns:
+        if df_feat[col].dtype == object:
+            # 与训练代码一致: Male→0, Female→1
+            df_feat[col] = df_feat[col].astype(str).str.strip().str.lower().map(
+                lambda v: 0.0 if v.startswith("m") else (1.0 if v.startswith("f") else np.nan)
+            )
+            df_feat[col] = df_feat[col].fillna(0.0)
+
+    X = df_feat.values.astype(np.float32)
     y_llm = df.iloc[:, -n_classes:].values.astype(np.float32)
 
     # 标签归一化（与训练时一致：epsilon 平滑 + 行归一化）
@@ -137,7 +150,10 @@ def main():
     # ----------------------------------------------------------
     print(f"\n[2] 加载标准化参数...")
     scaler = np.load(scaler_path)
-    X_scaled = (X - scaler["mean"]) / scaler["std"]
+    mean = scaler["mean"].astype(np.float32)[:n_features]
+    std = scaler["std"].astype(np.float32)[:n_features]
+    std = np.where(std == 0, 1.0, std)
+    X_scaled = (X - mean) / std
 
     # ----------------------------------------------------------
     # 3. 抽样
