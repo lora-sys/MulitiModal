@@ -127,7 +127,7 @@ def main():
     n_features = DATA_CONFIG["n_features"]  # 4: Age, Gender, BMI, HR
     n_classes = DATA_CONFIG["n_classes"]    # 9
 
-    # Encode string columns (e.g. Gender: 'Male'→1, 'Female'→0)
+    # Encode string columns (Gender: Male→0, Female→1, 与训练一致)
     df_feat = df.iloc[:, :n_features].copy()
     for col in df_feat.columns:
         if df_feat[col].dtype == object:

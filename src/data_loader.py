@@ -70,11 +70,12 @@ def _safe_float(v, default: float) -> float:
 
 
 def _gender_to_numeric(v) -> float:
+    """与 TCM 训练一致: Male→0, Female→1"""
     s = str(v or "").strip().lower()
     if s.startswith("m"):
-        return 1.0
-    if s.startswith("f"):
         return 0.0
+    if s.startswith("f"):
+        return 1.0
     return 0.0
 
 
