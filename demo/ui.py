@@ -280,7 +280,7 @@ def run_inference(preset_key: str, progress=gr.Progress()) -> tuple:
       <div style="margin-top:16px;display:inline-flex;align-items:center;gap:8px;
                   padding:8px 20px;background:#111827;border:2px solid #06b6d4;
                   border-radius:999px;font-size:16px;font-weight:600">
-        {intensity['emoji']} {intensity['name']} ({intensity['pressure']})
+        {intensity['emoji']} {intensity['name']}
       </div>
       <div style="margin-top:12px;display:flex;gap:16px;justify-content:center;flex-wrap:wrap">
         <span style="color:#94a3b8;font-size:13px">🧬 体质: <b style="color:#f59e0b">{rec['constitution']}</b></span>

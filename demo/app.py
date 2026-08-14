@@ -45,47 +45,47 @@ CONSTITUTION_NAMES = [
 # 体质 → 推荐方案映射（待公司数据训练后替换为决策模型）
 PROGRAM_CATALOG = [
     {
-        "id": "constitution_care",
-        "name": "体质调理",
-        "name_en": "Constitution Care",
-        "desc": "根据中医九型体质定制个性化调理方案",
+        "id": "stress_relief",
+        "name": "舒缓解压",
+        "name_en": "Stress Relief",
+        "desc": "舒缓身心压力，释放日常疲劳与紧张",
+        "icon": "🌿",
+        "color": "#06b6d4",
+        "techniques": ["瑞典式按摩", "芳香疗法", "轻柔拉伸", "热敷"],
+    },
+    {
+        "id": "tcm_massage",
+        "name": "中医推拿",
+        "name_en": "TCM Massage",
+        "desc": "传统中医经络推拿，调理气血运行",
         "icon": "🏮",
         "color": "#f59e0b",
-        "techniques": ["中医经络", "拔罐", "刮痧", "艾灸"],
+        "techniques": ["经络推拿", "穴位按压", "拔罐", "刮痧"],
     },
     {
-        "id": "relaxation",
-        "name": "放松舒缓",
-        "name_en": "Relaxation",
-        "desc": "日常放松，改善疲劳与睡眠质量",
-        "icon": "🍃",
+        "id": "thai_stretching",
+        "name": "泰式拉筋",
+        "name_en": "Thai Stretching",
+        "desc": "深度拉伸与关节活动，改善身体柔韧性",
+        "icon": "🤸",
         "color": "#10b981",
-        "techniques": ["瑞典式按摩", "芳香疗法", "轻柔拉伸"],
+        "techniques": ["被动拉伸", "关节松动", "能量线按压", "足底反射"],
     },
     {
-        "id": "mind_body",
-        "name": "正念冥想护理",
-        "name_en": "Mind-Body Therapy",
-        "desc": "结合正念训练的深度放松护理",
-        "icon": "🧘",
+        "id": "brain_fitness",
+        "name": "健脑强身",
+        "name_en": "Brain & Body Fitness",
+        "desc": "头部按摩与经络调理，增强精力与专注力",
+        "icon": "🧠",
         "color": "#8b5cf6",
-        "techniques": ["正念引导", "呼吸调节", "渐进式肌肉放松"],
-    },
-    {
-        "id": "deep_tissue",
-        "name": "深层理疗",
-        "name_en": "Deep Tissue Therapy",
-        "desc": "针对慢性劳损与深层肌肉紧张",
-        "icon": "💪",
-        "color": "#f43f5e",
-        "techniques": ["深层组织", "肌筋膜释放", "运动康复"],
+        "techniques": ["头部按摩", "肩颈放松", "足疗反射", "芳香呼吸"],
     },
 ]
 
 INTENSITY_LEVELS = [
-    {"key": "gentle",      "name": "轻柔",  "pressure": "轻压",  "emoji": "🍃"},
-    {"key": "comfortable", "name": "舒适",  "pressure": "适中",  "emoji": "🌿"},
-    {"key": "strong",      "name": "强劲",  "pressure": "深压",  "emoji": "💪"},
+    {"key": "gentle",      "name": "轻柔",  "emoji": "🍃"},
+    {"key": "comfortable", "name": "舒适",  "emoji": "🌿"},
+    {"key": "strong",      "name": "强劲",  "emoji": "💪"},
 ]
 
 
@@ -351,27 +351,27 @@ class ModelManager:
     def _recommend(probs, c_idx, c_conf, spo2, hr, mindfulness) -> dict:
         constitution = CONSTITUTION_NAMES[c_idx]
 
-        # 根据体质 + 生理指标选择方案
-        if c_idx in [1, 2, 3]:  # 气虚 / 阳虚 / 阴虚
-            program = next(p for p in PROGRAM_CATALOG if p["id"] == "constitution_care")
-            max_intensity = 1
-        elif c_idx in [4, 5, 6]:  # 痰湿 / 湿热 / 血瘀
-            program = next(p for p in PROGRAM_CATALOG if p["id"] == "deep_tissue")
-            max_intensity = 3
-        elif c_idx == 7:  # 气郁
-            program = next(p for p in PROGRAM_CATALOG if p["id"] == "mind_body")
-            max_intensity = 2
-        else:
-            program = next(p for p in PROGRAM_CATALOG if p["id"] == "relaxation")
-            max_intensity = 2
+        # 体质 → 按摩模式映射
+        program_map = {
+            0: "brain_fitness",     # 平和质 → 健脑强身
+            1: "stress_relief",     # 气虚质 → 舒缓解压
+            2: "tcm_massage",       # 阳虚质 → 中医推拿
+            3: "brain_fitness",     # 阴虚质 → 健脑强身
+            4: "thai_stretching",   # 痰湿质 → 泰式拉筋
+            5: "thai_stretching",   # 湿热质 → 泰式拉筋
+            6: "tcm_massage",       # 血瘀质 → 中医推拿
+            7: "stress_relief",     # 气郁质 → 舒缓解压
+            8: "brain_fitness",     # 特禀质 → 健脑强身
+        }
+        program = next(p for p in PROGRAM_CATALOG if p["id"] == program_map[c_idx])
 
         # 正念指数影响力度
         if mindfulness < 0.3:
-            intensity_ix = 0  # 轻柔
+            intensity_ix = 0   # 轻柔
         elif mindfulness < 0.6:
-            intensity_ix = min(1, max_intensity)  # 舒适
+            intensity_ix = 1   # 舒适
         else:
-            intensity_ix = min(2, max_intensity)  # 强劲
+            intensity_ix = 2   # 强劲
 
         # 血氧异常 → 降力度
         if spo2 < 94:

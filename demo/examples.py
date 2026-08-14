@@ -93,10 +93,10 @@ def get_preset(name: str) -> dict:
 def get_preset_list() -> list[dict]:
     """返回 [(key, label, description), ...]"""
     return [
-        ("balanced_health", "均衡健康", "平和质体质，各项指标正常，建议日常保健"),
-        ("stress_recovery", "压力恢复", "气虚质，工作压力大，心率偏高，建议深度放松"),
-        ("low_mindfulness", "专注力不足", "气郁质，脑电正念指数低，建议身心调节"),
-        ("deep_relaxation", "深度放松", "湿热质，血氧正常，建议深层理疗舒缓"),
+        ("balanced_health", "均衡健康", "平和质体质，各项指标正常，建议健脑强身保健"),
+        ("stress_recovery", "压力恢复", "气虚质，工作压力大，心率偏高，建议舒缓解压"),
+        ("low_mindfulness", "专注力不足", "气郁质，脑电正念指数低，建议中医推拿调理"),
+        ("deep_relaxation", "深度放松", "湿热质，血氧正常，适合泰式拉筋深层放松"),
     ]
 
 
