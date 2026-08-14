@@ -19,16 +19,18 @@
 % --- 表格代码开始 ---
 \begin{table}[htbp]
 \centering
-\caption{Main LOSO Comparison (MSE, mean $\pm$ std over 15 folds)}
-\label{tab:main_comparison}
-\begin{tabular}{lcc}
+\caption{Ablation Study (mean $\pm$ std over 15 LOSO folds, all using InceptionTime encoder)}
+\label{tab:ablation}
+\begin{tabular}{lccc}
 \toprule
-\textbf{Method} & \textbf{Encoder} & \textbf{MSE} \\
+\textbf{Variant} & \textbf{MSE} & \textbf{Pearson $r$} & \textbf{$\Delta$ MSE} \\
 \midrule
-Baseline A & TCN & $0.1818 \pm 0.0472$ \\
-Baseline B & TCN & $0.1903 \pm 0.0728$ \\
-Ours-TCN & TCN & $0.2097 \pm 0.1359$ \\
-Final Ours & InceptionTime & $\mathbf{0.1346} \pm 0.1122$ \\
+Early Fusion (concat) & $0.1639 \pm 0.1197$ & $0.643 \pm 0.351$ & $+0.0293$ \\
+w/o Dual Gating       & $0.1511 \pm 0.1322$ & --- & $+0.0164$ \\
+w/o TCM Prior         & $0.1513 \pm 0.1382$ & --- & $+0.0166$ \\
+w/o TCM\_Gate         & $0.1391 \pm 0.1094$ & --- & $+0.0045$ \\
+\midrule
+\textbf{Final Ours (full model)} & $\mathbf{0.1346} \pm 0.1122$ & $\mathbf{0.758} \pm 0.259$ & --- \\
 \bottomrule
 \end{tabular}
 \end{table}

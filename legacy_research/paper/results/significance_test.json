@@ -1,0 +1,74 @@
+{
+  "Baseline A_vs_Final_Ours": {
+    "method_a": "Baseline A",
+    "method_b": "Final Ours",
+    "n_folds": 15,
+    "mean_a": 0.1817648281653722,
+    "mean_b": 0.1417190596461296,
+    "delta_mse": 0.0400457685192426,
+    "paired_t_test": {
+      "t": 1.6717,
+      "p": 0.116782,
+      "significant_005": false
+    },
+    "wilcoxon": {
+      "W": 19.0,
+      "p": 0.018066,
+      "significant_005": true
+    }
+  },
+  "Baseline B_vs_Final_Ours": {
+    "method_a": "Baseline B",
+    "method_b": "Final Ours",
+    "n_folds": 15,
+    "mean_a": 0.19033946394920348,
+    "mean_b": 0.1417190596461296,
+    "delta_mse": 0.04862040430307388,
+    "paired_t_test": {
+      "t": 2.8077,
+      "p": 0.013966,
+      "significant_005": true
+    },
+    "wilcoxon": {
+      "W": 15.0,
+      "p": 0.008362,
+      "significant_005": true
+    }
+  },
+  "w/o Dual Gating_vs_Final_Ours": {
+    "method_a": "w/o Dual Gating",
+    "method_b": "Final Ours",
+    "n_folds": 15,
+    "mean_a": 0.1457873433828354,
+    "mean_b": 0.1417190596461296,
+    "delta_mse": 0.004068283736705786,
+    "paired_t_test": {
+      "t": 0.5221,
+      "p": 0.609741,
+      "significant_005": false
+    },
+    "wilcoxon": {
+      "W": 43.0,
+      "p": 0.359131,
+      "significant_005": false
+    }
+  },
+  "w/o TCM Prior_vs_Final_Ours": {
+    "method_a": "w/o TCM Prior",
+    "method_b": "Final Ours",
+    "n_folds": 15,
+    "mean_a": 0.15164408311247826,
+    "mean_b": 0.1417190596461296,
+    "delta_mse": 0.00992502346634866,
+    "paired_t_test": {
+      "t": 1.0895,
+      "p": 0.294333,
+      "significant_005": false
+    },
+    "wilcoxon": {
+      "W": 54.0,
+      "p": 0.761536,
+      "significant_005": false
+    }
+  }
+}

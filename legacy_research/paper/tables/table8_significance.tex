@@ -1,0 +1,43 @@
+% 统计显著性检验表
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{caption}
+\captionsetup[table]{labelformat=empty}
+\renewcommand{\arraystretch}{1.2}
+
+\begin{document}
+
+\begin{table}[htbp]
+\centering
+\caption{Statistical Significance of Performance Gains (15-fold LOSO, paired tests)}
+\label{tab:significance}
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Comparison} &
+\textbf{MSE (A)} &
+\textbf{MSE (B)} &
+\textbf{$\Delta$ MSE} &
+\textbf{Paired $t$} &
+\textbf{$p$ (t-test)} &
+\textbf{$p$ (Wilcoxon)} \\
+\midrule
+vs.\ Baseline A     & 0.1818 & 0.1417 & $-0.0401$ & 1.67 & 0.117  & \textbf{0.018}$^{*}$ \\
+vs.\ Baseline B     & 0.1903 & 0.1417 & $-0.0487$ & 2.81 & \textbf{0.014}$^{*}$ & \textbf{0.008}$^{**}$ \\
+vs.\ w/o Dual Gating & 0.1458 & 0.1417 & $-0.0041$ & 0.52 & 0.610  & 0.762 \\
+vs.\ w/o TCM Prior  & 0.1516 & 0.1417 & $-0.0099$ & 1.09 & 0.294  & 0.359 \\
+\bottomrule
+\end{tabular}
+\vspace{0.5em}
+
+\footnotesize{
+$^{*}p < 0.05$, \quad $^{**}p < 0.01$. \quad
+Wilcoxon signed-rank test is preferred due to non-normal MSE distribution (outlier in S7).
+The proposed model significantly outperforms both dynamic-only baselines.
+Ablation variants (w/o Dual Gating, w/o TCM Prior) do not reach significance,
+consistent with their smaller MSE gaps.
+}
+\end{table}
+
+\end{document}

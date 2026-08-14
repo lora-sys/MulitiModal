@@ -1,0 +1,65 @@
+schema_version: 1
+assets:
+  - asset_id: oplri-server-f743da3
+    filename: best_model.pth
+    sha256: 89f75e66d5fa6a65e7158fa3e39e4f886ff13fa7ae37f0f892a3555e6e2f65ba
+    size_bytes: 1095605
+    source_machine: tailscale-server
+    source_path: /home/lora/repos/MulitiModal/checkpoints/best_model.pth
+    backup_path: /home/lora/repos/MulitiModal_backup_20260812_173205/checkpoints/best_model.pth
+    git_commit: f743da3ab3d78df8cb3206047d8b507872ba87f0
+    model_class: OPLRIRegressor
+    architecture: 1d-resnet + gate-a + gate-b + late-reinjection
+    input_schema: WESAD ECG/EDA dynamic input plus 4D-derived TCM prior
+    output_task: relaxation-score regression
+    training_data: public
+    evidence_level: L2
+    known_limitations:
+      - Final training froze the dynamic encoder, Gate A/B, cross-attention, and TCM backbone.
+      - Input and output semantics differ from the industrial task.
+    intended_reuse: Parameter-level pretrained origin for authenticated compatible layers.
+
+  - asset_id: tcm-server-f743da3
+    filename: best_model.pth
+    sha256: b5c92665226a127d0a683af47fd782b71e74bafd14ac0d067e55ca4e4c9422f0
+    size_bytes: 631871
+    source_machine: tailscale-server
+    source_path: /home/lora/repos/MulitiModal/tcm_ft_transformer/checkpoints/best_model.pth
+    backup_path: /home/lora/repos/MulitiModal_backup_20260812_173205/tcm_ft_transformer/checkpoints/best_model.pth
+    git_commit: f743da3ab3d78df8cb3206047d8b507872ba87f0
+    model_class: FTTransformer
+    architecture: 4D feature tokenizer + transformer + 9-class distribution head
+    input_schema: Age, Gender, BMI, Heart Rate
+    output_task: 9D TCM constitution distribution
+    training_data: simulated
+    evidence_level: L2
+    known_limitations:
+      - No authenticated 8D TCM checkpoint exists.
+      - New diagnostic fields were not pretrained.
+    intended_reuse: TCM Transformer initialization where field semantics match.
+
+  - asset_id: tcm-local-pre-restructure
+    filename: best_model.pth
+    sha256: c4faa0b48042b2b38a13ca65ff2f8c5db2d999b15280a491225e20b7e72ddfa9
+    size_bytes: 634111
+    source_machine: local-macos
+    source_path: tcm_ft_transformer/checkpoints/best_model.pth
+    git_commit: f743da3ab3d78df8cb3206047d8b507872ba87f0
+    model_class: FTTransformer
+    architecture: 4D feature tokenizer + transformer + 9-class distribution head
+    input_schema: Age, Gender, BMI, Heart Rate
+    output_task: 9D TCM constitution distribution
+    training_data: simulated
+    evidence_level: L2
+    known_limitations:
+      - Different SHA-256 from the authenticated server TCM model.
+      - No authenticated 8D TCM checkpoint exists.
+    intended_reuse: Preserve as a distinct historical candidate; do not overwrite server asset.
+
+scalers:
+  - asset_id: tcm-scaler-8d
+    filename: scaler_params_8d.npz
+    sha256: 41b5af434c410e7b9e98086faa04ece3bbfaa9c50291b59f91e1d5bcb9a81b5b
+    input_schema: Age, Gender, BMI, Heart Rate, SBP, DBP, SpO2, Body Temperature
+    known_limitations:
+      - The 8D scaler exists, but no 8D TCM checkpoint was found.

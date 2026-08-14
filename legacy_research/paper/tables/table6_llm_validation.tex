@@ -1,0 +1,36 @@
+\documentclass{article}
+
+% --- 必须包含的宏包 ---
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs} % 提供 \toprule, \midrule, \bottomrule
+\usepackage{amsmath}  % 提供数学公式支持
+
+\begin{document}
+
+\begin{table}[htbp]
+\centering
+\caption{LLM Label Validation: Agreement between DeepSeek-generated Labels and FT-Transformer Predictions ($n = 500$)}
+\label{tab:llm_validation}
+\begin{tabular}{lcc} 
+\toprule
+\textbf{Phenotype Component} & \textbf{Pearson $r$} & \textbf{Interpretation} \\
+\midrule
+P1 (Balanced)      & 0.823 & Strong \\
+P2 (Qi-deficient)  & 0.788 & Strong \\
+P3 (Yang-deficient) & 0.705 & Moderate--Strong \\
+P4 (Phlegm-damp)   & 0.896 & Strong \\
+P5 (Yin-deficient) & 0.449 & Moderate \\
+P6 (Damp-heat)     & 0.393 & Weak--Moderate \\
+P7 (Qi-stagnant)   & 0.294 & Weak \\
+P8 (Blood-stasis)  & 0.241 & Weak \\
+P9 (Special)       & 0.188 & Weak \\
+\midrule
+\textbf{Mean (9-dim)} & \textbf{0.531} & --- \\
+\midrule
+\textbf{Top-1 Accuracy}     & \multicolumn{2}{c}{\textbf{85.0\%}} \\
+\textbf{Mean KL Divergence} & \multicolumn{2}{c}{0.314} \\
+\bottomrule
+\end {tabular}
+\end{table}
+
+\end{document}

@@ -1,0 +1,31 @@
+% 敏感性分析表
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{caption}
+\captionsetup[table]{labelformat=empty}
+\renewcommand{\arraystretch}{1.2}
+
+\begin{document}
+
+\begin{table}[htbp]
+\centering
+\caption{Sensitivity Analysis: Effect of Meditation-state Label Mapping Value on Model Performance (15-fold LOSO)}
+\label{tab:sensitivity}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Meditation Value} & \textbf{MSE} & \textbf{Pearson $r$} & \textbf{$\Delta$ MSE vs.\ 0.6} \\
+\midrule
+0.5 & $0.1571 \pm 0.1209$ & $0.675 \pm 0.298$ & $+0.0047$ \\
+0.6 (Default) & $0.1524 \pm 0.1395$ & $0.723 \pm 0.287$ & --- \\
+0.7 & $0.1372 \pm 0.1187$ & $0.716 \pm 0.299$ & $-0.0152$ \\
+\bottomrule
+\end{tabular}
+\vspace{0.5em}
+
+\footnotesize{
+\textit{Note:} All three settings yield comparable performance (MSE range: 0.137--0.157), confirming that the framework is robust to the specific choice of the meditation mapping value within the physiological range. The default value of 0.6 is retained following the empirical soft-label encoding logic described in Section~\ref{sec:dataset_task}.
+}
+\end{table}
+\end{document}
