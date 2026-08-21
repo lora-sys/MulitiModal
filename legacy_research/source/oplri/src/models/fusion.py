@@ -9,8 +9,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from src.config import TCM_CHECKPOINT_PATH, TCM_SCALER_PATH
-from src.models.encoders import get_dynamic_encoder
+from config import TCM_CHECKPOINT_PATH, TCM_SCALER_PATH
+from models.encoders import get_dynamic_encoder
 
 
 class TCMEncoderAdapter(nn.Module):

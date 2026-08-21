@@ -1,89 +1,36 @@
 #!/usr/bin/env python3
 """
-修复版 app.py - 使用 DualGatingModel
-基于原 app.py,但使用正确的模型架构
+MulitiModal Demo - 修复版 ModelManager
+使用 DualGatingModel 替代 OPLRIRegressor
 """
 
 import sys
-import warnings
-from pathlib import Path
-
 import numpy as np
 import torch
 import torch.nn as nn
+from pathlib import Path
 
-# ──────────────────────────────────────────────────────────────
-# 项目路径
-# ──────────────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# 路径设置
+DEMO_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = DEMO_DIR.parent
 LEGACY_ROOT = PROJECT_ROOT / "legacy_research"
 
+sys.path.insert(0, str(DEMO_DIR))
 sys.path.insert(0, str(LEGACY_ROOT / "source/tcm/tcm_ft_transformer"))
 sys.path.insert(0, str(LEGACY_ROOT / "source/oplri/src"))
 sys.path.insert(0, str(LEGACY_ROOT / "source/oplri/src/models"))
 
-from ft_transformer import get_model               # noqa: E402
-from models.encoders import get_dynamic_encoder    # noqa: E402
-from models.fusion import DualGatingModel          # noqa: E402
+from ft_transformer import get_model
+from models.encoders import get_dynamic_encoder
+from models.fusion import DualGatingModel
+from app import CONSTITUTION_NAMES, PROGRAM_CATALOG, INTENSITY_LEVELS  # 导入常量
 
-warnings.filterwarnings("ignore")
-
-# ──────────────────────────────────────────────────────────────
-# 常量
-# ──────────────────────────────────────────────────────────────
-CONSTITUTION_NAMES = [
-    "平和质", "气虚质", "阳虚质", "阴虚质",
-    "痰湿质", "湿热质", "血瘀质", "气郁质", "特禀质",
-]
-
-PROGRAM_CATALOG = [
-    {
-        "id": "stress_relief",
-        "name": "舒缓解压",
-        "name_en": "Stress Relief",
-        "desc": "舒缓身心压力，释放日常疲劳与紧张",
-        "icon": "🌿",
-        "color": "#06b6d4",
-        "techniques": ["瑞典式按摩", "芳香疗法", "轻柔拉伸", "热敷"],
-    },
-    {
-        "id": "tcm_massage",
-        "name": "中医推拿",
-        "name_en": "TCM Massage",
-        "desc": "传统中医经络推拿，调理气血运行",
-        "icon": "🏮",
-        "color": "#f59e0b",
-        "techniques": ["经络推拿", "穴位按压", "拔罐", "刮痧"],
-    },
-    {
-        "id": "thai_stretching",
-        "name": "泰式拉筋",
-        "name_en": "Thai Stretching",
-        "desc": "深度拉伸与关节活动，改善身体柔韧性",
-        "icon": "🤸",
-        "color": "#10b981",
-        "techniques": ["被动拉伸", "关节松动", "能量线按压", "足底反射"],
-    },
-    {
-        "id": "brain_fitness",
-        "name": "健脑强身",
-        "name_en": "Brain & Body Fitness",
-        "desc": "头部按摩与经络调理，增强精力与专注力",
-        "icon": "🧠",
-        "color": "#8b5cf6",
-        "techniques": ["头部按摩", "肩颈放松", "足疗反射", "芳香呼吸"],
-    },
-]
-
-INTENSITY_LEVELS = [
-    {"key": "gentle",      "name": "轻柔",  "emoji": "🍃"},
-    {"key": "comfortable", "name": "舒适",  "emoji": "🌿"},
-    {"key": "strong",      "name": "强劲",  "emoji": "💪"},
-]
-
+print("=" * 60)
+print("MulitiModal Demo - 修复验证")
+print("=" * 60)
 
 # ──────────────────────────────────────────────────────────────
-# EEG 编码器
+# EEG 编码器 (保持不变)
 # ──────────────────────────────────────────────────────────────
 
 class EEGEncoder(nn.Module):
@@ -113,11 +60,11 @@ class EEGEncoder(nn.Module):
 
 
 # ──────────────────────────────────────────────────────────────
-# 模型管理器 (修复版: 使用 DualGatingModel)
+# 修复的 ModelManager
 # ──────────────────────────────────────────────────────────────
 
 class ModelManager:
-    """加载并管理所有预训练模型."""
+    """加载并管理所有预训练模型 (使用 DualGatingModel)."""
 
     def __init__(self, device: str | None = None):
         if device is None:
@@ -249,7 +196,7 @@ class ModelManager:
                 "features_preview": features_np[:8].round(4).tolist(),
             },
             "dynamic_repr": {
-                "preview": features_np[:8].round(4).tolist(),
+                "preview": features_np[:8].round(4).tolist(),  # 使用 TCM 内部特征
                 "dim": 128,
                 "gate_a": self.combined_model.use_gate_a,
                 "gate_b": self.combined_model.use_gate_b,
@@ -259,7 +206,7 @@ class ModelManager:
                 "dim": 8,
                 "mindfulness_score": round(float(sample["mindfulness"]), 3),
             },
-            "model_output": round(float(output_np), 4),
+            "model_output": round(float(output_np), 4),  # 模型预测值
             "recommendation": recommendation,
         }
 
@@ -304,13 +251,36 @@ class ModelManager:
 
 
 # ──────────────────────────────────────────────────────────────
-# 全局模型单例
+# 测试
 # ──────────────────────────────────────────────────────────────
-_manager: ModelManager | None = None
 
+if __name__ == "__main__":
+    print("\n🔍 测试 ModelManager...")
 
-def get_manager() -> ModelManager:
-    global _manager
-    if _manager is None:
-        _manager = ModelManager()
-    return _manager
+    try:
+        manager = ModelManager(device="cpu")
+        print("  ✓ ModelManager 初始化成功")
+
+        # 测试推理
+        from examples import get_preset, get_preset_list
+
+        preset_name = get_preset_list()[0][0]
+        sample = get_preset(preset_name)
+        print(f"  使用预设样本: {preset_name}")
+
+        result = manager.run_inference(sample)
+        print("  ✓ 推理成功!")
+        print(f"  ✓ 体质: {result['constitution']['name']} ({result['constitution']['confidence']:.2%})")
+        print(f"  ✓ 推荐: {result['recommendation']['program']['name']}")
+        print(f"  ✓ 力度: {result['recommendation']['intensity']['name']}")
+        print(f"  ✓ 模型输出: {result.get('model_output', 'N/A')}")
+
+        print("\n" + "=" * 60)
+        print("✅ 修复版 ModelManager 验证通过!")
+        print("=" * 60)
+
+    except Exception as e:
+        print(f"\n✗ 失败: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

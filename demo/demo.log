@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/home/lora/repos/work/MulitiModal/demo/app.py", line 12, in <module>
+    import torch
+ModuleNotFoundError: No module named 'torch'

@@ -1,8 +1,15 @@
-#!/usr/bin/env python3
+"""MulitiModal Demo — 多模态按摩决策演示系统
+=============================================
+
+三条检测链路:
+  1. TCM 诊断 (舌诊/面诊/脉诊)    → FT-Transformer → 九型体质概率 + 128-D 特征
+  2. 生理信号 (ECG + EDA)          → TCN 动态编码器  → 128-D 动态表征
+  3. 脑电正念指数 (EEG Mindfulness) → 专用编码器      → 8-D 神经表征
+
+统一融合 → 按摩方案推荐 + 力度等级
 """
-修复版 app.py - 使用 DualGatingModel
-基于原 app.py,但使用正确的模型架构
-"""
+
+from __future__ import annotations
 
 import sys
 import warnings
@@ -24,7 +31,6 @@ sys.path.insert(0, str(LEGACY_ROOT / "source/oplri/src/models"))
 
 from ft_transformer import get_model               # noqa: E402
 from models.encoders import get_dynamic_encoder    # noqa: E402
-from models.fusion import DualGatingModel          # noqa: E402
 
 warnings.filterwarnings("ignore")
 
@@ -36,6 +42,7 @@ CONSTITUTION_NAMES = [
     "痰湿质", "湿热质", "血瘀质", "气郁质", "特禀质",
 ]
 
+# 体质 → 推荐方案映射（待公司数据训练后替换为决策模型）
 PROGRAM_CATALOG = [
     {
         "id": "stress_relief",
@@ -83,11 +90,119 @@ INTENSITY_LEVELS = [
 
 
 # ──────────────────────────────────────────────────────────────
-# EEG 编码器
+# 模型定义
 # ──────────────────────────────────────────────────────────────
 
+class OPLRIRegressor(nn.Module):
+    """OPLRI 多模态骨干模型 — 生理信号编码器 + Gate A/B."""
+
+    def __init__(self, encoder_name: str = "tcn",
+                 use_gate_a: bool = True, use_gate_b: bool = True,
+                 reg_head_input_dim: int = 137):
+        super().__init__()
+        self.dynamic_encoder = get_dynamic_encoder(encoder_name, in_channels=2)
+        self.use_gate_a = bool(use_gate_a)
+        self.use_gate_b = bool(use_gate_b)
+        self.gate_a_linear = nn.Linear(9, 128)
+        self.constitution_tokens = nn.Parameter(torch.randn(9, 128) * 0.02)
+        self.cross_attention = nn.MultiheadAttention(
+            embed_dim=128, num_heads=4, batch_first=True
+        )
+        self.gate_b_linear = nn.Linear(128, 128)
+        self.reg_head = nn.Sequential(
+            nn.Linear(reg_head_input_dim, 128), nn.ReLU(), nn.Dropout(0.2), nn.Linear(128, 1),
+        )
+
+    def extract_dynamic(
+        self,
+        dynamic_x: torch.Tensor,
+        tcm_probs_9d: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        z_raw = self.dynamic_encoder(dynamic_x)
+        attn_weights = None
+        if self.use_gate_a:
+            gate_a = torch.sigmoid(self.gate_a_linear(tcm_probs_9d))
+            kv = self.constitution_tokens.unsqueeze(0) * tcm_probs_9d.unsqueeze(-1)
+            query = z_raw.unsqueeze(1)
+            attn_out, attn_weights = self.cross_attention(
+                query, kv, kv, need_weights=True, average_attn_weights=False
+            )
+            weighted = torch.sigmoid(attn_out.squeeze(1))
+            z_modulated = z_raw * ((1.0 - 1.0) + 1.0 * weighted)
+        else:
+            z_modulated = z_raw
+
+        if self.use_gate_b:
+            gate_b = torch.sigmoid(self.gate_b_linear(z_modulated))
+            z_pure = z_modulated * (1.0 - 1.0 * gate_b)
+        else:
+            z_pure = z_modulated
+
+        return z_pure.detach(), attn_weights
+
+    def forward(
+        self, dynamic_x: torch.Tensor, tcm_probs_9d: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        z_pure, _ = self.extract_dynamic(dynamic_x, tcm_probs_9d)
+        combined = torch.cat([z_pure, tcm_probs_9d], dim=-1)
+        output = self.reg_head(combined)
+        return output, z_pure
+
+
+class TCMEncoder(nn.Module):
+    """中医体质编码器 — FT-Transformer → 9-D 概率 + 128-D 特征."""
+
+    def __init__(self, model_path: str, scaler_path: str, device: str = "cpu"):
+        super().__init__()
+        self.device = device
+
+        scaler_data = np.load(scaler_path)
+        raw_mean = scaler_data["mean"]
+        raw_std = scaler_data["std"]
+        n = min(4, len(raw_mean))
+        self.mean = torch.tensor(raw_mean[:n], dtype=torch.float32).to(device)
+        self.std = torch.tensor(raw_std[:n], dtype=torch.float32).to(device)
+
+        self.model = get_model(n_features=4, n_classes=9)
+        ckpt = torch.load(model_path, map_location=device, weights_only=True)
+        self.model.load_state_dict(ckpt["model_state_dict"])
+        self.model.to(device).eval()
+        for p in self.model.parameters():
+            p.requires_grad = False
+
+        self.feature_projection = nn.Sequential(
+            nn.Linear(64, 128), nn.ReLU(), nn.Dropout(0.1)
+        ).to(device)
+
+        self.best_params = ckpt.get("best_params", None)
+
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+        std_safe = torch.where(self.std < 1e-8, torch.ones_like(self.std), self.std)
+        return (x - self.mean) / std_safe
+
+    def forward(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        with torch.no_grad():
+            x_norm = self.normalize(x)
+            tokens = self.model.feature_tokenizer(x_norm)
+            bs = x.size(0)
+            cls = self.model.cls_token(bs)
+            tokens = torch.cat([cls, tokens], dim=1)
+            tokens = self.model.dropout_layer(tokens)
+            encoded = self.model.transformer_encoder(tokens)
+            cls_out = self.model.layer_norm(encoded[:, 0, :])
+            features = self.feature_projection(cls_out)
+            probs = self.model(x_norm)
+        return features, probs
+
+
 class EEGEncoder(nn.Module):
-    """脑电正念指数编码器 — 简化版 CNN → 8-D 神经表征."""
+    """脑电正念指数编码器 — 简化版 CNN → 8-D 神经表征.
+
+    输入: (B, 1, L) 一维脑电波形
+    输出: (B, 8) 神经状态向量
+    """
 
     def __init__(self, in_channels: int = 1, embed_dim: int = 8):
         super().__init__()
@@ -113,7 +228,7 @@ class EEGEncoder(nn.Module):
 
 
 # ──────────────────────────────────────────────────────────────
-# 模型管理器 (修复版: 使用 DualGatingModel)
+# 模型管理器
 # ──────────────────────────────────────────────────────────────
 
 class ModelManager:
@@ -129,54 +244,87 @@ class ModelManager:
         self.tcm_path = LEGACY_ROOT / "checkpoints/tcm/server_f743da3/best_model.pth"
         self.tcm_scaler = LEGACY_ROOT / "checkpoints/tcm/server_f743da3/scaler_params_8d.npz"
 
-        # 加载联合模型
-        self._load_combined_model()
+        # 加载模型
+        self._load_oplri()
+        self._load_tcm()
         self._load_eeg()
 
         # 冻结所有参数
-        for m in [self.combined_model, self.eeg_encoder]:
+        for m in [self.oplri, self.tcm_encoder, self.eeg_encoder]:
             for p in m.parameters():
                 p.requires_grad = False
             m.eval()
 
         print(f"[ModelManager] 所有模型已加载至 {self.device}")
 
-    def _load_combined_model(self):
-        """加载 DualGatingModel 联合模型."""
-        self.combined_model = DualGatingModel(
-            encoder_name="resnet",
-            tcm_checkpoint_path=str(self.tcm_path),
-            tcm_scaler_path=str(self.tcm_scaler),
-            freeze_tcm=True,
-            use_tcm=True,
-            use_gate_a=True,
-            use_gate_b=True,
-        )
+    def _load_oplri(self):
+        """加载 OPLRI 模型（从联合 checkpoint 中提取动态编码器和门控）."""
+        from models.encoders import ResNet1DEncoder  # 导入正确的编码器
 
-        # 加载 OPLRI checkpoint
+        # 加载联合 checkpoint 以检查维度
         ckpt = torch.load(str(self.oplri_path), map_location=self.device, weights_only=True)
         state_dict = ckpt["model_state_dict"]
 
-        # 提取各部分 state_dict
-        dynamic_state = {k.replace("dynamic_encoder.", ""): v
-                         for k, v in state_dict.items() if k.startswith("dynamic_encoder.")}
-        gate_a_state = {k.replace("gate_a_linear.", ""): v
-                        for k, v in state_dict.items() if k.startswith("gate_a_linear.")}
-        gate_b_state = {k.replace("gate_b_linear.", ""): v
-                        for k, v in state_dict.items() if k.startswith("gate_b_linear.")}
-        reg_head_state = {k.replace("reg_head.", ""): v
-                          for k, v in state_dict.items() if k.startswith("reg_head.")}
-        fusion_norm_state = {k.replace("fusion_norm.", ""): v
-                             for k, v in state_dict.items() if k.startswith("fusion_norm.")}
+        # 确定 reg_head 的输入维度
+        reg_head_input_dim = state_dict["reg_head.0.weight"].shape[1]
 
-        # 加载到模型
-        self.combined_model.dynamic_encoder.load_state_dict(dynamic_state, strict=False)
-        self.combined_model.gate_a_linear.load_state_dict(gate_a_state, strict=True)
-        self.combined_model.gate_b_linear.load_state_dict(gate_b_state, strict=True)
-        self.combined_model.reg_head.load_state_dict(reg_head_state, strict=True)
-        if fusion_norm_state:
-            self.combined_model.fusion_norm.load_state_dict(fusion_norm_state, strict=True)
-        self.combined_model.to(self.device)
+        # 确定是否使用 resnet 编码器
+        has_resnet = any("dynamic_encoder.stem" in k for k in state_dict.keys())
+
+        # 创建模型
+        encoder_name = "resnet" if has_resnet else "tcn"
+        self.oplri = OPLRIRegressor(
+            encoder_name=encoder_name,
+            use_gate_a=True,
+            use_gate_b=True,
+            reg_head_input_dim=reg_head_input_dim,
+        )
+
+        # 提取动态编码器的 state_dict (去掉 'dynamic_encoder.' 前缀)
+        dynamic_state = {
+            k.replace("dynamic_encoder.", ""): v
+            for k, v in state_dict.items()
+            if k.startswith("dynamic_encoder.")
+        }
+
+        # 提取 Gate A
+        gate_a_state = {
+            k.replace("gate_a_linear.", ""): v
+            for k, v in state_dict.items()
+            if k.startswith("gate_a_linear.")
+        }
+
+        # 提取 Gate B
+        gate_b_state = {
+            k.replace("gate_b_linear.", ""): v
+            for k, v in state_dict.items()
+            if k.startswith("gate_b_linear.")
+        }
+
+        # 提取 reg_head
+        reg_head_state = {
+            k.replace("reg_head.", ""): v
+            for k, v in state_dict.items()
+            if k.startswith("reg_head.")
+        }
+
+        # 检查 constitution_tokens 是否在 checkpoint 中
+        if "constitution_tokens" in state_dict:
+            self.oplri.constitution_tokens.data = state_dict["constitution_tokens"].clone()
+
+        # 加载各部分 (dynamic_encoder 使用 strict=False 以兼容不同编码器)
+        self.oplri.dynamic_encoder.load_state_dict(dynamic_state, strict=False)
+        self.oplri.gate_a_linear.load_state_dict(gate_a_state, strict=True)
+        self.oplri.gate_b_linear.load_state_dict(gate_b_state, strict=True)
+        self.oplri.reg_head.load_state_dict(reg_head_state, strict=True)
+        self.oplri.to(self.device)
+
+    def _load_tcm(self):
+        self.tcm_encoder = TCMEncoder(
+            model_path=str(self.tcm_path),
+            scaler_path=str(self.tcm_scaler),
+            device=str(self.device),
+        )
 
     def _load_eeg(self):
         self.eeg_encoder = EEGEncoder(in_channels=1, embed_dim=8)
@@ -196,7 +344,7 @@ class ModelManager:
         dyn_t = torch.tensor(dyn_np, device=device).unsqueeze(0)
 
         # TCM 诊断 → [4]
-        # 支持两种格式: 平铺或嵌套
+        # 支持两种格式: 平铺 (sample["tongue"]) 或嵌套 (sample["tcm"]["tongue"])
         if "tcm" in sample and isinstance(sample["tcm"], dict):
             tcm_data = sample["tcm"]
         else:
@@ -214,20 +362,20 @@ class ModelManager:
 
         # ── 推理 ──
         with torch.no_grad():
-            # DualGatingModel: 接收 dynamic + static_4d
-            output = self.combined_model(dyn_t, diag_t)  # [B, 1]
-
-            # 获取 TCM 内部特征和概率
-            tcm_internal, tcm_probs = self.combined_model.tcm_encoder.extract_features_and_probs(diag_t)
+            # TCM
+            tcm_features, tcm_probs = self.tcm_encoder(diag_t)
             probs_np = tcm_probs.cpu().numpy()[0]
-            features_np = tcm_internal.cpu().numpy()[0]
+            features_np = tcm_features.cpu().numpy()[0]
             constitution_idx = int(np.argmax(probs_np))
             constitution_conf = float(probs_np[constitution_idx])
+
+            # OPLRI 动态编码
+            _, z_pure = self.oplri(dyn_t, tcm_probs)
 
             # EEG 编码
             eeg_repr = self.eeg_encoder(eeg_t)
 
-        output_np = output.cpu().numpy()[0, 0]
+        z_pure_np = z_pure.cpu().numpy()[0]
         eeg_np = eeg_repr.cpu().numpy()[0]
 
         # ── 方案推荐 ──
@@ -249,17 +397,16 @@ class ModelManager:
                 "features_preview": features_np[:8].round(4).tolist(),
             },
             "dynamic_repr": {
-                "preview": features_np[:8].round(4).tolist(),
+                "preview": z_pure_np[:8].round(4).tolist(),
                 "dim": 128,
-                "gate_a": self.combined_model.use_gate_a,
-                "gate_b": self.combined_model.use_gate_b,
+                "gate_a": True,
+                "gate_b": True,
             },
             "neuro_repr": {
                 "preview": eeg_np.round(4).tolist(),
                 "dim": 8,
                 "mindfulness_score": round(float(sample["mindfulness"]), 3),
             },
-            "model_output": round(float(output_np), 4),
             "recommendation": recommendation,
         }
 

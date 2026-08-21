@@ -1,0 +1,17 @@
+# ================================
+# MulitiModal 历史代码依赖
+# ================================
+# 仅用于 legacy_research/, experiment/archive/
+# 工业代码不应依赖此文件
+
+-r requirements.txt
+
+# 神经生理信号处理 (仅实验使用)
+neurokit2>=0.2
+
+# 音频处理 (可选)
+librosa>=0.10
+
+# 统计与更复杂的可视化
+plotly>=5.15
+kaleido>=0.2  # plotly 静态导出

@@ -1,5 +1,6 @@
 ./mulitModal/
 ./env/
+.venv/
 experiment/rawdata/row_data/
 *.xlsx
 *.npz

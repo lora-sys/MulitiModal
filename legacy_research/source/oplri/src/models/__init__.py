@@ -1,5 +1,5 @@
-from src.models.encoders import get_dynamic_encoder
-from src.models.fusion import BaselineSignalRegressor, DualGatingModel, TCMEncoderAdapter
+from models.encoders import get_dynamic_encoder
+from models.fusion import BaselineSignalRegressor, DualGatingModel, TCMEncoderAdapter
 
 __all__ = [
     "get_dynamic_encoder",

@@ -19,7 +19,9 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -35,15 +37,23 @@ import gradio as gr  # noqa: E402
 from app import get_manager, CONSTITUTION_NAMES  # noqa: E402
 from examples import get_preset, get_preset_list   # noqa: E402
 
+# 临时图片目录
+IMG_DIR = Path(tempfile.mkdtemp(prefix="mulitimodal_imgs_"))
+IMG_DIR.mkdir(exist_ok=True)
+_img_counter = [0]
+
+
+def _next_img_path(suffix=".png") -> str:
+    _img_counter[0] += 1
+    return str(IMG_DIR / f"plot_{_img_counter[0]}{suffix}")
+
 
 # ──────────────────────────────────────────────────────────────
 # 绘图工具
 # ──────────────────────────────────────────────────────────────
 
 def draw_waveform(data, color: str, title: str, ylabel: str = "") -> str:
-    """用 matplotlib 绘制波形图，返回 base64 PNG."""
-    import base64
-    import io
+    """用 matplotlib 绘制波形图，保存为临时 PNG 文件，返回文件路径（供 Gradio Image 组件使用）。"""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -67,18 +77,15 @@ def draw_waveform(data, color: str, title: str, ylabel: str = "") -> str:
     ax.set_xticks([])
     ax.set_yticks([])
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight",
+    path = _next_img_path()
+    fig.savefig(path, format="png", bbox_inches="tight",
                 facecolor="#111827", edgecolor="none")
-    buf.seek(0)
     plt.close(fig)
-    return f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"
+    return path
 
 
 def draw_tcm_bars(probabilities: dict, highlight_idx: int) -> str:
-    """绘制中医体质概率条形图."""
-    import base64
-    import io
+    """绘制中医体质概率条形图，保存为临时 PNG 文件，返回文件路径."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -120,19 +127,15 @@ def draw_tcm_bars(probabilities: dict, highlight_idx: int) -> str:
     )
 
     fig.tight_layout(pad=0.5)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight",
+    path = _next_img_path()
+    fig.savefig(path, format="png", bbox_inches="tight",
                 facecolor="#111827", edgecolor="none")
-    buf.seek(0)
     plt.close(fig)
-    return f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"
+    return path
 
 
 def draw_mindfulness_ring(score: float) -> str:
-    """绘制正念指数环形图."""
-    import base64
-    import io
-    import math
+    """绘制正念指数环形图，保存为临时 PNG 文件，返回文件路径."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -162,12 +165,11 @@ def draw_mindfulness_ring(score: float) -> str:
     ax.set_xlim(-1.5, 1.5)
     ax.set_ylim(-1.5, 1.5)
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight",
+    path = _next_img_path()
+    fig.savefig(path, format="png", bbox_inches="tight",
                 facecolor="#111827", edgecolor="none")
-    buf.seek(0)
     plt.close(fig)
-    return f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"
+    return path
 
 
 def build_vitals_table(vitals: dict) -> str:
@@ -406,11 +408,7 @@ def build_ui():
 
     with gr.Blocks(
         title="MulitiModal — 多模态按摩决策演示",
-        theme=gr.themes.Base(
-            primary_hue="cyan",
-            neutral_hue="slate",
-            font=["-apple-system", "PingFang SC", "Microsoft YaHei", "sans-serif"],
-        ),
+        theme=gr.themes.Default(),
         css="""
         .gr-block { background: #111827 !important; }
         .gr-box { background: #111827 !important; border: 1px solid #2a3550 !important; border-radius: 12px !important; }
@@ -440,9 +438,11 @@ def build_ui():
 
         # ── 场景选择 ──
         with gr.Row():
+            preset_choices = [(key, key) for key, _, _ in presets]
+            preset_labels = {key: label for key, label, _ in presets}
             preset_dropdown = gr.Dropdown(
-                choices=[(label, key) for key, label, _ in presets],
-                value=presets[0][1],
+                choices=preset_choices,
+                value=presets[0][0],
                 label="选择演示场景",
                 scale=3,
             )

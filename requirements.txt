@@ -1,0 +1,32 @@
+# 核心科学计算 (兼容 Python 3.10+)
+numpy>=2.5.2
+scipy>=1.18.0
+
+# 数据表格与序列化
+pandas>=3.0.5
+pyyaml>=6.0.3
+
+# 深度学习框架
+torch>=2.13.0
+torchvision>=0.28.0
+torchaudio>=2.11.0
+
+# 可视化
+matplotlib>=3.11.1
+seaborn>=0.13.2
+
+# 机器学习工具
+scikit-learn>=1.9.0
+optuna>=4.9.0
+
+# 演示与界面
+gradio>=6.24.0
+
+# 进度条与工具
+tqdm>=4.70.0
+
+# 文件格式支持
+h5py>=3.16.0
+
+# 图像处理
+pillow>=12.3.0
