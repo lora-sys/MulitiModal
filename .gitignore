@@ -5,7 +5,6 @@ experiment/rawdata/row_data/
 *.xlsx
 *.npz
 *.pth
-*.csv
 experiment/rawdata/clean_data
 /.opencode/
 venv
@@ -24,9 +23,7 @@ experiment/model/log.txt
 training_output.log
 .vscode
 /checkpoints
-/data
 /log
 /results
 .opencode
-data
 tcm_ft_transformer/results
