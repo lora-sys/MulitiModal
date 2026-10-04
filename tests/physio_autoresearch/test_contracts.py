@@ -62,6 +62,19 @@ def test_candidate_identity_ignores_hypothesis_and_feature_order(contract):
     assert candidate_id(a) == candidate_id(b)
 
 
+@pytest.mark.parametrize("family,depth", [("random_forest", 6), ("xgboost", 3)])
+def test_omitted_tree_depth_cannot_bypass_candidate_bounds(contract, family, depth):
+    from physio_autoresearch.models import make_model
+    proposal = {"model": family}
+    candidate = validate_candidate(proposal, contract)
+    assert candidate["params"]["max_depth"] == depth
+    assert proposal == {"model": family}  # Canonicalization preserves the proposal.
+    estimator = make_model(candidate, contract["seed"]).named_steps["model"]
+    if family == "xgboost":
+        estimator = estimator.estimator
+    assert estimator.get_params()["max_depth"] == depth
+
+
 @pytest.mark.harness_bench
 @pytest.mark.parametrize("change,code", [
     (lambda f: f.drop(columns="age"), "SCHEMA_DRIFT"),
@@ -124,6 +137,43 @@ def test_prediction_shape_and_nan():
         check_predictions([[np.nan]], 1, 1)
     with pytest.raises(ResearchError, match="INCOMPLETE_PREDICTIONS"):
         check_predictions([[1, 2]], 1, 1)
+
+
+@pytest.mark.parametrize("prediction,rows,targets", [
+    ([[1, 2, 3]], 3, 1),
+    ([[[1]], [[2]], [[3]]], 3, 1),
+    ([[1, 2, 3], [4, 5, 6]], 3, 2),
+    ([1, 2, 3, 4], 2, 2),
+    (1, 1, 1),
+])
+def test_predictions_cannot_reshape_wrong_sample_or_target_axes(prediction, rows, targets):
+    with pytest.raises(ResearchError, match="INCOMPLETE_PREDICTIONS"):
+        check_predictions(prediction, rows, targets)
+
+
+def test_prediction_shape_preserves_supported_regressor_outputs():
+    np.testing.assert_array_equal(check_predictions([1, 2, 3], 3, 1), [[1], [2], [3]])
+    np.testing.assert_array_equal(check_predictions([[1, 2], [3, 4]], 2, 2), [[1, 2], [3, 4]])
+
+
+@pytest.mark.parametrize("id_key", ["record_id", "subject_id"])
+def test_generated_prediction_columns_cannot_overwrite_identifiers(contract, id_key):
+    contract[id_key] = "prediction_post_hr"
+    with pytest.raises(ResearchError, match="SCHEMA_COLLISION"):
+        validate_contract(contract)
+
+
+def test_generated_prediction_columns_cannot_collide_with_measured_targets(contract):
+    contract["targets"].append({"name": "prediction_post_hr", "phase": "post", "unit": "bpm", "scale": 10})
+    with pytest.raises(ResearchError, match="SCHEMA_COLLISION"):
+        validate_contract(contract)
+
+
+@pytest.mark.parametrize("row", ["r1,s1\x00suffix,30,70,40,65", "r1,s1,30,70,40,65\x0099"])
+def test_csv_nul_bytes_cannot_silently_truncate_subjects_or_outcomes(contract, row):
+    payload = ("record_id,subject_id,age,pre_hr,pre_hrv,post_hr\n" + row + "\n").encode()
+    with pytest.raises(ResearchError, match="CORRUPTED_DATA"):
+        parse_data(payload, contract)
 
 
 @pytest.mark.harness_bench
