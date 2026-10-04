@@ -1,0 +1,17 @@
+{
+  "name": "mulitimodal-physio-autoresearch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=22.19.0"},
+  "scripts": {
+    "research:pi": "node physio_autoresearch/pi/agent.mjs",
+    "test:pi": "node --test physio_autoresearch/pi/*.test.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.2",
+    "@earendil-works/pi-ai": "1.0.2",
+    "@sinclair/typebox": "0.34.48",
+    "pi-autoresearch": "1.8.1"
+  }
+}
