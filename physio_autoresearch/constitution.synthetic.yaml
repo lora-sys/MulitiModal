@@ -1,0 +1,23 @@
+# Demonstration only. These fields/scales are not a company data contract.
+schema_version: 1
+protocol_id: synthetic-pipeline-v0
+status: smoke
+source: synthetic
+prediction_time: pre_massage
+evaluation: leave_one_subject_out
+metric: subject_macro_normalized_mae
+record_id: record_id
+subject_id: subject_id
+seed: 42
+min_improvement: 0.000001
+features:
+  - {name: age, phase: pre, group: profile, unit: years, range: [18, 100]}
+  - {name: pre_hr, phase: pre, group: vital, unit: bpm, range: [30, 220]}
+  - {name: pre_hrv, phase: pre, group: vital, unit: ms, range: [0, 300]}
+targets:
+  - {name: post_hr, phase: post, unit: bpm, scale: 10}
+budget:
+  max_experiments: 20
+  max_seconds: 600
+  candidate_timeout_seconds: 60
+  patience: 12

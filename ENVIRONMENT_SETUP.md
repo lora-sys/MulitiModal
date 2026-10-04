@@ -1,144 +1,29 @@
-# 环境配置总结
+# 当前开发环境（2026-10-04）
 
-**完成时间**: 2026-08-15
+本机已创建仓库专用 .venv，实际 Python 为 3.12.14。本次验证使用
+requirements-autoresearch.lock.txt 中的离线研究依赖，Node 依赖锁定在
+package-lock.json，安装于项目 node_modules/。
 
-## 已完成的配置
-
-### 1. 依赖管理文件
-
-- ✅ **requirements.txt** - 核心依赖 (工业代码 + 演示)
-- ✅ **requirements-dev.txt** - 开发工具链
-- ✅ **requirements-legacy.txt** - 历史实验代码依赖 (已分离)
-- ✅ **dependency_analysis.md** - 详细依赖分析报告
-
-### 2. 虚拟环境
-
-- ✅ **.venv/** - 项目级隔离环境
-- ✅ **Python 3.14.7** - 系统版本
-- ✅ **pip 26.2.1** - 包管理器
-- ✅ **.python-version** - Python 版本标记
-
-### 3. Pip 配置
-
-- ✅ **pip.conf** - 使用 PyPI 官方源 (避免镜像 403)
-- ✅ **自动更新 setuptools/wheel**
-
-### 4. Git 配置
-
-- ✅ **.gitignore** - 更新排除 `.venv/` 和 `.env/`
-
-### 5. 验证工具
-
-- ✅ **check_env.py** - 环境验证脚本
-
-## 依赖清单
-
-### 工业代码 (requirements.txt)
-
-```txt
-✓ numpy==2.5.2
-✓ scipy==1.18.0
-✓ pandas==3.0.5
-✓ pyyaml==6.0.3
-✓ torch==2.13.0+cpu
-✓ torchvision==0.28.0+cpu
-✓ torchaudio==2.11.0+cpu
-✓ matplotlib==3.11.1
-✓ seaborn==0.13.2
-✓ scikit-learn==1.9.0
-✓ optuna==4.9.0
-✓ gradio==6.24.0
-✓ tqdm==4.70.0
-✓ h5py==3.16.0
-✓ pillow==12.3.0
+```powershell
+& .\.venv\Scripts\python.exe --version
+& .\.venv\Scripts\python.exe -m pip check
+& .\.venv\Scripts\python.exe -m pytest tests/physio_autoresearch --basetemp runs/physio-tests -q
+npm run test:pi
 ```
 
-### 开发工具 (requirements-dev.txt) ✅ 已安装
+这次 .venv 不包含历史文档曾声称安装的完整 Torch/Gradio/Jupyter 环境。
+requirements.txt、requirements-dev.txt、requirements-legacy.txt 和根目录
+.python-version 的历史声明没有用于本轮安装，也没有被当成验证通过的证据。
+后续开发 representation 或旧 Demo 时，需要另行验证它们的依赖与 Python 兼容性。
 
-```txt
-✓ black==26.5.1          # 代码格式化
-✓ flake8==7.3.0          # 代码检查
-✓ mypy==2.3.0            # 类型检查
-✓ pytest==9.1.1          # 测试框架 + pytest-cov + pytest-xdist
-✓ jupyter==1.1.1         # Jupyter 核心 + jupyterlab
-✓ ipykernel==7.3.0       # Jupyter 内核
-✓ line_profiler==5.0.2   # 性能分析
-✓ memory_profiler==0.61.0 # 内存分析
-✓ ipdb==0.13.13          # 调试器
-✓ tensorboard==2.21.0    # 训练可视化
+重建本轮环境时，用可运行的 Python 3.12 创建 .venv，然后执行：
+
+```powershell
+# 本机全局 pip.ini 无法解析；这个覆盖仅影响当前 PowerShell 安装进程。
+$env:PIP_CONFIG_FILE = 'NUL'
+& .\.venv\Scripts\python.exe -m pip install -r requirements-autoresearch.lock.txt
+npm ci --ignore-scripts
 ```
 
-### 历史代码 (requirements-legacy.txt)
-
-在 `requirements.txt` 基础上增加:
-- neurokit2>=0.2 (神经生理信号)
-- librosa>=0.10 (音频处理,可选)
-- plotly>=5.15 (可视化)
-
-## 验证结果
-
-```
-✅ Python 3.14.7
-✅ 虚拟环境激活
-✅ 所有核心依赖安装通过
-✅ 所有开发工具安装通过
-✅ 总包数: 187
-```
-
-## 使用指南
-
-### 激活虚拟环境
-
-```bash
-source .venv/bin/activate
-```
-
-### 验证环境
-
-```bash
-python check_env.py
-```
-
-### 安装依赖
-
-```bash
-# 核心依赖 (✅ 已安装)
-pip install -r requirements.txt
-
-# 开发工具 (✅ 已安装)
-pip install -r requirements-dev.txt
-
-# 历史代码 (仅 legacy_research/ 需要)
-pip install -r requirements-legacy.txt
-```
-
-## 项目结构 (更新后)
-
-```
-MulitiModal/
-├── .venv/                    # ✅ 虚拟环境 (已创建)
-├── .python-version           # ✅ Python 3.14
-├── pip.conf                  # ✅ pip 配置
-├── requirements.txt          # ✅ 核心依赖
-├── requirements-dev.txt      # ✅ 开发依赖
-├── requirements-legacy.txt   # ✅ 历史依赖 (已分离)
-├── dependency_analysis.md    # ✅ 依赖分析报告
-├── ENVIRONMENT.md            # ✅ 环境使用文档
-├── check_env.py              # ✅ 验证脚本
-├── src/                      # 待开发 (工业代码)
-├── representation/           # 待开发
-├── massage_decision/         # 待开发
-├── demo/                     # ✅ Gradio 演示
-├── legacy_research/          # ⚠️  历史代码 (独立依赖)
-└── experiment/archive/       # ⚠️  废弃代码 (不维护)
-```
-
-## 下一步
-
-1. ✅ 依赖分析完成
-2. ✅ 虚拟环境已创建
-3. ✅ 核心依赖已安装 (15 个包)
-4. ✅ 开发工具已安装 (24 个包)
-5. ✅ 总包数: 187 个
-6. 🔄 验证 demo 代码能否运行
-7. 📋 实现工业代码 (src/, representation/, massage_decision/)
+没有修改全局 pip 配置、安装系统 Python、登录模型供应商或迁移凭据。
+详细工作流见 [physio_autoresearch/README.md](physio_autoresearch/README.md)。

@@ -27,3 +27,10 @@ training_output.log
 /results
 .opencode
 tcm_ft_transformer/results
+
+# Offline autoresearch runtime: private data, models, logs and local dependencies
+/runs/
+/node_modules/
+/physio_autoresearch/.pi-runtime/
+/.pytest_cache/
+/.ruff_cache/
