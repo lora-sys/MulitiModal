@@ -46,7 +46,9 @@ def train(candidate: Path):
 
 
 def check_predictions(prediction, rows: int, targets: int) -> np.ndarray:
-    result = np.asarray(prediction, dtype=float).reshape(rows, -1)
+    result = np.asarray(prediction, dtype=float)
+    if targets == 1 and result.shape == (rows,):
+        result = result[:, None]  # sklearn's single-output regressors return 1-D.
     if result.shape != (rows, targets):
         raise ResearchError("INCOMPLETE_PREDICTIONS", str(result.shape))
     if not np.isfinite(result).all():

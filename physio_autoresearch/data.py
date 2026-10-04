@@ -15,6 +15,8 @@ from .contracts import ResearchError, digest
 def parse_data(raw: bytes, contract: dict, prediction_only: bool = False) -> pd.DataFrame:
     try:
         text = raw.decode("utf-8-sig")
+        if "\x00" in text:
+            raise ResearchError("CORRUPTED_DATA", "NUL bytes are forbidden in CSV data")
         reader = csv.reader(io.StringIO(text), strict=True)
         header = next(reader)
         for row in reader:

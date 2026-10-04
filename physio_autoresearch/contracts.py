@@ -60,6 +60,9 @@ def validate_contract(contract: dict) -> dict:
         names = [contract["record_id"], contract["subject_id"]] + [v["name"] for v in features + targets]
         if len(set(names)) != len(names):
             raise ResearchError("SCHEMA_COLLISION", "column names must be unique")
+        prediction_names = {f"prediction_{target['name']}" for target in targets}
+        if prediction_names.intersection(names):
+            raise ResearchError("SCHEMA_COLLISION", "input columns collide with generated prediction columns")
         for feature in features:
             if feature["phase"] != "pre" or future_feature(feature["name"]):
                 raise ResearchError("FUTURE_FEATURE_LEAKAGE", feature["name"])
@@ -111,6 +114,9 @@ def validate_candidate(spec: dict, contract: dict) -> dict:
     params = spec.get("params", {})
     if not isinstance(params, dict):
         raise ResearchError("BAD_MODEL_CONFIG", "params must be an object")
+    if "max_depth" in PARAMETERS[model]:
+        # Library defaults (unbounded RF / depth-6 XGBoost) exceed the V0 caps.
+        params = {"max_depth": PARAMETERS[model]["max_depth"][1], **params}
     for name, value in params.items():
         if name not in PARAMETERS[model]:
             raise ResearchError("BAD_MODEL_CONFIG", f"unsupported parameter: {name}")

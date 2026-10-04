@@ -47,7 +47,7 @@ def archive_code(round_path: Path, manifest: dict):
             archive.write(package / filename, "physio_autoresearch/" + filename)
 
 
-def environment() -> dict:
+def dependency_versions() -> dict:
     versions = {name: importlib.metadata.version(name) for name in ("numpy", "pandas", "scikit-learn", "xgboost", "PyYAML", "joblib")}
     versions["python"] = sys.version.split()[0]
     for package in ("@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "pi-autoresearch"):
@@ -56,8 +56,12 @@ def environment() -> dict:
             versions[package] = read_json(manifest)["version"]
     if (ROOT / "package-lock.json").exists():
         versions["npm_lock_sha256"] = file_hash(ROOT / "package-lock.json")
+    return versions
+
+
+def environment() -> dict:
     revision = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=False)
-    return {"versions": versions, "base_commit": revision.stdout.strip(), "source_sha256": digest(core_hashes())}
+    return {"versions": dependency_versions(), "base_commit": revision.stdout.strip(), "source_sha256": digest(core_hashes())}
 
 
 def safe_store(store: Path) -> Path:
@@ -127,7 +131,7 @@ def load_round(round_path: Path):
         raise ResearchError("CONTRACT_CHANGED", "new protocols require explicit human ingestion")
     if file_hash(round_path / "data.csv") != manifest["data_sha256"]:
         raise ResearchError("DATA_CHANGED", "raw snapshot changed")
-    if core_hashes() != manifest["core_hashes"] or environment()["versions"] != manifest["environment"]["versions"]:
+    if core_hashes() != manifest["core_hashes"] or dependency_versions() != manifest["environment"]["versions"]:
         raise ResearchError("EVALUATOR_CHANGED", "code/dependencies changed since this round was frozen")
     return manifest, contract, history(round_path / "experiments.jsonl")
 

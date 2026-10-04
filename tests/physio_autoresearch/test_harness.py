@@ -63,6 +63,18 @@ def test_core_code_change_requires_new_review(research, monkeypatch):
         load_round(research[-1])
 
 
+def test_round_validation_avoids_provenance_git_but_still_checks_dependencies(research, monkeypatch):
+    path = research[-1]
+    def unexpected_git(*args, **kwargs):
+        pytest.fail("round validation must not launch a provenance subprocess")
+    monkeypatch.setattr(harness.subprocess, "run", unexpected_git)
+    load_round(path)
+    actual = harness.dependency_versions
+    monkeypatch.setattr(harness, "dependency_versions", lambda: {**actual(), "numpy": "changed"})
+    with pytest.raises(ResearchError, match="EVALUATOR_CHANGED"):
+        load_round(path)
+
+
 @pytest.mark.harness_bench
 def test_journal_tampering_is_detected(tmp_path):
     path = tmp_path / "events.jsonl"
@@ -216,12 +228,12 @@ def test_failed_baseline_can_be_retried_once(research, monkeypatch):
 def test_reviewed_code_upgrade_preserves_budget_and_old_results(research, monkeypatch):
     source, protocol, store, path = research
     attempt(path, {"model": "naive"})
-    actual = harness.environment
+    actual = harness.dependency_versions
     def upgraded():
         value = actual()
-        value["versions"]["review-test"] = "new"
+        value["review-test"] = "new"
         return value
-    monkeypatch.setattr(harness, "environment", upgraded)
+    monkeypatch.setattr(harness, "dependency_versions", upgraded)
     with pytest.raises(ResearchError, match="EVALUATOR_CHANGED"):
         ingest(source, protocol, store)
     assert ingest(source, protocol, store, review_code_upgrade=True) == path
