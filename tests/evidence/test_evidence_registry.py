@@ -43,9 +43,10 @@ def test_engineering_granted_but_higher_gates_not(registry):
         assert gates[RESEARCH_CLAIMS].granted is False
 
     tcm = evaluate_gates(registry, "tcm_constitution")
-    assert "mendeley-dataset-files" in tcm[REAL_DATA_TRAINING].missing_claims
+    # mendeley-dataset-files was audited VERIFIED on 2026-10-30; the only
+    # remaining GO_REAL_DATA_TRAINING(tcm) blocker is label-rule certification
+    assert tcm[REAL_DATA_TRAINING].missing_claims == ("tcm-label-rules-verified",)
     assert tcm[RESEARCH_CLAIMS].missing_claims == (
-        "mendeley-dataset-files",
         "tcm-label-rules-verified",
         "independent-reference-data",
     )
@@ -74,7 +75,7 @@ def test_not_verified_requires_gap_note():
 
 
 def test_retrieved_files_need_hashes():
-    with pytest.raises(ValueError, match="path\\+sha256"):
+    with pytest.raises(ValueError, match="path plus sha256 or md5"):
         EvidenceClaim(
             claim_id="bad3",
             primary_url="https://example.com",
@@ -98,9 +99,11 @@ def test_unknown_state_rejected():
 def test_audit_lists_open_gaps(registry):
     lines = registry.audit()
     joined = "\n".join(lines)
-    assert "mendeley-dataset-files: NOT_VERIFIED" in joined
+    assert "tcm-label-rules-verified: NOT_VERIFIED" in joined
+    assert "autoresearch-agent-isolation: NOT_VERIFIED" in joined
     assert "physio-real-data: NOT_AVAILABLE" in joined
     assert "pdf-spec" not in joined  # verified claims are not gaps
+    assert "mendeley-dataset-files" not in joined  # audited VERIFIED 2026-10-30
 
 
 def test_gate_cannot_be_promoted_without_evidence(registry):

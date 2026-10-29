@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-脚手架（#51）+ 神经核心（#48）+ TCM 模型 V1（#39）+ 训练运行时（#49）+ 可信评估/推理（#40）+ AutoResearch RSI V1 Harness（#45，TCM_ONLY 里程碑 1），全部纯合成数据工程验证（SMOKE_ONLY）。
+Phase 1 工程闭环（#51/#48/#39/#49/#40/#44/#45）+ 证据注册表与 GO 门（#47）+ 公开数据集审计（#37）完成。真实数据获取状态：Mendeley 274 人 8 维体质评分已下载并审计（train_candidate，CCMQ-2009）；Zenodo CCMQ 计分参考已取回（rules_test_only）；TCM 的 GO_REAL_DATA_TRAINING 唯一剩余阻塞为 #38 标签规则认证。全部模型/训练结果均为合成数据 SMOKE_ONLY。
 
 - 分支：`feature/clean-slate`（空起点；旧历史仅见 GitHub commit `9fc5087d`，已删除，不作依赖）
 - 主 Epic：#22（双模型 + AutoResearch/RSI V1）
@@ -39,8 +39,10 @@ docs/source/            原始需求 PDF 与一手资料
 docs/design/            #44 AutoResearch RSI V1 设计规范
 docs/evidence/          #47 证据注册表（registry.json）与审计矩阵（audit-matrix.md）
 src/core/               #48 神经核心：specs / batch / encoders / losses / models / registry
+src/data/               #37 公开数据集注册表与 Mendeley 适配器（原始文件在开发机 data/local/，不入 Git）
 src/runtime/            #49/#40/#45 训练运行时：batches / trainer / evaluation / checkpoint / protocols / tcm_eval / tcm_infer / agent / manifest / harness / worker / cli
 src/evidence/           #47 证据注册表与三层 GO 门（evaluate_gates 机械推导）
+docs/data/              #37 数据集审计报告（Mendeley 274 人 8 维评分 / Zenodo CCMQ 计分参考）
 tests/core/             核心契约测试（synthetic；含 During/Post 拒绝、缺模态、NaN、mask、保存重载）
 tests/runtime/          运行时测试（synthetic；fit/断点续训一致性/泄漏断言/受试者级指标/CLI smoke）
 tests/evidence/         证据注册表与 GO 门负例测试（VERIFIED 必须带哈希与访问日期）

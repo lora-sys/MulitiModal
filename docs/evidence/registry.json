@@ -56,15 +56,20 @@
     {
       "claim_id": "mendeley-dataset-files",
       "primary_url": "https://data.mendeley.com/datasets/cxtph3tjsg/1",
-      "edition_version": "v1 (2026-10-29 catalog observed)",
+      "edition_version": "v1, file list via official API (2026-10-30)",
       "access_date": "2026-10-30",
-      "retrieved_files": [],
-      "exact_supported_claim": "(none yet) Dataset files with actual rows/columns, subject IDs, 8-vs-9-dimension scores and original questionnaire presence have NOT been downloaded or read.",
-      "limitations": "Files unreadable so far: download/inspection not completed; any nine-dimension real supervised training stays blocked; no ready_to_train statement is permitted (#37/#47).",
-      "verification_state": "NOT_VERIFIED",
+      "retrieved_files": [
+        {
+          "path": "data/local/mendeley-cxtph3tjsg-v1/Share data.xls (dev host, git-ignored)",
+          "sha256": "6206f432b683f8a7b9a75dae23e598a4f01a41a4f8af84b099924b9d85d08a96"
+        }
+      ],
+      "exact_supported_claim": "Dataset downloaded and audited: 274 subjects x 71 columns; eight constitution score columns (YaD/YiD/QiDf/PW/WH/BS/SDa/QDp) 0-100, fully observed with zero missing; no balanced-constitution (9th) column exists; no explicit subject ID column (row order = anonymous identity); zero duplicate rows; CC BY 4.0. Eligibility: train_candidate for 8/9-dim masked score regression under CCMQ-2009.",
+      "limitations": "Scores follow CCMQ-2009; conversion to GB/T 46939-2025 forbidden without a certified mapping (#38). Score-column abbreviations need certified semantic mapping (#38). No categorical labels in this file; nine-dim score training is impossible by design (8 observed + 1 masked). Paper cohort size 274 confirmed at row level.",
+      "verification_state": "VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
-      "blocks": ["#37 dataset audit", "#38 label engine verification", "#50 real TCM training", "GO_REAL_DATA_TRAINING(tcm)"]
+      "blocks": ["#38 label standard certification (only remaining GO_REAL_DATA_TRAINING(tcm) blocker)"]
     },
     {
       "claim_id": "tcm-label-rules-verified",
@@ -136,11 +141,25 @@
     {
       "claim_id": "zenodo-ccmq-scripts",
       "primary_url": "https://zenodo.org/records/4431679",
+      "edition_version": "v1 (SAS + SPSS + TEST_DATA.xlsx)",
       "access_date": "2026-10-30",
-      "retrieved_files": [],
-      "exact_supported_claim": "(none yet) Researcher CCMQ scoring scripts/tests have not been retrieved or reviewed.",
-      "limitations": "Researcher code is not an official scorer (#47/#38); treat as reference material only once retrieved.",
-      "verification_state": "UNVERIFIED",
+      "retrieved_files": [
+        {
+          "path": "data/local/zenodo-4431679/TEST_DATA.xlsx (dev host, git-ignored)",
+          "md5": "363d3e388df625425242fb2e45ec3d97"
+        },
+        {
+          "path": "data/local/zenodo-4431679/CCMQ SAS code.sas (dev host, git-ignored)",
+          "md5": "3b622e25070847c767c31806d07afcf2"
+        },
+        {
+          "path": "data/local/zenodo-4431679/CCMQ SPSS syntax.sps (dev host, git-ignored)",
+          "md5": "d843895a1fa7f626a7aa62c116757704"
+        }
+      ],
+      "exact_supported_claim": "Researcher CCMQ scoring code retrieved: TEST_DATA.xlsx holds 14 subjects x 63 CCMQ item responses; SAS/SPSS syntax implements researcher scoring. Eligibility: rules_test_only — usable to verify a #38 rule-engine implementation against researcher scoring, never as supervised training data.",
+      "limitations": "Researcher code is not an official scorer (#47/#38); 14 subjects is a test sample only; CCMQ-2009 edition.",
+      "verification_state": "VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED"
     },

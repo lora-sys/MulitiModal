@@ -66,9 +66,10 @@ class EvidenceClaim:
                 "limitations or blocked tasks"
             )
         for f in self.retrieved_files:
-            if "sha256" not in f or "path" not in f:
+            if "path" not in f or not ({"sha256", "md5"} & set(f)):
                 raise ValueError(
-                    f"claim {self.claim_id!r}: retrieved_files entries need path+sha256"
+                    f"claim {self.claim_id!r}: retrieved_files entries need "
+                    "path plus sha256 or md5"
                 )
 
     def to_dict(self) -> dict:
