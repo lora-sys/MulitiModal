@@ -36,6 +36,23 @@ class ModelBatch:
             raise ValueError("ModelBatch.features is empty")
         return int(next(iter(self.features.values())).shape[0])
 
+    def to(self, device: torch.device | str) -> ModelBatch:
+        """Device-move that keeps the contract structure intact."""
+        return ModelBatch(
+            features={k: v.to(device) for k, v in self.features.items()},
+            availability={k: v.to(device) for k, v in self.availability.items()},
+            targets=(
+                {k: v.to(device) for k, v in self.targets.items()}
+                if self.targets is not None
+                else None
+            ),
+            target_mask=(
+                {k: v.to(device) for k, v in self.target_mask.items()}
+                if self.target_mask is not None
+                else None
+            ),
+        )
+
     def validate(self, spec: InputSpecSet) -> None:
         """Reject anything the input spec does not allow — loudly, never silently."""
         if not self.features:

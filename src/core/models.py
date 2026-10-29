@@ -83,6 +83,12 @@ class TCMConstitutionModel(nn.Module):
 
     model_type = "tcm_constitution_v1"
 
+    #: output key -> target key (category prediction maps to category_labels)
+    prediction_targets = {
+        "category_probs": "category_labels",
+        "constitution_scores": "constitution_scores",
+    }
+
     def __init__(
         self,
         input_spec: InputSpecSet,
@@ -176,6 +182,8 @@ class PhysioBPSIEFRIModel(nn.Module):
 
     model_type = "physio_bpsi_efri_v0"
 
+    prediction_targets = {"efri": "efri", "bpsi": "bpsi"}
+
     def __init__(
         self,
         input_spec: InputSpecSet,
@@ -250,7 +258,9 @@ def default_tcm_model(
         "category_exclusive": kwargs.get("category_exclusive", False),
         "include_score_head": kwargs.get("include_score_head", False),
     }
-    return TCMConstitutionModel(spec, **config), config
+    model = TCMConstitutionModel(spec, **config)
+    model.model_config = config  # checkpoint contract (runtime/trainer #49)
+    return model, config
 
 
 def default_physio_model(
@@ -263,4 +273,6 @@ def default_physio_model(
         "include_bpsi_aux": kwargs.get("include_bpsi_aux", True),
         "bpsi_aux_weight": kwargs.get("bpsi_aux_weight", 0.3),
     }
-    return PhysioBPSIEFRIModel(spec, **config), config
+    model = PhysioBPSIEFRIModel(spec, **config)
+    model.model_config = config  # checkpoint contract (runtime/trainer #49)
+    return model, config

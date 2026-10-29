@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-脚手架（#51）+ 共享神经核心（#48）+ TCM 体质预测模型 V1（#39，纯合成数据工程验证，SMOKE_ONLY）。
+脚手架（#51）+ 共享神经核心（#48）+ TCM 体质预测模型 V1（#39）+ 训练运行时（#49），全部纯合成数据工程验证（SMOKE_ONLY）。
 
 - 分支：`feature/clean-slate`（空起点；旧历史仅见 GitHub commit `9fc5087d`，已删除，不作依赖）
 - 主 Epic：#22（双模型 + AutoResearch/RSI V1）
@@ -37,10 +37,14 @@ ruff check .
 ```
 docs/source/            原始需求 PDF 与一手资料
 src/core/               #48 神经核心：specs / batch / encoders / losses / models / registry
+src/runtime/            #49 训练运行时：batches / trainer / evaluation / checkpoint / protocols / cli
 tests/core/             核心契约测试（synthetic；含 During/Post 拒绝、缺模态、NaN、mask、保存重载）
+tests/runtime/          运行时测试（synthetic；fit/断点续训一致性/泄漏断言/CLI smoke）
 tests/                  pytest（fast 默认；slow / synthetic 用 marker）
 ```
 
 `src/core` 要点：输入契约由 `InputSpecSet` 驱动（TCM `tcm-input-v0`、生理 `physio-input-pre-only-v0`）；缺模态 = features 缺键、行不可用 = availability mask，零填充嵌入、永不插补；非契约模态（如生理模型的 During/Post 特征）validate 阶段直接拒绝。TCM V1（#39）分类头优先：九维独立 sigmoid 多标签（逐类 observed mask），互斥来源才用 softmax-CE；0–100 回归头独立且默认关闭，仅真实问卷评分可用时启用。`registry` 保存/加载带 SHA-256 校验与 input_spec 严格重建。
 
-后续模块目录由对应 issue 落位：#49（Trainer/Evaluator/CLI）、#40（中医 Evaluator/推理 API）、#25/#42/#43（数据契约与规则引擎）。不要凭空恢复旧目录名（representation/、massage_decision/、legacy_research/）。
+`src/runtime` 要点（#49）：`SyntheticBatchProvider`（模拟 subject manifest + #27 分区断言）、`Trainer.fit`（固定种子、CPU 默认设备、AMP 可选、梯度裁剪、早停、断点续训一致性）、`Evaluator`（versioned masked 指标，类别指标仅在标签存在时计算）、训练 checkpoint（weights + optimizer/epoch/RNG 状态 + SMOKE_ONLY 标记）、`train_candidate`/`trusted_score` 为 #45 预留的稳定协议。CLI（`PYTHONPATH=src python -m runtime.cli`）：`list-models` / `validate-architecture` / `smoke --task tcm|physio` / `checkpoint-reload`，全部只读合成 fixture（SMOKE_ONLY）。
+
+后续模块目录由对应 issue 落位：#40（中医 Evaluator/推理 API）、#45（AutoResearch 隔离 harness）、#25/#42/#43（数据契约与规则引擎）。不要凭空恢复旧目录名（representation/、massage_decision/、legacy_research/）。

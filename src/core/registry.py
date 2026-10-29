@@ -27,8 +27,10 @@ WEIGHTS_FILE = "weights.pt"
 METADATA_FILE = "metadata.json"
 
 
-def resolve_device(preference: str = "cpu") -> torch.device:
+def resolve_device(preference: str | torch.device = "cpu") -> torch.device:
     """CPU is the default; cuda/mps/auto opt in explicitly (#48)."""
+    if isinstance(preference, torch.device):
+        return preference
     if preference == "cpu":
         return torch.device("cpu")
     if preference in ("cuda", "auto"):
@@ -88,6 +90,7 @@ def load_model(model_dir: str | Path, device: str = "cpu") -> tuple[nn.Module, d
     cls = MODEL_BUILDERS[model_type]
     spec = InputSpecSet.from_dict(metadata["input_spec"])
     model = cls(input_spec=spec, **metadata["config"])  # type: ignore[call-arg]
+    model.model_config = metadata["config"]  # type: ignore[attr-defined]
     state = torch.load(model_dir / WEIGHTS_FILE, map_location="cpu", weights_only=True)
     model.load_state_dict(state, strict=True)
 
