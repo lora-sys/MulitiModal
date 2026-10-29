@@ -97,7 +97,7 @@ class SyntheticBatchProvider:
             features = self._features(n, g)
             targets = target_mask = None
             if self.with_targets:
-                targets, target_mask = self._targets(n, g)
+                targets, target_mask = self._targets(features, g)
             yield BatchItem(
                 batch=ModelBatch(
                     features=features,
@@ -119,14 +119,20 @@ class SyntheticBatchProvider:
         }
 
     def _targets(
-        self, n: int, g: torch.Generator
+        self, features: dict[str, torch.Tensor], g: torch.Generator
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         if self.task == "tcm":
-            labels = torch.randint(0, 2, (n, NUM_SCORES), generator=g).float()
+            # Deterministic, learnable from body features (NOT real labels;
+            # exists so harness candidates differ measurably on smoke runs).
+            body = features["body_features"]
+            idx = torch.arange(NUM_SCORES) % body.shape[1]
+            labels = (body[:, idx] > 0.5).float()
+            n = labels.shape[0]
             return (
                 {"category_labels": labels},
                 {"category_labels": torch.rand(n, NUM_SCORES, generator=g) > 0.3},
             )
+        n = features["body_pre"].shape[0]
         return (
             {
                 "efri": torch.randn(n, 1, generator=g),

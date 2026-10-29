@@ -101,6 +101,19 @@ def cmd_checkpoint_reload(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research(args: argparse.Namespace) -> int:
+    from runtime.harness import TCM_ONLY_MESSAGE, AutoResearchHarness, default_tcm_runspec
+
+    if args.profile != "tcm":
+        print(json.dumps({"ok": False, "error": TCM_ONLY_MESSAGE}))
+        return 2
+    runspec = default_tcm_runspec(rounds=args.rounds, timeout_s=args.timeout)
+    runspec["seed"] = args.seed
+    harness = AutoResearchHarness(runspec, out_dir=args.out)
+    print(json.dumps(harness.run(), indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="runtime.cli", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -127,6 +140,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dir", required=True)
     p.add_argument("--device", default="cpu")
     p.set_defaults(func=cmd_checkpoint_reload)
+
+    p = sub.add_parser("research")
+    p.add_argument("--profile", choices=["tcm", "physio"], required=True)
+    p.add_argument("--rounds", type=int, default=3)
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--timeout", type=float, default=300.0)
+    p.add_argument("--out", default="runs/autoresearch")
+    p.set_defaults(func=cmd_research)
     return parser
 
 

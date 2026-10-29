@@ -5,6 +5,15 @@ Everything here runs on synthetic fixtures (SMOKE_ONLY); no real dataset
 file is ever read. See issues #49 and #45 for the acceptance contracts.
 """
 
+from .agent import (
+    AgentProvider,
+    DeterministicStubProvider,
+    ExternalAgentProvider,
+    Proposal,
+    apply_config_patch,
+    validate_config_patch,
+    validate_source_patch,
+)
 from .batches import (
     BatchItem,
     BatchProvider,
@@ -17,6 +26,8 @@ from .checkpoint import (
     save_training_checkpoint,
 )
 from .evaluation import METRIC_VERSION, Evaluator
+from .harness import AutoResearchHarness, default_tcm_runspec
+from .manifest import RunManifestStore
 from .protocols import TASK_BUILDERS, train_candidate, trusted_score
 from .tcm_eval import (
     EVAL_METRIC_VERSION,
@@ -57,4 +68,14 @@ __all__ = [
     "make_synthetic_tcm_manifest",
     "TCM_OUTPUT_SCHEMA_VERSION",
     "TCMPredictor",
+    "AgentProvider",
+    "DeterministicStubProvider",
+    "ExternalAgentProvider",
+    "Proposal",
+    "apply_config_patch",
+    "validate_config_patch",
+    "validate_source_patch",
+    "AutoResearchHarness",
+    "default_tcm_runspec",
+    "RunManifestStore",
 ]
