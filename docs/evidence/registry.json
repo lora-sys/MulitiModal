@@ -1,0 +1,160 @@
+{
+  "version": "evidence-registry-v0",
+  "updated": "2026-10-30",
+  "claims": [
+    {
+      "claim_id": "pdf-spec",
+      "primary_url": "docs/source/pre-massage-fatigue-prediction-framework.pdf",
+      "edition_version": "user draft with [N]/[value] placeholders",
+      "access_date": "2026-10-30",
+      "retrieved_files": [
+        {
+          "path": "docs/source/pre-massage-fatigue-prediction-framework.pdf",
+          "sha256": "29727daced33cc95506f580ea542f4bd1386c9a44b29cf1e2836627439eed781"
+        }
+      ],
+      "exact_supported_claim": "BPSI (Eq.2) is a Pre-only weighted index; EFRI (Eq.3) is an experimental During-EEG + Post-Pre composite target; Eq.4-9 sketch the dual-branch dual-head network. Design intent only.",
+      "limitations": "Results sections contain unfilled placeholders [N], [value], [selected method]; this is a research plan, NOT experimental evidence; EFRI has no independently validated construct.",
+      "verification_state": "VERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED"
+    },
+    {
+      "claim_id": "tcm-engineering-smoke",
+      "primary_url": "https://github.com/lora-sys/MulitiModal/tree/feature/clean-slate/tests",
+      "edition_version": "commits 65df01b..ca22434 (2026-10-30)",
+      "access_date": "2026-10-30",
+      "retrieved_files": [
+        {
+          "path": "tests/runtime/test_autoresearch.py",
+          "sha256": "TRACKED-IN-GIT"
+        }
+      ],
+      "exact_supported_claim": "TCM dual-model engineering loop (model V1, trainer, checkpoint, trusted evaluator, inference API, bounded RSI harness) runs end-to-end on synthetic tensors: 77 pytest cases green on dev host acam-lab; ruff clean.",
+      "limitations": "SMOKE_ONLY by definition (#22/#47): synthetic tensors prove engineering validity only; no scientific or clinical claim is supported; real training metrics cannot be derived from these runs.",
+      "verification_state": "VERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED"
+    },
+    {
+      "claim_id": "physio-engineering-smoke",
+      "primary_url": "https://github.com/lora-sys/MulitiModal/tree/feature/clean-slate/tests",
+      "edition_version": "commit 06ab0ec (2026-10-30)",
+      "access_date": "2026-10-30",
+      "retrieved_files": [
+        {
+          "path": "tests/runtime/test_trainer.py",
+          "sha256": "TRACKED-IN-GIT"
+        }
+      ],
+      "exact_supported_claim": "PhysioBPSIEFRIModel forward/loss/checkpoint paths execute on synthetic Pre-only tensors with During/Post rejection enforced.",
+      "limitations": "SMOKE_ONLY; physio real data NOT_AVAILABLE (#23-#31 blocked); BPSI/EFRI are experimental constructions, not validated fatigue ground truth.",
+      "verification_state": "VERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED"
+    },
+    {
+      "claim_id": "mendeley-dataset-files",
+      "primary_url": "https://data.mendeley.com/datasets/cxtph3tjsg/1",
+      "edition_version": "v1 (2026-10-29 catalog observed)",
+      "access_date": "2026-10-30",
+      "retrieved_files": [],
+      "exact_supported_claim": "(none yet) Dataset files with actual rows/columns, subject IDs, 8-vs-9-dimension scores and original questionnaire presence have NOT been downloaded or read.",
+      "limitations": "Files unreadable so far: download/inspection not completed; any nine-dimension real supervised training stays blocked; no ready_to_train statement is permitted (#37/#47).",
+      "verification_state": "NOT_VERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED",
+      "blocks": ["#37 dataset audit", "#38 label engine verification", "#50 real TCM training", "GO_REAL_DATA_TRAINING(tcm)"]
+    },
+    {
+      "claim_id": "tcm-label-rules-verified",
+      "primary_url": "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=827D6D266BA52A2983F93638DA871028",
+      "edition_version": "GB/T 46939-2025 (catalog confirmed; official full text NOT obtained)",
+      "access_date": "2026-10-30",
+      "retrieved_files": [],
+      "exact_supported_claim": "(none yet) Item-by-item scoring rules have NOT been compared against the official standard text; a third-party transcription (scribd document 1066620653) exists but is not an authoritative edition; legacy CCMQ rules and researcher SAS code must stay separate from the official scorer.",
+      "limitations": "Official full text requires authenticated download; RULE/PUBLISHED label tiers cannot be certified until the comparison is done (#38).",
+      "verification_state": "NOT_VERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED",
+      "blocks": ["#38 rule engine certification", "GO_REAL_DATA_TRAINING(tcm)"]
+    },
+    {
+      "claim_id": "independent-reference-data",
+      "primary_url": "NOT_AVAILABLE",
+      "access_date": "2026-10-30",
+      "retrieved_files": [],
+      "exact_supported_claim": "(none yet) No independent reference dataset for unbiased validation exists in the project.",
+      "limitations": "GO_RESEARCH_CLAIMS requires it; development-set scores must never be reported as independent validation (#44/#47).",
+      "verification_state": "NOT_AVAILABLE",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED",
+      "blocks": ["GO_RESEARCH_CLAIMS(tcm)", "GO_RESEARCH_CLAIMS(physio)"]
+    },
+    {
+      "claim_id": "physio-real-data",
+      "primary_url": "NOT_AVAILABLE",
+      "access_date": "2026-10-30",
+      "retrieved_files": [],
+      "exact_supported_claim": "(none yet) No pre/during/post paired massage physiology data has been acquired.",
+      "limitations": "#23-#31 and #41-#43 real-data stages stay Blocked; EFRI composite weights remain an experimental design choice (0.5/0.5 EFRI_JOINT_EQUAL_BLOCK_V0), not validated coefficients.",
+      "verification_state": "NOT_AVAILABLE",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED",
+      "blocks": ["#26 import/QC", "#42 physio label engine", "GO_REAL_DATA_TRAINING(physio)"]
+    },
+    {
+      "claim_id": "autoresearch-upstream-license",
+      "primary_url": "https://github.com/karpathy/autoresearch",
+      "edition_version": "master 228791fb499afffb54b46200aca536f79142f117 (2026-03-26)",
+      "access_date": "2026-10-30",
+      "retrieved_files": [
+        {
+          "path": "upstream:README.md@228791fb",
+          "sha256": "3958fd4195ac2f98ed35c4eaa4f3028a335165ee24945e96426c408d25793a41"
+        }
+      ],
+      "exact_supported_claim": "Upstream autoresearch is usable under MIT: README lines 90-92 state '## License / MIT'; GitHub API license field is null and no LICENSE file exists in the root listing; maintainer svlandeg confirms in issue #523: 'the readme states it's MIT, so feel free to use it as such'.",
+      "limitations": "License rests on README declaration + maintainer comment, not a LICENSE file; any copied snippet must record upstream SHA/path provenance (#44); this project independently implements the loop.",
+      "verification_state": "VERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED"
+    },
+    {
+      "claim_id": "autoresearch-agent-isolation",
+      "primary_url": "https://github.com/lora-sys/MulitiModal/issues/45",
+      "edition_version": "milestone 1 (commit ca22434)",
+      "access_date": "2026-10-30",
+      "retrieved_files": [],
+      "exact_supported_claim": "(none yet) Only static patch checks + subprocess worker separation are verified; OS/container-level isolation and a real Coding Agent E2E run are NOT verified.",
+      "limitations": "Every harness run reports AGENT_ISOLATION_UNVERIFIED / AGENT_NOT_VERIFIED; untrusted agent code must not be granted host access until #45 milestone-2 isolation work.",
+      "verification_state": "NOT_VERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED",
+      "blocks": ["#45 milestone 2 (real provider E2E)", "#47 isolation acceptance"]
+    },
+    {
+      "claim_id": "zenodo-ccmq-scripts",
+      "primary_url": "https://zenodo.org/records/4431679",
+      "access_date": "2026-10-30",
+      "retrieved_files": [],
+      "exact_supported_claim": "(none yet) Researcher CCMQ scoring scripts/tests have not been retrieved or reviewed.",
+      "limitations": "Researcher code is not an official scorer (#47/#38); treat as reference material only once retrieved.",
+      "verification_state": "UNVERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED"
+    },
+    {
+      "claim_id": "su-2019-paper",
+      "primary_url": "https://doi.org/10.1016/j.eujim.2019.04.001",
+      "edition_version": "EuJIM 2019",
+      "access_date": "2026-10-30",
+      "retrieved_files": [],
+      "exact_supported_claim": "(none yet) Su et al. 2019 full text linked to the Mendeley dataset has not been retrieved for this project's records.",
+      "limitations": "Needed to interpret the dataset's questionnaire structure; retrieval scheduled with #37.",
+      "verification_state": "UNVERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED"
+    }
+  ]
+}

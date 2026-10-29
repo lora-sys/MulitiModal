@@ -36,10 +36,14 @@ ruff check .
 
 ```
 docs/source/            原始需求 PDF 与一手资料
+docs/design/            #44 AutoResearch RSI V1 设计规范
+docs/evidence/          #47 证据注册表（registry.json）与审计矩阵（audit-matrix.md）
 src/core/               #48 神经核心：specs / batch / encoders / losses / models / registry
-src/runtime/            #49/#40 训练运行时：batches / trainer / evaluation / checkpoint / protocols / tcm_eval / tcm_infer / cli
+src/runtime/            #49/#40/#45 训练运行时：batches / trainer / evaluation / checkpoint / protocols / tcm_eval / tcm_infer / agent / manifest / harness / worker / cli
+src/evidence/           #47 证据注册表与三层 GO 门（evaluate_gates 机械推导）
 tests/core/             核心契约测试（synthetic；含 During/Post 拒绝、缺模态、NaN、mask、保存重载）
 tests/runtime/          运行时测试（synthetic；fit/断点续训一致性/泄漏断言/受试者级指标/CLI smoke）
+tests/evidence/         证据注册表与 GO 门负例测试（VERIFIED 必须带哈希与访问日期）
 tests/                  pytest（fast 默认；slow / synthetic 用 marker）
 ```
 

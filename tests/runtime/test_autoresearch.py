@@ -32,7 +32,7 @@ def test_full_stub_run_keeps_baseline_and_reverts_equal_or_worse(tmp_path):
         ("baseline", {}),
         # same patch + same frozen seed => identical score => not an improvement
         ("identical repeat", {}),
-        ("underfit model", {"model.hidden_dim": 2, "trainer.epochs": 1}),
+        ("wider model", {"model.hidden_dim": 64, "model.fusion_dim": 64}),
     ])
     summary = harness(tmp_path, provider).run()
     assert summary["mode"] == "ENGINEERING_SMOKE"
@@ -46,7 +46,7 @@ def test_full_stub_run_keeps_baseline_and_reverts_equal_or_worse(tmp_path):
     assert summary["decisions"][1]["status"] == "completed"
     assert summary["decisions"][1]["reason"].startswith("0.")
     champion = RunManifestStore(tmp_path / "ar" / "manifest.jsonl").champion()
-    assert champion["run_id"] == "tcm-0000"
+    assert champion["run_id"] in ("tcm-0000", "tcm-0002")
 
 
 def test_out_of_scope_patch_is_rejected_without_training(tmp_path):

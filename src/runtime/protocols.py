@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import torch
+
 from core.models import default_physio_model, default_tcm_model
 
 from .batches import SyntheticBatchProvider
@@ -35,6 +37,9 @@ def train_candidate(config: dict) -> dict:
         raise ValueError(f"unknown task {task!r}")
     model_cfg = dict(config.get("model", {}))
     trainer_cfg = TrainerConfig(**config.get("trainer", {}))
+    # Seed before model construction: the worker runs in a fresh process, so
+    # identical configs must produce identical inits (controlled comparison).
+    torch.manual_seed(trainer_cfg.seed)
     train_cfg = dict(config.get("train_provider", {}))
     eval_cfg = dict(config.get("eval_provider", {}))
     out_dir = Path(config.get("out_dir", f"runs/autoresearch/{task}"))
