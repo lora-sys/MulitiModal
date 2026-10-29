@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# 训练产物与日志不入 Git（#35）
+runs/
+artifacts/
+checkpoints/
+logs/
+*.log
+*.pth
+*.ckpt
+
+# 真实数据不进 Git（#26/#37）：本地数据只放约定目录
+data/raw/
+data/local/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# 注：匿名 synthetic fixture 放在 tests/fixtures/ 或 data/synthetic/，
+# 两者均不被忽略，可正常提交（须带 synthetic 标记，见 #25/#35）。

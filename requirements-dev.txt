@@ -1,0 +1,6 @@
+# 仓库脚手架（#51）统一开发依赖；XGBoost 等可选依赖由 #30 决定是否引入
+pytest>=8
+ruff>=0.6
+numpy>=1.26
+pandas>=2.2
+scikit-learn>=1.5

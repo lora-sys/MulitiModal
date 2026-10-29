@@ -1,0 +1,18 @@
+# 仓库脚手架（#51）：仅工具配置。
+# 包结构由 #48（src/core）等任务落位后再引入构建元数据，不要提前添加 [project]。
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "fast: 默认快速测试",
+    "slow: 长耗时测试，CI 按需启用",
+    "synthetic: 仅使用合成 fixture 的测试",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
