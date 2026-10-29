@@ -14,10 +14,17 @@ from .datasets import (
     verify_files,
 )
 from .mendeley import (
-    NINE_CONSTITUTION_DIMS,
+    CANONICAL_MAPPING_STATE,
+    EXPECTED_ITEMS,
     SCORE_COLUMNS,
+    SOURCE_COLUMN_MAPPING,
     SubjectRecord,
+    assert_mapping_is_audited,
+    column_fingerprint,
+    feasible_item_counts,
+    fingerprint_anomalies,
     load_mendeley_scores,
+    resolve_score_columns,
     verify_mendeley_sha256,
 )
 
@@ -33,9 +40,16 @@ __all__ = [
     "DatasetFile",
     "DatasetRecord",
     "verify_files",
-    "NINE_CONSTITUTION_DIMS",
+    "CANONICAL_MAPPING_STATE",
+    "EXPECTED_ITEMS",
     "SCORE_COLUMNS",
+    "SOURCE_COLUMN_MAPPING",
     "SubjectRecord",
+    "assert_mapping_is_audited",
+    "column_fingerprint",
+    "feasible_item_counts",
+    "fingerprint_anomalies",
     "load_mendeley_scores",
+    "resolve_score_columns",
     "verify_mendeley_sha256",
 ]

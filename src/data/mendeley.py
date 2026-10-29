@@ -1,10 +1,14 @@
-"""TCM dataset adapters (#37): raw files -> audited per-subject records.
+"""TCM dataset adapters (#37/#38): raw files -> audited per-subject records.
 
 The Mendeley adapter enforces the #37 frozen rules: the file hash is
 verified before any parse, the balanced-constitution (9th) dimension is
 absent and is expressed as an unobserved label (never fabricated), and
 outputs carry provenance. Feature groups stay separated so unpaired
 modalities can never masquerade as one multimodal sample.
+
+Per the #38 frozen correction (2026-10-30), scores are emitted in the
+project canonical order with named dimensions — never in source worksheet
+order — through the single audited SOURCE_COLUMN_MAPPING below.
 """
 
 from __future__ import annotations
@@ -13,8 +17,53 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from labels.standards import CANONICAL_ORDER
+
+# Source score columns exactly as they appear in the audited worksheet
+# header (columns 63-70). Output order is CANONICAL_ORDER, never this tuple.
 SCORE_COLUMNS = ("YaD", "YiD", "QiDf", "PW", "WH", "BS", "SDa", "QDp")
-NINE_CONSTITUTION_DIMS = 9  # scores provide 8; the 9th stays unobserved
+
+#: Single audited source_column -> canonical_dimension mapping (#38 frozen
+#: correction). Evidence (audited 2026-10-30, file sha256 6206f432…):
+#: 1. `QiDf` = qi-deficiency is stated verbatim in the Su et al. 2019
+#:    indexed article text ("Qi-deficiency (QDf) constitution").
+#: 2. The remaining abbreviations are the standard TCM-English renderings
+#:    (YaD=Yang-Deficiency, YiD=Yin-Deficiency, PW=Phlegm-Wetness,
+#:    WH=Wet-Heat, BS=Blood-Stasis, SDa=Special Diathesis, QDp=Qi-Depression),
+#:    bijective with the eight biased constitutions the paper reports
+#:    modelling on the Nine-Constitution Scale.
+#: 3. Item-count fingerprint: under the CCMQ formula (sum-n)/(4n)*100 an
+#:    n-item subscale only yields multiples of 100/(4n). Measured feasible
+#:    counts over 273/274 rows match the ZYYXH/T157-2009 subscale sizes
+#:    (PMC10164641 Table 1: qi 8, yang 7, yin 8, phlegm 8, damp-heat 6,
+#:    blood 7, qi-stagnation 7, special 7) for every column under this
+#:    mapping — including the uniquely distinctive damp-heat=6.
+#: Limitation: the paper's own abbreviation definition table is paywalled;
+#: evidence state is FINGERPRINT_CROSS_CHECKED, not paper-table VERIFIED.
+SOURCE_COLUMN_MAPPING: dict[str, str] = {
+    "YaD": "yang_deficiency",
+    "YiD": "yin_deficiency",
+    "QiDf": "qi_deficiency",
+    "PW": "phlegm_damp",
+    "WH": "damp_heat",
+    "BS": "blood_stasis",
+    "SDa": "special_diathesis",
+    "QDp": "qi_depression",
+}
+CANONICAL_MAPPING_STATE = "FINGERPRINT_CROSS_CHECKED"
+
+#: CCMQ-60 (ZYYXH/T157-2009) items per biased subscale (PMC10164641 Table 1)
+EXPECTED_ITEMS = {
+    "qi_deficiency": 8,
+    "yang_deficiency": 7,
+    "yin_deficiency": 8,
+    "phlegm_damp": 8,
+    "damp_heat": 6,
+    "blood_stasis": 7,
+    "qi_depression": 7,
+    "special_diathesis": 7,
+}
+
 # column groups per the audited header layout (docs/data/dataset-audit-report.md)
 FEATURE_GROUPS = {
     "demographics": slice(0, 6),      # gender..surgery hx
@@ -27,11 +76,70 @@ FEATURE_GROUPS = {
 EXPECTED_SHA256 = "6206f432b683f8a7b9a75dae23e598a4f01a41a4f8af84b099924b9d85d08a96"
 
 
+def assert_mapping_is_audited() -> None:
+    """Reject any mapping that is not a bijective cover of the eight biased
+    canonical dimensions (#38: never emit an unaudited mapping)."""
+    biased = [d for d in CANONICAL_ORDER if d != "balanced"]
+    if sorted(SOURCE_COLUMN_MAPPING.values()) != sorted(biased):
+        raise ValueError(
+            "SOURCE_COLUMN_MAPPING must be bijective over the eight biased "
+            f"canonical dims {biased}, got {sorted(SOURCE_COLUMN_MAPPING.values())}"
+        )
+    if set(SOURCE_COLUMN_MAPPING) != set(SCORE_COLUMNS):
+        raise ValueError("SOURCE_COLUMN_MAPPING keys must equal SCORE_COLUMNS")
+    if sorted(EXPECTED_ITEMS) != sorted(biased):
+        raise ValueError(f"EXPECTED_ITEMS must cover the biased dims {biased}")
+
+
+def feasible_item_counts(value: float) -> tuple[int, ...]:
+    """Item counts n whose CCMQ granularity 100/(4n) the score fits."""
+    return tuple(
+        n for n in range(4, 13)
+        if abs(value * (4 * n) / 100.0 - round(value * (4 * n) / 100.0)) < 1e-6
+    )
+
+
+def column_fingerprint(values: list[float]) -> int | None:
+    """Smallest subscale size n whose CCMQ granularity 100/(4n) fits every
+    value except <=1% anomalous rows, or None if no n reaches that coverage.
+    (Many scores fit several granularities — e.g. 8.333 fits n=6, 9 and 12 —
+    so a majority-of-unique-values vote is wrong; coverage is the criterion.)"""
+    total = len(values)
+    if not total:
+        return None
+    for n in range(4, 13):
+        covered = sum(1 for v in values if n in feasible_item_counts(v))
+        if covered >= total * 0.99:
+            return n
+    return None
+
+
+def fingerprint_anomalies(values: list[float], expected_n: int) -> list[int]:
+    """Row indices whose value is incompatible with the expected item count."""
+    return [
+        i for i, v in enumerate(values)
+        if expected_n not in feasible_item_counts(v)
+    ]
+
+
+def resolve_score_columns(headers: list[str]) -> dict[str, int]:
+    """Locate score columns by name; reject missing or duplicated ones."""
+    idx: dict[str, int] = {}
+    for col in SCORE_COLUMNS:
+        hits = [i for i, h in enumerate(headers) if h == col]
+        if not hits:
+            raise ValueError(f"score column {col!r} missing from dataset")
+        if len(hits) > 1:
+            raise ValueError(f"score column {col!r} appears {len(hits)} times")
+        idx[col] = hits[0]
+    return idx
+
+
 @dataclass
 class SubjectRecord:
     subject_index: int  # anonymous identity: row order (no ID column exists)
     features: dict[str, list[float]]
-    scores: list[float | None]  # 9 dims; index 8 (balanced) is None by contract
+    scores: list[float | None]  # 9 dims in CANONICAL_ORDER; balanced (index 0) is None
     score_mask: list[bool]  # observed dims only; never zero-filled
     provenance: dict
 
@@ -46,17 +154,33 @@ def verify_mendeley_sha256(path: str | Path) -> str:
 
 
 def load_mendeley_scores(path: str | Path) -> list[SubjectRecord]:
-    """Parse Share data.xls into per-subject records with masked 9D targets."""
+    """Parse Share data.xls into per-subject records with canonical 9D targets.
+
+    Scores are emitted in CANONICAL_ORDER with balanced (index 0) unobserved;
+    every dimension is addressable by name via provenance["score_dims"] and
+    SOURCE_COLUMN_MAPPING, never by worksheet position (#38 frozen fix).
+    """
     import xlrd
 
+    assert_mapping_is_audited()
     verify_mendeley_sha256(path)
     wb = xlrd.open_workbook(str(path))
     sheet = wb.sheet_by_name("data")
     headers = [str(sheet.cell_value(0, c)) for c in range(sheet.ncols)]
-    for col in SCORE_COLUMNS:
-        if col not in headers:
-            raise ValueError(f"score column {col!r} missing from dataset")
-    score_idx = {headers.index(c) for c in SCORE_COLUMNS}
+    score_idx = resolve_score_columns(headers)
+
+    anomalies: dict[str, list[int]] = {}
+    for col, dim in SOURCE_COLUMN_MAPPING.items():
+        values = [sheet.cell_value(r, score_idx[col]) for r in range(1, sheet.nrows)]
+        fp = column_fingerprint(values)
+        if fp != EXPECTED_ITEMS[dim]:
+            raise ValueError(
+                f"column {col!r} item-count fingerprint {fp} does not match "
+                f"expected {EXPECTED_ITEMS[dim]} for {dim} — refusing to map"
+            )
+        bad = fingerprint_anomalies(values, EXPECTED_ITEMS[dim])
+        if bad:
+            anomalies[dim] = bad
 
     records: list[SubjectRecord] = []
     for r in range(1, sheet.nrows):
@@ -67,10 +191,16 @@ def load_mendeley_scores(path: str | Path) -> list[SubjectRecord]:
                 v = sheet.cell_value(r, c)
                 values.append(float(v) if v != "" else float("nan"))
             features[group] = values
-        raw_scores = [sheet.cell_value(r, c) for c in sorted(score_idx)]
-        # 8 observed dims + the absent balanced dim, always in SCORE_COLUMNS order
-        scores: list[float | None] = [float(v) for v in raw_scores] + [None]
-        mask = [s is not None for s in scores]
+        # canonical order: balanced unobserved at index 0, then the biased dims
+        by_dim = {
+            dim: float(sheet.cell_value(r, score_idx[col]))
+            for col, dim in SOURCE_COLUMN_MAPPING.items()
+        }
+        scores: list[float | None] = [None]
+        mask = [False]
+        for dim in CANONICAL_ORDER[1:]:
+            scores.append(by_dim[dim])
+            mask.append(True)
         records.append(
             SubjectRecord(
                 subject_index=r - 1,
@@ -80,9 +210,20 @@ def load_mendeley_scores(path: str | Path) -> list[SubjectRecord]:
                 provenance={
                     "dataset_id": "mendeley-cxtph3tjsg-v1",
                     "doi": "10.17632/cxtph3tjsg.1",
-                    "standard_version": "CCMQ-2009",
+                    "standard_version": "ZYYXH/T157-2009",
+                    "standard_edition_evidence": (
+                        "item-count fingerprint of all 8 score columns matches "
+                        "ZYYXH/T157-2009 subscale sizes (PMC10164641); paper "
+                        "definition table paywalled, item texts not compared"
+                    ),
                     "label_source": "PUBLISHED",
                     "file_sha256": EXPECTED_SHA256,
+                    "score_dims": list(CANONICAL_ORDER),
+                    "source_column_mapping": dict(SOURCE_COLUMN_MAPPING),
+                    "canonical_mapping_state": CANONICAL_MAPPING_STATE,
+                    "fingerprint_anomalies": {
+                        dim: list(rows) for dim, rows in anomalies.items()
+                    },
                 },
             )
         )

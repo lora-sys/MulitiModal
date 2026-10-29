@@ -64,12 +64,14 @@
           "sha256": "6206f432b683f8a7b9a75dae23e598a4f01a41a4f8af84b099924b9d85d08a96"
         }
       ],
-      "exact_supported_claim": "Dataset downloaded and audited: 274 subjects x 71 columns; eight constitution score columns (YaD/YiD/QiDf/PW/WH/BS/SDa/QDp) 0-100, fully observed with zero missing; no balanced-constitution (9th) column exists; no explicit subject ID column (row order = anonymous identity); zero duplicate rows; CC BY 4.0. Eligibility: train_candidate for 8/9-dim masked score regression under CCMQ-2009.",
-      "limitations": "Scores follow CCMQ-2009; conversion to GB/T 46939-2025 forbidden without a certified mapping (#38). Score-column abbreviations need certified semantic mapping (#38). No categorical labels in this file; nine-dim score training is impossible by design (8 observed + 1 masked). Paper cohort size 274 confirmed at row level.",
+      "exact_supported_claim": "Dataset downloaded and audited: 274 subjects x 71 columns; eight constitution score columns (YaD/YiD/QiDf/PW/WH/BS/SDa/QDp) 0-100, fully observed with zero missing; no balanced-constitution (9th) column exists; no explicit subject ID column (row order = anonymous identity); zero duplicate rows; CC BY 4.0. Eligibility: train_candidate for 8/9-dim masked score regression under ZYYXH/T157-2009 (edition fingerprint-verified).",
+      "limitations": "Score-column to canonical-dimension mapping is FINGERPRINT_CROSS_CHECKED (src/data/mendeley.py: item-count fingerprints match ZYYXH/T157-2009 subscale sizes incl. damp-heat=6, PMC10164641); the paper's own abbreviation definition table is paywalled, so paper-table verification is still open (#38). Subject row 273 violates the per-column item-count fingerprint on YaD/PW/WH/QDp — QC flag. No categorical labels in this file; nine-dim score training is impossible by design (8 observed + 1 masked). Conversion to GB/T 46939-2025 forbidden without a certified mapping.",
       "verification_state": "VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
-      "blocks": ["#38 label standard certification (only remaining GO_REAL_DATA_TRAINING(tcm) blocker)"]
+      "blocks": [
+        "#38 label standard certification (only remaining GO_REAL_DATA_TRAINING(tcm) blocker)"
+      ]
     },
     {
       "claim_id": "tcm-label-rules-verified",
@@ -82,7 +84,10 @@
       "verification_state": "NOT_VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
-      "blocks": ["#38 rule engine certification", "GO_REAL_DATA_TRAINING(tcm)"]
+      "blocks": [
+        "#38 rule engine certification",
+        "GO_REAL_DATA_TRAINING(tcm)"
+      ]
     },
     {
       "claim_id": "independent-reference-data",
@@ -94,7 +99,10 @@
       "verification_state": "NOT_AVAILABLE",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
-      "blocks": ["GO_RESEARCH_CLAIMS(tcm)", "GO_RESEARCH_CLAIMS(physio)"]
+      "blocks": [
+        "GO_RESEARCH_CLAIMS(tcm)",
+        "GO_RESEARCH_CLAIMS(physio)"
+      ]
     },
     {
       "claim_id": "physio-real-data",
@@ -106,7 +114,11 @@
       "verification_state": "NOT_AVAILABLE",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
-      "blocks": ["#26 import/QC", "#42 physio label engine", "GO_REAL_DATA_TRAINING(physio)"]
+      "blocks": [
+        "#26 import/QC",
+        "#42 physio label engine",
+        "GO_REAL_DATA_TRAINING(physio)"
+      ]
     },
     {
       "claim_id": "autoresearch-upstream-license",
@@ -136,7 +148,10 @@
       "verification_state": "NOT_VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
-      "blocks": ["#45 milestone 2 (real provider E2E)", "#47 isolation acceptance"]
+      "blocks": [
+        "#45 milestone 2 (real provider E2E)",
+        "#47 isolation acceptance"
+      ]
     },
     {
       "claim_id": "zenodo-ccmq-scripts",
@@ -158,7 +173,7 @@
         }
       ],
       "exact_supported_claim": "Researcher CCMQ scoring code retrieved: TEST_DATA.xlsx holds 14 subjects x 63 CCMQ item responses; SAS/SPSS syntax implements researcher scoring. Eligibility: rules_test_only — usable to verify a #38 rule-engine implementation against researcher scoring, never as supervised training data.",
-      "limitations": "Researcher code is not an official scorer (#47/#38); 14 subjects is a test sample only; CCMQ-2009 edition.",
+      "limitations": "Researcher code is not an official scorer (#47/#38); 14 subjects is a test sample only; ZYYXH/T157-2009 edition.",
       "verification_state": "VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED"

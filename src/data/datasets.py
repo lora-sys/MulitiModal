@@ -63,9 +63,11 @@ class DatasetRecord:
 #: Mendeley Su et al. 2019 — audited on dev host 2026-10-30 (see
 #: docs/data/dataset-audit-report.md). 274 subjects, eight 0-100
 #: constitution scores fully observed (NO ninth/balanced column — never
-#: fabricate it), tabular meridian/pulse/tongue features. Scores follow the
-#: 2009 CCMQ edition; conversion to GB/T 46939-2025 is forbidden without a
-#: certified mapping (#38).
+#: fabricate it), tabular meridian/pulse/tongue features. Edition evidence:
+#: all 8 score columns' item-count fingerprints match ZYYXH/T157-2009
+#: subscale sizes (incl. damp-heat=6, PMC10164641); item texts not compared.
+#: Conversion to GB/T 46939-2025 is forbidden without a certified
+#: mapping (#38).
 DATASET_CXTPH3TJSG = DatasetRecord(
     dataset_id="mendeley-cxtph3tjsg-v1",
     primary_url="https://data.mendeley.com/datasets/cxtph3tjsg/1",
@@ -74,10 +76,16 @@ DATASET_CXTPH3TJSG = DatasetRecord(
     license="CC BY 4.0",
     source_type="public_dataset",
     label_source="PUBLISHED",
-    standard_version="CCMQ-2009",
+    standard_version="ZYYXH/T157-2009",
     n_subjects=274,
-    modality_summary="tabular: demographics+meridian+pulse wave+tongue features (62 cols) + 8 constitution score columns",
-    label_availability="8/9 dimension scores 0-100, fully observed, no missing; balanced-constitution dimension absent",
+    modality_summary=(
+        "tabular: demographics+meridian+pulse wave+tongue features (62 cols)"
+        " + 8 constitution score columns"
+    ),
+    label_availability=(
+        "8/9 dimension scores 0-100, fully observed, no missing; "
+        "balanced-constitution dimension absent"
+    ),
     eligibility=ELIGIBILITY_TRAIN_CANDIDATE,
     retrieved_at="2026-10-30",
     files=(
@@ -88,9 +96,11 @@ DATASET_CXTPH3TJSG = DatasetRecord(
         ),
     ),
     notes="No explicit subject ID column; rows are one subject each (row order = "
-          "anonymous identity). 1 missing row in h2/h3 meridian features. Authors' "
-          "score-column abbreviations (YaD/YiD/QiDf/PW/WH/BS/SDa/QDp) need certified "
-          "mapping to CCMQ dimensions in #38 before semantic claims.",
+          "anonymous identity). 1 missing row in h2/h3 meridian features. Score "
+          "columns mapped to canonical dimensions via fingerprint-cross-checked "
+          "SOURCE_COLUMN_MAPPING (src/data/mendeley.py, #38); subject row 273 "
+          "violates the per-column item-count fingerprint on YaD/PW/WH/QDp — "
+          "flag for QC, never silently mixed into rule cross-checks.",
 )
 
 #: Zenodo CCMQ researcher scoring code + test data — reference material to
@@ -103,9 +113,11 @@ DATASET_ZENODO_4431679 = DatasetRecord(
     license="CC BY 4.0",
     source_type="scoring_reference",
     label_source="RULE",
-    standard_version="CCMQ-2009",
+    standard_version="ZYYXH/T157-2009",
     n_subjects=14,
-    modality_summary="SAS/SPSS scoring code + TEST_DATA.xlsx (14 subjects x 63 CCMQ item responses)",
+    modality_summary=(
+        "SAS/SPSS scoring code + TEST_DATA.xlsx (14 subjects x 63 CCMQ item responses)"
+    ),
     label_availability="researcher-computed constitution classifications for 14 test rows",
     eligibility=ELIGIBILITY_RULES_TEST_ONLY,
     retrieved_at="2026-10-30",
