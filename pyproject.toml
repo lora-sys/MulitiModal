@@ -3,6 +3,7 @@
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 addopts = "-ra"
 markers = [
     "fast: 默认快速测试",

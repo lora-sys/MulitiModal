@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-仅仓库脚手架（#51），无任何模型 / 数据功能代码。
+脚手架（#51）+ 共享神经核心（#48，纯合成数据工程验证，SMOKE_ONLY）。
 
 - 分支：`feature/clean-slate`（空起点；旧历史仅见 GitHub commit `9fc5087d`，已删除，不作依赖）
 - 主 Epic：#22（双模型 + AutoResearch/RSI V1）
@@ -36,7 +36,11 @@ ruff check .
 
 ```
 docs/source/            原始需求 PDF 与一手资料
+src/core/               #48 神经核心：specs / batch / encoders / losses / models / registry
+tests/core/             核心契约测试（synthetic；含 During/Post 拒绝、缺模态、NaN、mask、保存重载）
 tests/                  pytest（fast 默认；slow / synthetic 用 marker）
 ```
 
-后续模块目录由对应 issue 落位：#48（`src/core` 双模型契约与网络骨架）、#25/#42/#43（数据契约与规则引擎）、#49（Trainer/Evaluator/CLI）。不要凭空恢复旧目录名（representation/、massage_decision/、legacy_research/）。
+`src/core` 要点：输入契约由 `InputSpecSet` 驱动（TCM `tcm-input-v0`、生理 `physio-input-pre-only-v0`）；缺模态 = features 缺键、行不可用 = availability mask，零填充嵌入、永不插补；非契约模态（如生理模型的 During/Post 特征）validate 阶段直接拒绝；`registry` 保存/加载带 SHA-256 校验与 input_spec 严格重建。
+
+后续模块目录由对应 issue 落位：#39（TCM 分类头/评分头扩展）、#49（Trainer/Evaluator/CLI）、#25/#42/#43（数据契约与规则引擎）。不要凭空恢复旧目录名（representation/、massage_decision/、legacy_research/）。

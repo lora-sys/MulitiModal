@@ -1,0 +1,130 @@
+"""Model forward/backward/mask behavior on synthetic tensors (#48)."""
+
+import pytest
+import torch
+from conftest import HIDDEN, NUM_SCORES, physio_batch, tcm_batch
+
+from core.losses import masked_mae_loss, masked_mse_loss, masked_multilabel_bce_loss
+from core.models import default_physio_model, default_tcm_model
+
+pytestmark = pytest.mark.synthetic
+
+
+def build_tcm(**overrides):
+    torch.manual_seed(7)
+    model, config = default_tcm_model(hidden_dim=HIDDEN, fusion_dim=HIDDEN, **overrides)
+    return model, config
+
+
+def build_physio(**overrides):
+    torch.manual_seed(8)
+    model, config = default_physio_model(hidden_dim=HIDDEN, fusion_dim=HIDDEN, **overrides)
+    return model, config
+
+
+def test_tcm_forward_shapes_and_range():
+    model, _ = build_tcm()
+    for n in (1, 8):
+        out = model(tcm_batch(n))
+        scores = out.predictions["constitution_scores"]
+        assert scores.shape == (n, NUM_SCORES)
+        assert bool(((scores >= 0) & (scores <= 100)).all())
+        out.check_ranges({"constitution_scores": (0.0, 100.0)})
+
+
+def test_tcm_missing_modality_and_zero_availability_stay_finite():
+    model, _ = build_tcm()
+    dropped = model(tcm_batch(drop_modality="physio_features"))
+    assert torch.isfinite(dropped.predictions["constitution_scores"]).all()
+    masked = model(tcm_batch(zero_out_availability="body_features"))
+    assert torch.isfinite(masked.predictions["constitution_scores"]).all()
+
+
+def test_tcm_backward_produces_grads():
+    model, _ = build_tcm()
+    loss, parts = model.compute_loss(tcm_batch())
+    assert torch.isfinite(loss)
+    loss.backward()
+    grads = [p.grad for p in model.parameters() if p.grad is not None]
+    assert grads and all(torch.isfinite(g).all() for g in grads)
+
+
+def test_tcm_rejects_nan_input():
+    model, _ = build_tcm()
+    with pytest.raises(ValueError, match="NaN"):
+        model(tcm_batch(inject_nan=True))
+
+
+def test_tcm_loss_requires_targets():
+    model, _ = build_tcm()
+    with pytest.raises(ValueError, match="targets"):
+        model.compute_loss(tcm_batch(with_targets=False))
+
+
+def test_tcm_category_head_is_optional_and_separate():
+    plain, _ = build_tcm()
+    assert plain.category_head is None
+
+    with_cat, config = build_tcm(include_category_head=True)
+    assert config["include_category_head"] is True
+    out = with_cat(tcm_batch())
+    assert "category_logits" in out.auxiliary
+    assert out.auxiliary["category_logits"].shape == (8, NUM_SCORES)
+    assert "constitution_scores" in out.predictions  # regression head unchanged
+
+
+def test_physio_forward_and_aux_range():
+    model, config = build_physio()
+    assert config["include_bpsi_aux"] is True
+    out = model(physio_batch())
+    assert out.predictions["efri"].shape == (8, 1)
+    assert out.auxiliary["bpsi"].shape == (8, 1)
+    assert bool(((out.auxiliary["bpsi"] >= 0) & (out.auxiliary["bpsi"] <= 100)).all())
+
+
+def test_physio_rejects_during_post_features():
+    model, _ = build_physio()
+    with pytest.raises(ValueError, match="not an approved input"):
+        model(physio_batch(extra_during_post=True))
+
+
+def test_physio_backward_with_masked_aux():
+    model, _ = build_physio()
+    loss, parts = model.compute_loss(physio_batch())
+    assert torch.isfinite(loss)
+    assert set(parts) == {"efri_mse", "bpsi_aux_mae"}
+    loss.backward()
+    assert any(p.grad is not None for p in model.parameters())
+
+
+def test_physio_bpsi_aux_can_be_disabled():
+    model, _ = build_physio(include_bpsi_aux=False)
+    out = model(physio_batch(with_targets=False))
+    assert "bpsi" not in out.auxiliary
+
+
+def test_masked_losses_count_only_observed_entries():
+    pred = torch.tensor([[1.0, 2.0], [3.0, 4.0]])
+    target = torch.tensor([[10.0, 20.0], [30.0, 40.0]])
+    mask = torch.tensor([[True, False], [False, False]])
+    # only the (0,0) entry is observed: (1-10)^2 = 81
+    assert masked_mse_loss(pred, target, mask).item() == pytest.approx(81.0)
+    assert masked_mae_loss(pred, target, mask).item() == pytest.approx(9.0)
+
+    logits = torch.tensor([[2.0], [-3.0]])
+    labels = torch.tensor([[1.0], [0.0]])
+    full = torch.tensor([[True], [True]])
+    partial = torch.tensor([[True], [False]])
+    loss_full = masked_multilabel_bce_loss(logits, labels, full)
+    loss_partial = masked_multilabel_bce_loss(logits, labels, partial)
+    assert loss_full.item() > 0 and loss_partial.item() > 0
+    assert loss_full.item() != loss_partial.item()  # unobserved row not counted
+
+
+def test_all_masked_loss_is_connected_zero():
+    pred = torch.tensor([[1.0, 2.0]], requires_grad=True)
+    target = torch.zeros(1, 2)
+    mask = torch.zeros(1, 2, dtype=torch.bool)
+    loss = masked_mse_loss(pred, target, mask)
+    assert loss.item() == 0.0
+    loss.backward()  # graph stays connected: no NaN, no crash
