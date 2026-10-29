@@ -69,10 +69,11 @@ CCMQ 计分公式 `(sum−n)/(4n)×100` 决定 n 项子量表只能产生 `100/(
 
 ## 4. 对 GO 门的影响
 
-`mendeley-dataset-files` 证据升为 VERIFIED（见 registry.json 更新）后，TCM 的
-GO_REAL_DATA_TRAINING 剩余阻塞项仅 **tcm-label-rules-verified**（#38：官方/研究者
-计分一致性 + 标准版本认证）。GO_RESEARCH_CLAIMS 仍需 independent-reference-data。
-本报告不改变任何 GO 判定，判定仍由 `src/evidence.evaluate_gates` 机械推导。
+`mendeley-dataset-files` 与 `tcm-label-rules-historical-verified`（#38：SAS 字节
+交叉校验 + ZYYXH/T157-2009 阈值 + 版本指纹，见 §1.1）均已 VERIFIED（2026-10-30），
+TCM 的 GO_REAL_DATA_TRAINING 由 `src/evidence.evaluate_gates` 机械推导为 **GRANTED**；
+GO_RESEARCH_CLAIMS 仍缺 independent-reference-data。GB/T 46939—2025 主张保持
+NOT_VERIFIED，仅约束未来换版工作，不阻塞本数据路径。
 
 ## 5. 可复现命令
 

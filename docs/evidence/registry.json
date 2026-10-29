@@ -79,15 +79,40 @@
       "edition_version": "GB/T 46939-2025 (catalog confirmed; official full text NOT obtained)",
       "access_date": "2026-10-30",
       "retrieved_files": [],
-      "exact_supported_claim": "(none yet) Item-by-item scoring rules have NOT been compared against the official standard text; a third-party transcription (scribd document 1066620653) exists but is not an authoritative edition; legacy CCMQ rules and researcher SAS code must stay separate from the official scorer.",
-      "limitations": "Official full text requires authenticated download; RULE/PUBLISHED label tiers cannot be certified until the comparison is done (#38).",
+      "exact_supported_claim": "(GB/T 46939-2025 only) The official full text has NOT been obtained; item-by-item rule comparison against the authoritative edition is not done. A third-party transcription (scribd 1066620653) is not authoritative. This claim no longer blocks training on the historical CCMQ data path (see tcm-label-rules-historical-verified); it records the gap for any future re-edition work.",
+      "limitations": "Official full text requires authenticated download. Conversion of ZYYXH/T157-2009 labels to GB/T 46939-2025 remains forbidden (#38).",
       "verification_state": "NOT_VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
       "blocks": [
-        "#38 rule engine certification",
-        "GO_REAL_DATA_TRAINING(tcm)"
+        "future GB/T 46939-2025 edition work"
       ]
+    },
+    {
+      "claim_id": "tcm-label-rules-historical-verified",
+      "primary_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC10164641/",
+      "edition_version": "ZYYXH/T157-2009 (CCMQ-60; PMC10164641 thresholds + Zenodo researcher SAS cross-check)",
+      "access_date": "2026-10-30",
+      "retrieved_files": [
+        {
+          "path": "data/local/zenodo-4431679/CCMQ SAS code.sas",
+          "md5": "3b622e25070847c767c31806d07afcf2"
+        },
+        {
+          "path": "data/local/zenodo-4431679/TEST_DATA.xlsx",
+          "md5": "363d3e388df625425242fb2e45ec3d97"
+        },
+        {
+          "path": "data/local/mendeley-cxtph3tjsg-v1/Share data.xls",
+          "sha256": "6206f432b683f8a7b9a75dae23e598a4f01a41a4f8af84b099924b9d85d08a96"
+        }
+      ],
+      "exact_supported_claim": "Historical CCMQ-60 rule engine (src/labels/ccmq60.py) implemented and cross-checked: subscale item groups, reverse keys (per subscale), and scale sizes re-parsed from the Zenodo researcher SAS source bytes match the engine tables; the engine scores the 14-row TEST_DATA reference sample under both missing policies; decision thresholds 30/40 (biased) and 60/30/40 (balanced) per PMC10164641 section 2.2 (ZYYXH/T157-2009); all eight Mendeley score columns fingerprint-verify to the same edition (damp-heat=6 fingerprint is edition-distinctive).",
+      "limitations": "Su et al. 2019 paper's own abbreviation definition table is paywalled, so the column mapping is FINGERPRINT_CROSS_CHECKED, not paper-table verified; 2009 edition item texts not compared word-by-word; subject row 273 violates the item-count fingerprint on four columns (QC-flagged, excluded from rule cross-checks); the researcher SAS is not an official oracle (#47).",
+      "verification_state": "VERIFIED",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED",
+      "blocks": []
     },
     {
       "claim_id": "independent-reference-data",

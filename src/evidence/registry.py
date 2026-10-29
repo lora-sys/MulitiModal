@@ -144,10 +144,17 @@ class EvidenceRegistry:
 GATE_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
     "tcm_constitution": {
         ENGINEERING: ("tcm-engineering-smoke",),
-        REAL_DATA_TRAINING: ("mendeley-dataset-files", "tcm-label-rules-verified"),
+        # tcm-label-rules-historical-verified covers the ZYYXH/T157-2009
+        # edition the Mendeley train_candidate data actually uses; the GB/T
+        # 46939-2025 claim (tcm-label-rules-verified) only gates future
+        # re-edition work, never this data path (#38)
+        REAL_DATA_TRAINING: (
+            "mendeley-dataset-files",
+            "tcm-label-rules-historical-verified",
+        ),
         RESEARCH_CLAIMS: (
             "mendeley-dataset-files",
-            "tcm-label-rules-verified",
+            "tcm-label-rules-historical-verified",
             "independent-reference-data",
         ),
     },

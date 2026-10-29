@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-Phase 1 工程闭环（#51/#48/#39/#49/#40/#44/#45）+ 证据注册表与 GO 门（#47）+ 公开数据集审计（#37）完成。真实数据获取状态：Mendeley 274 人 8 维体质评分已下载并审计（train_candidate，CCMQ-2009）；Zenodo CCMQ 计分参考已取回（rules_test_only）；TCM 的 GO_REAL_DATA_TRAINING 唯一剩余阻塞为 #38 标签规则认证。全部模型/训练结果均为合成数据 SMOKE_ONLY。
+Phase 1 工程闭环（#51/#48/#39/#49/#40/#44/#45）+ 证据注册表与 GO 门（#47）+ 公开数据集审计（#37）+ 标签体系（#38：CCMQ-60 规则引擎 + PUBLISHED/LLM_SILVER 分层导出）完成。真实数据状态：Mendeley 274 人 8 维体质评分已下载并审计（train_candidate，ZYYXH/T157-2009 指纹验证）；Zenodo CCMQ 计分参考已取回（rules_test_only）并完成 SAS 字节级规则交叉校验。TCM 的 GO_REAL_DATA_TRAINING 已 GRANTED（2026-10-30）；全部模型/训练结果仍为合成数据 SMOKE_ONLY，真实训练见 #50。
 
 - 分支：`feature/clean-slate`（空起点；旧历史仅见 GitHub commit `9fc5087d`，已删除，不作依赖）
 - 主 Epic：#22（双模型 + AutoResearch/RSI V1）
@@ -40,6 +40,7 @@ docs/design/            #44 AutoResearch RSI V1 设计规范
 docs/evidence/          #47 证据注册表（registry.json）与审计矩阵（audit-matrix.md）
 src/core/               #48 神经核心：specs / batch / encoders / losses / models / registry
 src/data/               #37 公开数据集注册表与 Mendeley 适配器（原始文件在开发机 data/local/，不入 Git）
+src/labels/             #38 标签体系：CCMQ-60 规则引擎 / PUBLISHED 导出 / LLM_SILVER 拒判接口 / 标准注册表
 src/runtime/            #49/#40/#45 训练运行时：batches / trainer / evaluation / checkpoint / protocols / tcm_eval / tcm_infer / agent / manifest / harness / worker / cli
 src/evidence/           #47 证据注册表与三层 GO 门（evaluate_gates 机械推导）
 docs/data/              #37 数据集审计报告（Mendeley 274 人 8 维评分 / Zenodo CCMQ 计分参考）
