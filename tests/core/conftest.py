@@ -24,6 +24,7 @@ def tcm_batch(
     seed: int = 0,
     *,
     with_targets: bool = True,
+    with_score_targets: bool = False,
     drop_modality: str | None = None,
     zero_out_availability: str | None = None,
     inject_nan: bool = False,
@@ -43,12 +44,19 @@ def tcm_batch(
 
     targets = target_mask = None
     if with_targets:
-        targets = {
-            "constitution_scores": torch.rand(batch_size, NUM_SCORES, generator=g) * 100.0
-        }
+        # #39: category labels are the primary TCM target (non-exclusive
+        # multi-label by default); score targets only with include_score_head.
+        labels = torch.randint(0, 2, (batch_size, NUM_SCORES), generator=g).float()
+        targets = {"category_labels": labels}
         target_mask = {
-            "constitution_scores": torch.rand(batch_size, NUM_SCORES, generator=g) > 0.3
+            "category_labels": torch.rand(batch_size, NUM_SCORES, generator=g) > 0.3
         }
+        if with_score_targets:
+            targets["constitution_scores"] = torch.rand(
+                batch_size, NUM_SCORES, generator=g) * 100.0
+            target_mask["constitution_scores"] = (
+                torch.rand(batch_size, NUM_SCORES, generator=g) > 0.3
+            )
     return ModelBatch(
         features=features,
         availability=availability,

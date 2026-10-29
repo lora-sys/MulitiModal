@@ -26,7 +26,7 @@ def build_and_save_tcm(tmp_path, **overrides):
 
 
 def test_registered_model_types():
-    assert set(MODEL_BUILDERS) == {"tcm_constitution_v0", "physio_bpsi_efri_v0"}
+    assert set(MODEL_BUILDERS) == {"tcm_constitution_v1", "physio_bpsi_efri_v0"}
 
 
 def test_save_load_prediction_consistency(tmp_path):
@@ -38,13 +38,13 @@ def test_save_load_prediction_consistency(tmp_path):
     after = batch_predict(loaded, batch, device="cpu")
 
     torch.testing.assert_close(
-        before.predictions["constitution_scores"],
-        after.predictions["constitution_scores"],
+        before.predictions["category_probs"],
+        after.predictions["category_probs"],
     )
-    assert metadata["model_type"] == "tcm_constitution_v0"
+    assert metadata["model_type"] == "tcm_constitution_v1"
     assert metadata["source_commit"] == "test-sha"
     assert metadata["input_spec"]["version"] == "tcm-input-v0"
-    assert len(metadata["target_specs"]) == 1
+    assert [t["name"] for t in metadata["target_specs"]] == ["category_labels"]
 
 
 def test_metadata_contains_provenance_fields(tmp_path):

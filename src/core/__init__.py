@@ -6,7 +6,12 @@ issue #48 for the acceptance contract.
 
 from .batch import ModelBatch, ModelOutput
 from .encoders import ConcatFusion, ScoreHead, TabularEncoder, WaveformEncoder, build_encoder
-from .losses import masked_mae_loss, masked_mse_loss, masked_multilabel_bce_loss
+from .losses import (
+    masked_mae_loss,
+    masked_mse_loss,
+    masked_multilabel_bce_loss,
+    masked_softmax_ce_loss,
+)
 from .models import (
     PhysioBPSIEFRIModel,
     TCMConstitutionModel,
@@ -37,6 +42,7 @@ __all__ = [
     "masked_mae_loss",
     "masked_mse_loss",
     "masked_multilabel_bce_loss",
+    "masked_softmax_ce_loss",
     "PhysioBPSIEFRIModel",
     "TCMConstitutionModel",
     "default_physio_model",

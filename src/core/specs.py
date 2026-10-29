@@ -137,12 +137,14 @@ def make_physio_input_spec(body_dim: int, physio_dim: int) -> InputSpecSet:
 
 TCM_TARGET_SCORES = TargetSpec(
     name="constitution_scores", dim=9,
-    semantic="nine constitution scores 0-100, mask-aware (observed dims only)",
+    semantic="nine constitution scores 0-100; separate head, disabled unless "
+             "real questionnaire scores exist (#39)",
     value_range=(0.0, 100.0),
 )
 TCM_TARGET_CATEGORY = TargetSpec(
-    name="category_logits", dim=9,
-    semantic="nine independent multi-label constitution logits (optional head)",
+    name="category_labels", dim=9,
+    semantic="nine constitution category labels; non-exclusive multi-label by "
+             "default, softmax-CE only for mutually-exclusive sources (#39)",
     value_range=None,
 )
 PHYSIO_TARGET_EFRI = TargetSpec(

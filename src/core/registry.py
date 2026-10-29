@@ -23,7 +23,6 @@ MODEL_BUILDERS: dict[str, type[nn.Module]] = {
     TCMConstitutionModel.model_type: TCMConstitutionModel,
     PhysioBPSIEFRIModel.model_type: PhysioBPSIEFRIModel,
 }
-
 WEIGHTS_FILE = "weights.pt"
 METADATA_FILE = "metadata.json"
 

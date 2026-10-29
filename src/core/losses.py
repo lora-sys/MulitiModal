@@ -42,3 +42,18 @@ def masked_multilabel_bce_loss(
     if not bool(observed.any()):
         return _zero_like(logits)
     return F.binary_cross_entropy_with_logits(logits[observed], targets[observed].float())
+
+
+def masked_softmax_ce_loss(
+    logits: torch.Tensor, onehot_targets: torch.Tensor, target_mask: torch.Tensor
+) -> torch.Tensor:
+    """Softmax cross-entropy for truly mutually-exclusive sources only (#39).
+
+    Targets are one-hot [B, K]; a row counts once if any of its class entries
+    is observed. Rows with nothing observed never contribute.
+    """
+    row_mask = target_mask.any(dim=-1)
+    if not bool(row_mask.any()):
+        return _zero_like(logits)
+    per_row = -(onehot_targets * F.log_softmax(logits, dim=-1)).sum(dim=-1)
+    return per_row[row_mask].mean()
