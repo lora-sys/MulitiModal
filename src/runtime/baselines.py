@@ -17,11 +17,7 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 
 from data.mendeley import SubjectRecord
 from data.real_split import derive_classification_targets
-
-CANONICAL_DIMS = (
-    "balanced", "qi_deficiency", "yang_deficiency", "yin_deficiency",
-    "phlegm_damp", "damp_heat", "blood_stasis", "qi_depression", "special_diathesis",
-)
+from labels.standards import CANONICAL_ORDER as CANONICAL_DIMS
 
 
 class _LogisticPerDim(BaseEstimator, ClassifierMixin):

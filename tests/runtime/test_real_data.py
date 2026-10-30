@@ -13,6 +13,7 @@ from runtime.real_data import (
     RealBatchProvider,
     build_real_model,
     real_eval_manifest,
+    real_input_spec,
 )
 from runtime.tcm_eval import TCMTrustedEvaluator
 from runtime.trainer import Trainer, TrainerConfig
@@ -129,7 +130,14 @@ def test_real_eval_manifest_mirrors_frozen_split(tmp_path):
     m, _ = manifest_file(tmp_path)
     em = real_eval_manifest(m)
     assert em.version.startswith("real-")
-    assert em.input_spec_version == "tcm-input-real-v1"
+    # the spec version must discriminate modality set and dims: a full-set
+    # and a deployable-set manifest must never share one (#eval E30)
+    assert em.input_spec_version.startswith("tcm-input-real-v1:full:")
+    assert "body_features=" in em.input_spec_version
+    dep = dict(m)
+    dep["modalities"] = {"body_features": m["modalities"]["body_features"]}
+    dep["modality_set"] = "deployable"
+    assert real_input_spec(dep).version != em.input_spec_version
     assert em.label_tier == "RULE"
     assert em.dev_subjects == tuple(m["split"]["dev"])
 

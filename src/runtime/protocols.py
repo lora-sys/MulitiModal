@@ -59,6 +59,7 @@ def _train_real(config: dict) -> dict:
             "manifest_sha256": manifest["manifest_sha256"],
             "dataset_sha256": manifest["dataset_sha256"],
             "label_version": manifest["label_version"],
+            "train_batch_size": train_bs,
         },
     )
     return {

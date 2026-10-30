@@ -106,6 +106,9 @@ class Trainer:
         use_amp = cfg.amp and self.device.type == "cuda"
         scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
         report = FitReport()
+        # snapshot of the best-epoch weights: the checkpoint must carry the
+        # weights that produced best_eval_loss, not the last epoch's
+        best_state: dict[str, torch.Tensor] | None = None
 
         for epoch in range(start_epoch, cfg.epochs):
             self.model.train()
@@ -147,6 +150,10 @@ class Trainer:
                 if improved:
                     self.best_eval_loss = eval_loss
                     self.best_epoch = epoch
+                    best_state = {
+                        k: v.detach().cpu().clone()
+                        for k, v in self.model.state_dict().items()
+                    }
                     patience_left = cfg.early_stop_patience
                 elif patience_left is not None:
                     patience_left -= 1
@@ -159,6 +166,12 @@ class Trainer:
         report.epochs_run = len(report.history)
         report.best_epoch = self.best_epoch
         report.best_eval_loss = self.best_eval_loss
+        if best_state is not None:
+            # resume note: weights resume from the best epoch while the
+            # optimizer state stays at the last epoch (documented semantics)
+            self.model.load_state_dict(
+                {k: v.to(self.device) for k, v in best_state.items()}
+            )
         self._epochs_run = start_epoch + len(report.history)
         return report
 

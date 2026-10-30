@@ -28,6 +28,15 @@ from .tcm_eval import EvalManifest
 MANIFEST_FIELD = "real_data_manifest"
 
 
+def _input_spec_version(manifest: dict) -> str:
+    """Version string that discriminates modality sets and dims: a full-set
+    model and a deployable-set model must never share an input spec version
+    (a deployable checkpoint scored against a full-set spec would silently
+    mis-bind otherwise)."""
+    dims = ",".join(f"{name}={params['dim']}" for name, params in manifest["modalities"].items())
+    return f"tcm-input-real-v1:{manifest['modality_set']}:{dims}"
+
+
 def real_input_spec(manifest: dict) -> InputSpecSet:
     modalities = tuple(
         ModalitySpec(
@@ -39,7 +48,7 @@ def real_input_spec(manifest: dict) -> InputSpecSet:
         )
         for name, params in manifest["modalities"].items()
     )
-    return InputSpecSet(version="tcm-input-real-v1", modalities=modalities)
+    return InputSpecSet(version=_input_spec_version(manifest), modalities=modalities)
 
 
 def build_real_model(manifest: dict, model_cfg: dict) -> TCMConstitutionModel:
@@ -171,7 +180,7 @@ def real_eval_manifest(manifest: dict) -> EvalManifest:
     """Frozen EvalManifest mirroring the real split for the trusted evaluator."""
     return EvalManifest(
         version=f"real-{manifest['manifest_sha256'][:12]}",
-        input_spec_version="tcm-input-real-v1",
+        input_spec_version=_input_spec_version(manifest),
         standard_version=manifest["standard_version"],
         label_tier=manifest["label_tier"],
         train_subjects=tuple(manifest["split"]["train"]),

@@ -19,8 +19,9 @@ class ModelBatch:
     """A validated training/inference batch.
 
     features:    modality name -> tensor [B, D] (tabular) or [B, C, T] (waveform)
-    availability: modality name -> bool tensor [B]; rows where the modality was
-                  measured but is unusable. Absent modality = fully missing.
+    availability: modality name -> bool tensor [B]; True = the row's features
+                  for that modality are fully observed and usable, False =
+                  masked (encoder sees zeros). Absent modality = fully missing.
     targets:     target name -> tensor [B, K_target]
     target_mask: target name -> bool tensor [B, K_target]; observed entries only
     """

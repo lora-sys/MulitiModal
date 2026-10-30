@@ -42,3 +42,19 @@ Pi），经主流程逐条核验后确认为真实问题的条目。此清单是
 - `_nan_aware`/`_fit_scaler` 用总体标准差（ddof=0）与 sklearn StandardScaler 一致（Pi R-02 的"inconsistent with sklearn"说法有误）。
 - 特征列 0–62 与计分列 63–70 不相交，无特征/标签泄漏；holdout 仅报告期解锁。
 - 每候选独立子进程 + 冻结种子，无 RNG 交叉污染。
+
+## 第二轮审查追加条目（Pi round-2，R-01–R-12 → E26–E36）
+
+| ID | 来源 | 问题（一句话） | 修复后行为 | 验证 |
+| --- | --- | --- | --- | --- |
+| E26 | Pi R-05 | `core/batch.py` availability 文档极性写反（写"unusable"，实现 True=可用） | 文档改为 "True = fully observed and usable"；与 encoder/real_data 写入语义一致 | review_eval `e26_availability_doc_polarity` |
+| E27 | Pi R-06 | checkpoint 存 last-epoch 权重却标注 best_eval_loss | `Trainer.fit` 结束时恢复 best-epoch 权重（optimizer 保持末轮状态，语义已在代码注明） | review_eval `e27_trainer_restores_best_epoch_weights` + pytest |
+| E28 | Pi R-01 | 报告路径不校验 checkpoint↔manifest 绑定（worker 路径有、报告路径没有） | `assert_champion_matches_manifest`：smoke_only / manifest_sha256 / dataset_sha256 三重 fail-closed；champion_provenance 落盘绑定哈希 | review_eval `e28_report_binds_champion_to_manifest` + `--summary` 检查 |
+| E29 | Pi R-02/R-11 | 派生 manifest（回归/deployable）依赖默认 fractions 巧合一致 | `derived_manifest` 传入冻结 fractions + exclusions 并断言分区成员一致；`build_real_manifest` 改为全量洗牌后剔除，剔除不再改变其余受试者分区 | review_eval `e29_derived_manifests_mirror_frozen_split` + pytest |
+| E30 | Pi R-09 | 所有 real manifest 共用 `tcm-input-real-v1` 版本串，无区分度 | 版本串编入 modality_set 与各模态维度（`tcm-input-real-v1:<set>:<name>=<dim>,…`） | review_eval `e30_input_spec_version_discriminates` + pytest |
+| E31 | Pi R-04 | 报告硬编码 0.29/0.345/0.000/0.275/"6 个候选"/"<50 人" | 全部由 summary 插值（正类率取 Dummy holdout 逐维平均）；summary 增加 records_total / subjects_in_manifest / report_version | review_eval `e31_report_interpolates_no_hardcoded_metrics` + `--summary` 检查 |
+| E32 | Pi R-10 | baselines 自定义 CANONICAL_DIMS 与 labels.standards 重复定义 | 直接 `from labels.standards import CANONICAL_ORDER as CANONICAL_DIMS`（同一对象） | review_eval `e32_canonical_dims_single_source` |
+| E33 | Pi R-03 | QC 敏感性对照分母不同（41 人 dev vs 40 人缩减 dev） | 冠军模型也在缩减 dev 上评估（`dev_subject_mae_champion_on_reduced`），同分母对照 | review_eval `e33_qc_sensitivity_same_denominator` |
+| E34 | Pi R-08 | scaler 逐列有限值拟合的语义与行数未入档 | manifest 记录 `scaler_policy` + `scaler_fit_rows` | review_eval `e34_scaler_semantics_recorded` |
+| E35 | Pi R-12 | rounds 图 x 轴用 1..n 位置序，REVERT 轮压缩坐标 | x 用 run_id 解析的真实轮次号（tcm-0003→3），刻度标 run_id | review_eval `e35_chart_rounds_real_axis` |
+| E36 | Pi R-07/R-12 | 受试者身份=行序属未验证假设；holdout 解锁未成枚举记录 | summary/report 声明 subject_identity=UNVERIFIED；报告枚举 holdout 解锁记录（v1/v2/本次）并要求下次换划分；QC 判定与 holdout 无关的声明补入 | review_eval `e36_subject_identity_declared` + `--summary` 检查 |

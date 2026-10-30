@@ -134,16 +134,25 @@ def build_real_manifest(
     rows = [r.subject_index for r in records if r.subject_index not in exclude_subject_rows]
     if len(rows) < 10:
         raise ValueError(f"too few subjects left for a split: {len(rows)}")
+    # shuffle the FULL index list once, fix the partition CUT POINTS on the
+    # full count, and only then drop exclusions: partition membership of the
+    # remaining subjects is stable no matter which rows are excluded, so
+    # derived manifests (regression / deployable / QC) rebuild to the SAME
+    # split as the frozen classification manifest.
     rng = random.Random(split_seed)
-    order = rows[:]
+    order = [r.subject_index for r in records]
     rng.shuffle(order)
     n = len(order)
     n_train = int(n * fractions[0])
     n_dev = int(n * fractions[1])
-    partitions = {
+    full_partitions = {
         "train": order[:n_train],
         "dev": order[n_train : n_train + n_dev],
         "holdout": order[n_train + n_dev :],
+    }
+    partitions = {
+        name: [r for r in members if r not in exclude_subject_rows]
+        for name, members in full_partitions.items()
     }
     for name, members in partitions.items():
         if not members:
@@ -155,6 +164,10 @@ def build_real_manifest(
 
     # --- fold-only scaler: statistics from TRAIN rows exclusively (#29) ----
     scaler = _fit_scaler(partitions["train"], by_row, MODALITY_SETS[modality_set])
+    scaler_policy = (
+        "per-column mean/std over finite values of TRAIN-fold rows only (#29); "
+        "degenerate (no finite value or zero variance) columns transform to 0.0"
+    )
 
     label_version = (
         LABEL_VERSION_CLASSIFICATION
@@ -184,6 +197,8 @@ def build_real_manifest(
         },
         "subject_row_by_id": {f"mendeley-r{r:03d}": r for r in sorted(rows)},
         "scaler": scaler,
+        "scaler_policy": scaler_policy,
+        "scaler_fit_rows": len(partitions["train"]),
         "excluded_subject_rows": list(exclude_subject_rows),
         "notes": notes,
     }

@@ -94,6 +94,24 @@ def test_excluded_subject_is_absent_from_every_partition():
     assert m.data["excluded_subject_rows"] == [3]
 
 
+def test_exclusions_do_not_reshuffle_remaining_subjects():
+    # partition membership must be stable under exclusions so derived
+    # manifests mirror the frozen split instead of reshuffling it (#eval E29)
+    base = build_real_manifest(fake_records(), dataset_sha256=DATASET_SHA)
+    derived = build_real_manifest(fake_records(), dataset_sha256=DATASET_SHA,
+                                  exclude_subject_rows=(3, 17))
+    for partition in ("train", "dev", "holdout"):
+        expected = set(base.data["split"][partition]) - {"mendeley-r003",
+                                                         "mendeley-r017"}
+        assert set(derived.data["split"][partition]) == expected, partition
+
+
+def test_scaler_policy_and_fit_rows_are_recorded():
+    m = build_real_manifest(fake_records(), dataset_sha256=DATASET_SHA)
+    assert "TRAIN-fold" in m.data["scaler_policy"]
+    assert m.data["scaler_fit_rows"] == len(m.data["split"]["train"])
+
+
 def test_label_contract_per_task_type():
     cls = build_real_manifest(fake_records(), dataset_sha256=DATASET_SHA)
     assert cls.data["label_tier"] == "RULE"

@@ -46,7 +46,12 @@ from data.real_split import (  # noqa: E402
 from runtime.baselines import CANONICAL_DIMS, evaluate_baselines, evaluate_neural  # noqa: E402
 from runtime.checkpoint import load_training_checkpoint  # noqa: E402
 from runtime.manifest import MANIFEST_FILE, RunManifestStore  # noqa: E402
-from runtime.real_data import RealBatchProvider, build_real_model, real_eval_manifest  # noqa: E402
+from runtime.real_data import (  # noqa: E402
+    RealBatchProvider,
+    build_real_model,
+    real_eval_manifest,
+    real_input_spec,
+)
 from runtime.tcm_eval import TCMTrustedEvaluator  # noqa: E402
 from runtime.trainer import Trainer, TrainerConfig  # noqa: E402
 
@@ -69,6 +74,27 @@ def qc_rows_from_records(records) -> tuple[int, ...]:
             for row in rows
         })
     )
+
+
+def assert_champion_matches_manifest(state: dict, manifest: dict) -> None:
+    """Fail-closed binding on the REPORT path (not just the worker scoring
+    path): the champion checkpoint must have been trained on exactly this
+    frozen manifest and dataset, or the report would describe an artifact
+    no contract can account for."""
+    if state.get("smoke_only"):
+        raise ValueError("champion checkpoint is SMOKE_ONLY; refusing to report on it")
+    if state.get("manifest_sha256") != manifest["manifest_sha256"]:
+        raise ValueError(
+            "champion checkpoint was trained on manifest "
+            f"{state.get('manifest_sha256')!r}, not the frozen manifest "
+            f"{manifest['manifest_sha256']!r}; refusing to build the report"
+        )
+    if state.get("dataset_sha256") != manifest["dataset_sha256"]:
+        raise ValueError(
+            "champion checkpoint dataset_sha256 "
+            f"{state.get('dataset_sha256')!r} does not match the frozen manifest "
+            f"{manifest['dataset_sha256']!r}; refusing to build the report"
+        )
 
 
 def availability_rates(manifest: dict, records) -> dict:
@@ -95,6 +121,33 @@ def dev_primary(model, manifest, records) -> float:
     return report.subject_mae
 
 
+def derived_manifest(
+    manifest: dict, records, *, task_type: str | None = None,
+    modality_set: str | None = None, notes: str = "",
+) -> dict:
+    """Rebuild a task-variant manifest that MIRRORS the frozen split: same
+    seed, the frozen manifest's fractions and exclusions — then verify
+    partition membership actually matches instead of relying on default-
+    argument coincidence (#eval E29)."""
+    derived = build_real_manifest(
+        records,
+        dataset_sha256=manifest["dataset_sha256"],
+        task_type=task_type or manifest["task_type"],
+        modality_set=modality_set or manifest["modality_set"],
+        split_seed=manifest["split"]["seed"],
+        fractions=tuple(manifest["split"]["fractions"]),
+        exclude_subject_rows=tuple(manifest["excluded_subject_rows"]),
+        notes=notes,
+    ).data
+    for partition in ("train", "dev", "holdout"):
+        if set(derived["split"][partition]) != set(manifest["split"][partition]):
+            raise ValueError(
+                f"derived manifest {partition!r} membership drifted from the "
+                "frozen split; refusing"
+            )
+    return derived
+
+
 def _fixed_training(
     manifest: dict,
     records,
@@ -102,15 +155,17 @@ def _fixed_training(
     epochs: int,
     out_dir: Path,
     trainer_kwargs: dict | None = None,
+    seed: int = 0,
+    train_batch_size: int = 32,
 ):
     # seed BEFORE model construction: deterministic init regardless of what
     # this process ran before (#eval E06)
-    torch.manual_seed(0)
+    torch.manual_seed(seed)
     model = build_real_model(manifest, model_cfg)
-    config = TrainerConfig(seed=0, epochs=epochs, **(trainer_kwargs or {}))
+    config = TrainerConfig(seed=seed, epochs=epochs, **(trainer_kwargs or {}))
     trainer = Trainer(model, config)
     trainer.fit(
-        RealBatchProvider(manifest, records, "train", batch_size=32),
+        RealBatchProvider(manifest, records, "train", batch_size=train_batch_size),
         RealBatchProvider(manifest, records, "dev", batch_size=64),
     )
     trainer.save_checkpoint(
@@ -124,14 +179,10 @@ def _fixed_training(
 def regression_task(manifest_cls, records, out_dir: Path) -> dict:
     """Separate 8-score PUBLISHED regression training (fixed config) with a
     per-dim train-mean predictor as the trivial reference (#eval E11)."""
-    manifest = build_real_manifest(
-        records,
-        dataset_sha256=manifest_cls["dataset_sha256"],
-        task_type="score_regression",
-        modality_set="full",
-        split_seed=manifest_cls["split"]["seed"],
-        notes="regression deliverable: same split seed as the classification manifest",
-    ).data
+    manifest = derived_manifest(
+        manifest_cls, records, task_type="score_regression",
+        notes="regression deliverable: mirrors the frozen classification split",
+    )
     model = _fixed_training(
         manifest, records,
         {"include_category_head": False, "include_score_head": True}, 60,
@@ -186,10 +237,13 @@ def regression_task(manifest_cls, records, out_dir: Path) -> dict:
 
 
 def row_qc_sensitivity(
-    manifest, records, out_dir: Path, champion_cfg: dict, champion_trainer: dict
+    manifest, records, out_dir: Path, champion_cfg: dict, champion_trainer: dict,
+    champion_model=None, seed: int = 0, train_batch_size: int = 32,
 ) -> dict:
     """Retrain with the SAME frozen split minus fingerprint-anomalous
-    subjects (exclude_subjects_from_manifest, never a fresh shuffle)."""
+    subjects (exclude_subjects_from_manifest, never a fresh shuffle).
+    champion_model is evaluated on the REDUCED dev as well, so the contrast
+    shares one denominator (40 vs 41 subjects would not be comparable)."""
     qc_rows = qc_rows_from_records(records)
     manifest_qc = exclude_subjects_from_manifest(
         manifest, records, qc_rows,
@@ -201,35 +255,38 @@ def row_qc_sensitivity(
     }
     model_qc = _fixed_training(
         manifest_qc, records, champion_cfg, champion_trainer.get("epochs", 40),
-        out_dir / "qc-exclude", trainer_kwargs,
+        out_dir / "qc-exclude", trainer_kwargs, seed=seed,
+        train_batch_size=train_batch_size,
     )
     return {
         "manifest_sha256": manifest_qc["manifest_sha256"],
         "excluded_subject_rows": list(qc_rows),
         "dev_subject_mae_without": dev_primary(model_qc, manifest_qc, records),
+        "dev_subject_mae_champion_on_reduced": (
+            dev_primary(champion_model, manifest_qc, records)
+            if champion_model is not None else None
+        ),
     }
 
 
 def deployable_ablation(
-    manifest, records, out_dir: Path, champion_cfg: dict, champion_trainer: dict
+    manifest, records, out_dir: Path, champion_cfg: dict, champion_trainer: dict,
+    seed: int = 0, train_batch_size: int = 32,
 ) -> dict:
     """Body/Vitals-only training on the same split with the champion's
     training configuration, isolating the feature-set effect."""
-    manifest_dep = build_real_manifest(
-        records,
-        dataset_sha256=manifest["dataset_sha256"],
-        task_type="derived_multilabel_classification",
-        modality_set="deployable",
-        split_seed=manifest["split"]["seed"],
+    manifest_dep = derived_manifest(
+        manifest, records, modality_set="deployable",
         notes="deployable Body/Vitals-only ablation (no exam hardware needed)",
-    ).data
+    )
     trainer_kwargs = {
         k: champion_trainer[k] for k in ("learning_rate", "grad_clip")
         if champion_trainer.get(k) is not None
     }
     model_dep = _fixed_training(
         manifest_dep, records, champion_cfg, champion_trainer.get("epochs", 40),
-        out_dir / "deployable-only", trainer_kwargs,
+        out_dir / "deployable-only", trainer_kwargs, seed=seed,
+        train_batch_size=train_batch_size,
     )
     return {
         "manifest_sha256": manifest_dep["manifest_sha256"],
@@ -239,21 +296,24 @@ def deployable_ablation(
 
 
 def chart_rounds(entries: list[dict], out: Path) -> None:
-    rounds = [e for e in entries if e.get("metrics")]
-    ys = [e["metrics"]["primary_value"] for e in rounds
-          if e["metrics"].get("primary_value") is not None]
-    if not ys:
-        return
-    xs = list(range(1, len(ys) + 1))
-    colors = [
-        KEEP_COLOR if e["decision"] == "KEEP" else REVERT_COLOR
-        for e in rounds if e["metrics"].get("primary_value") is not None
+    rounds = [
+        e for e in entries
+        if e.get("metrics") and e["metrics"].get("primary_value") is not None
     ]
+    if not rounds:
+        return
+    # x positions are the REAL round indices from the run ids (tcm-0003 -> 3),
+    # not positional 1..n — reverted rounds must not compress the axis
+    ys = [e["metrics"]["primary_value"] for e in rounds]
+    xs = [int(e["run_id"].rsplit("-", 1)[-1]) for e in rounds]
+    colors = [KEEP_COLOR if e["decision"] == "KEEP" else REVERT_COLOR for e in rounds]
     fig, ax = plt.subplots(figsize=(7.5, 4))
     ax.bar(xs, ys, color=colors)
     best = min(ys)
     ax.axhline(best, color="#264653", linestyle="--", linewidth=1,
                label=f"best {best:.4f}")
+    ax.set_xticks(xs)
+    ax.set_xticklabels([e["run_id"] for e in rounds], fontsize=8)
     ax.set_xlabel("AutoResearch round")
     ax.set_ylabel("dev subject MAE\n(lower is better)")
     ax.set_title("AutoResearch rounds — primary metric")
@@ -364,20 +424,34 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
 
     keep = [e["run_id"] for e in ar["per_round"] if e["decision"] == "KEEP"]
     revert = [e["run_id"] for e in ar["per_round"] if e["decision"] == "REVERT"]
+    split_sizes = summary["split_sizes"]
+    split_total = sum(split_sizes.values())
+    dummy_holdout = base["dummy_majority"]["holdout"]
+    rates = [
+        v["positive_rate"] for v in dummy_holdout.get("per_dim", {}).values()
+        if v.get("positive_rate") is not None
+    ]
+    pos_rate = sum(rates) / len(rates) if rates else None
+    excluded_note = (
+        f"，剔除 {len(manifest.get('excluded_subject_rows', []))} 行"
+        if manifest.get("excluded_subject_rows") else ""
+    )
 
     def holdout_macro_f1(entry: dict) -> str:
         return _fmt(entry["holdout"]["macro_f1"])
 
     lines = [
-        "# TCM 真实训练报告（#50，AutoResearch V1，v2）",
+        "# TCM 真实训练报告（#50，AutoResearch V1，"
+        f"{summary.get('report_version', 'v2')}）",
         "",
         f"生成时间：{summary['generated_at']}  ",
         f"数据：`mendeley-cxtph3tjsg-v1`（SHA-256 `{summary['dataset_sha256'][:16]}…`，"
-        f"{records_count} 名受试者；QC 异常行 {qc['excluded_subject_rows']} 四维计分指纹不符）  ",
+        f"{records_count} 名受试者，其中 {split_total} 名入冻结 manifest{excluded_note}；"
+        f"QC 异常行 {qc['excluded_subject_rows']} 四维计分指纹不符）  ",
         f"标准：{summary['standard_version']}；标签契约：`{summary['label_version']}`  ",
         f"冻结 manifest：`{summary['manifest_sha256'][:16]}…`；划分："
-        f"train {summary['split_sizes']['train']} / dev {summary['split_sizes']['dev']} / "
-        f"holdout {summary['split_sizes']['holdout']}（subject-level，#27）",
+        f"train {split_sizes['train']} / dev {split_sizes['dev']} / "
+        f"holdout {split_sizes['holdout']}（subject-level，#27）",
         "",
         "## AutoResearch 轮次",
         "",
@@ -396,8 +470,8 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         lines.append(f"| {e['run_id']} | {e['intent']} | {e['decision']} | {cell} |")
     lines += [
         "",
-        "## 最终评估（holdout 在研究结束后解锁；本 v2 报告为审查修复后的重新交付，"
-        "holdout 先后用于 v1 与 v2 两次最终评估，已如实披露）",
+        "## 最终评估（holdout 在研究结束后解锁；历次解锁见「证据状态与限制」，"
+        "均已如实披露）",
         "",
         f"- 神经冠军：dev macro-F1 {_fmt(neural['dev']['macro_f1'])}，"
         f"holdout macro-F1 {_fmt(neural['holdout']['macro_f1'])}"
@@ -415,10 +489,14 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"{holdout_macro_f1(base['feature_logistic'])}，"
         f"holdout subject MAE {_fmt(base['feature_logistic']['holdout']['subject_mae'], 4)}",
         "- **口径说明（必读）**：subject MAE 度量概率输出到 0/1 标签的 L1 距离，"
-        "常数近零预测器（Dummy）天然占优——正类率 ≈0.29 意味着全零预测的 MAE 就约等于"
-        " 0.29。因此在 MAE 口径下 Dummy 优于所有真实模型是**指标性质**，不是模型失效；"
-        "神经冠军的价值在阈值化判别（F1）：holdout macro-F1 0.345 对 Dummy 0.000、"
-        "逻辑回归 0.275。两个口径都给出，读者可自行权衡。",
+        f"常数近零预测器（Dummy）天然占优——holdout 平均正类率 ≈{_fmt(pos_rate, 2)} "
+        f"意味着全零预测的 MAE 就约等于 {_fmt(pos_rate, 2)}。因此在 MAE 口径下 "
+        "Dummy 优于所有真实模型是**指标性质**，不是模型失效；"
+        "神经冠军的价值在阈值化判别（F1）：holdout macro-F1 "
+        f"{_fmt(neural['holdout']['macro_f1'])} 对 Dummy "
+        f"{_fmt(dummy_holdout['macro_f1'])}、全特征逻辑回归 "
+        f"{_fmt(base['feature_logistic']['holdout']['macro_f1'])}。"
+        "两个口径都给出，读者可自行权衡。",
         "",
         "图表：`chart-rounds.png`、`chart-per-dim-f1.png`、`chart-support.png`、"
         "`chart-regression-dev.png`、`chart-regression-holdout.png`"
@@ -440,8 +518,11 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"manifest `{regression['manifest_sha256'][:16]}…`。"
         "该任务包含 QC 异常行、未做敏感性对照，属已知限制。",
         f"- **row-QC 敏感性**（同一冻结划分剔除 {qc['excluded_subject_rows']} 后重训练，"
-        f"冠军同配置）：dev subject MAE {_fmt(qc['dev_subject_mae_without'], 4)}"
-        f"（含 QC 行的冠军为 {_fmt(ar['champion']['best_so_far'], 4)}）。",
+        f"冠军同配置）：剔除后模型的 dev subject MAE "
+        f"{_fmt(qc.get('dev_subject_mae_without'), 4)} vs 含 QC 行训练的冠军在同一"
+        f"缩减 dev 上 {_fmt(qc.get('dev_subject_mae_champion_on_reduced'), 4)}"
+        f"（同分母对照；冠军在完整 {split_sizes['dev']} 人 dev 上为 "
+        f"{_fmt(ar['champion']['best_so_far'], 4)}）。",
         f"- **Deployable（Body/Vitals-only）消融**（冠军同超参，仅换特征集）："
         f"dev subject MAE {_fmt(dep['dev_subject_mae'], 4)}，"
         f"dev macro-F1 {_fmt((dep.get('f1') or {}).get('dev', {}).get('macro_f1'))}。",
@@ -454,21 +535,27 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "不是作者发布的分类标签，也不是临床诊断真值。注意 CCMQ 分数粒度使有效切点"
         "随各维题数漂移（6 题维 ≈41.7、7 题维 ≈42.9、8 题维 ≈40.6）。",
         "- 列映射为 FINGERPRINT_CROSS_CHECKED（论文定义表付费墙内）；"
-        f"QC 异常行 {qc['excluded_subject_rows']} 未混入敏感性对照以外的任何对照。",
-        "- 冠军由 6 个候选在 dev 上选出（winner's curse）；消融为单 seed 固定配置；"
-        "dev/holdout 均 <50 人，小数位差异属噪声，未做置信区间重采样。",
-        "- holdout 先后用于 v1、v2 两次最终评估（见报告开头）；v3 起如再评估需换冻结划分。",
+        f"QC 异常行 {qc['excluded_subject_rows']} 未混入敏感性对照以外的任何对照；"
+        "QC 判定仅基于计分规则指纹，与标签、模型表现和 holdout 均无关，"
+        "不构成 holdout 信息泄漏。",
+        f"- 受试者身份 = 数据行序（{summary.get('subject_identity', 'UNVERIFIED')}）——"
+        "数据集无受试者 ID 列，无法独立核验每行确为不同受试者。",
+        f"- 冠军由 {ar['rounds_completed']} 个候选在 dev 上选出（winner's curse）；"
+        f"消融为单 seed 固定配置；dev {split_sizes['dev']} 人 / holdout "
+        f"{split_sizes['holdout']} 人，小数位差异属噪声，未做置信区间重采样。",
+        "- holdout 解锁记录：v1（初次交付）、v2（审查加固重跑）与本次生成"
+        f"（{summary['generated_at']}）——全部如实披露；下一次重评估必须换冻结划分。",
         "- 类别支持不均衡（见 chart-support.png）；结果仅代表研究口径，不可临床使用。",
     ]
     (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     card = [
-        "# TCM Constitution Model Card（#50 交付 v2）",
+        f"# TCM Constitution Model Card（#50 交付 {summary.get('report_version', 'v2')}）",
         "",
         f"- model_type：`tcm_constitution_v1`；champion run：`{ar['champion']['run_id']}`",
         f"- 权重：`{ar['champion']['artifact_dir']}/weights.pt`（SHA-256 "
         f"`{(ar['champion']['artifact_sha256'] or '')}`）",
-        "- 输入契约：`tcm-input-real-v1`（"
+        "- 输入契约：`" + real_input_spec(manifest).version + "`（"
         + ", ".join(f"{k}({v['dim']})" for k, v in manifest["modalities"].items())
         + "；train-fold 标准化，退化列置零，缺失模态行 availability-masked）",
         "- 输出：9 维独立 sigmoid（`category_probs`）；平和维永远 ABSTAIN",
@@ -488,6 +575,8 @@ def main(argv=None) -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--out", default="artifacts/tcm-50")
+    parser.add_argument("--label", default="v3",
+                        help="report version label (goes into titles and the holdout log)")
     args = parser.parse_args(argv)
 
     out = Path(args.out)
@@ -500,17 +589,23 @@ def main(argv=None) -> int:
     if not champion:
         raise SystemExit("no AutoResearch champion found; run the research loop first")
     model, state, metadata = load_training_checkpoint(champion["artifact_dir"])
-    assert not state["smoke_only"]
+    assert_champion_matches_manifest(state, manifest)
     entries = store.load()
     champion_cfg = dict(metadata.get("config", {}))
     champion_trainer = dict(state["trainer_config"])
+    champion_seed = int(champion_trainer.get("seed", 0))
+    champion_batch = int(state.get("train_batch_size", 32))
 
     neural_eval = evaluate_neural(model, manifest, records)
     baselines = evaluate_baselines(manifest, records)
     regression = regression_task(manifest, records, out)
-    qc = row_qc_sensitivity(manifest, records, out, champion_cfg, champion_trainer)
+    qc = row_qc_sensitivity(manifest, records, out, champion_cfg, champion_trainer,
+                            champion_model=model, seed=champion_seed,
+                            train_batch_size=champion_batch)
     qc["dev_subject_mae_with"] = dev_primary(model, manifest, records)
-    deployable = deployable_ablation(manifest, records, out, champion_cfg, champion_trainer)
+    deployable = deployable_ablation(manifest, records, out, champion_cfg,
+                                     champion_trainer, seed=champion_seed,
+                                     train_batch_size=champion_batch)
 
     chart_rounds(entries, out)
     chart_per_dim_f1(baselines, neural_eval, out)
@@ -526,11 +621,18 @@ def main(argv=None) -> int:
     split_sizes = {p: len(manifest["split"][p]) for p in ("train", "dev", "holdout")}
     summary = {
         "generated_at": datetime.now(UTC).isoformat(),
+        "report_version": args.label,
         "manifest_sha256": manifest["manifest_sha256"],
         "dataset_sha256": manifest["dataset_sha256"],
         "label_version": manifest["label_version"],
         "standard_version": manifest["standard_version"],
         "split_sizes": split_sizes,
+        "records_total": len(records),
+        "subjects_in_manifest": sum(split_sizes.values()),
+        "subject_identity": (
+            "row_order (UNVERIFIED: dataset has no subject ID column; "
+            "identity assumed from row position)"
+        ),
         "metric_params": {
             "classification_threshold": 0.5,
             "label_rule": manifest["label_version"],
@@ -541,6 +643,10 @@ def main(argv=None) -> int:
         "champion_provenance": {
             "run_id": champion["run_id"],
             "weights_sha256": champion.get("artifact_sha256"),
+            "manifest_sha256": manifest["manifest_sha256"],
+            "dataset_sha256": manifest["dataset_sha256"],
+            "label_version": manifest["label_version"],
+            "train_batch_size": champion_batch,
             "trainer_config": champion_trainer,
             "model_config": champion_cfg,
         },

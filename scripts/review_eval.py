@@ -29,6 +29,7 @@ from data.real_split import (
     derive_classification_targets,
     exclude_subjects_from_manifest,
 )
+from labels.standards import CANONICAL_ORDER
 from runtime.baselines import (
     CANONICAL_DIMS,
     _design_matrix,
@@ -36,7 +37,7 @@ from runtime.baselines import (
     macro_f1,
 )
 from runtime.protocols import trusted_score
-from runtime.real_data import RealBatchProvider
+from runtime.real_data import RealBatchProvider, real_input_spec
 from runtime.tcm_eval import compute_subject_level_metrics
 from runtime.worker import sanitize_env
 
@@ -387,6 +388,197 @@ def e24_ablation_uses_champion_config():
         assert "champion_trainer" in source and "champion_cfg" in source
 
 
+# --- second review round (Pi R-01..R-12), frozen as E26+ -------------------
+
+
+@check
+def e26_availability_doc_polarity():
+    # R-05: the docstring said "unusable" while True means available
+    import inspect
+
+    from core import batch
+
+    source = inspect.getsource(batch.ModelBatch)
+    assert "unusable" not in source
+    assert "True = the row's features" in source
+
+
+@check
+def e27_trainer_restores_best_epoch_weights():
+    # R-06: the checkpoint must hold the best epoch's weights, not the last.
+    # The stub's per-call counter makes eval loss provably rise after epoch 0.
+    from core.batch import ModelOutput
+    from runtime.batches import SyntheticBatchProvider
+    from runtime.trainer import Trainer, TrainerConfig
+
+    class DivergingStub(torch.nn.Module):
+        model_type = "stub_diverging"
+
+        def __init__(self):
+            super().__init__()
+            self.lin = torch.nn.Linear(4, 2)
+            self._calls = 0
+
+        @property
+        def model_config(self):
+            return {"stub": "diverging"}
+
+        def forward(self, batch):
+            return ModelOutput(predictions={})
+
+        def compute_loss(self, batch):
+            self._calls += 1
+            probe = self.lin(torch.ones(4))
+            return float(self._calls) * (probe**2).mean(), {}
+
+    def run(epochs: int) -> Trainer:
+        torch.manual_seed(0)  # seed BEFORE stub construction: identical init
+        trainer = Trainer(DivergingStub(), TrainerConfig(seed=0, epochs=epochs))
+        trainer.fit(
+            SyntheticBatchProvider("tcm", n_batches=2, batch_size=8, seed=0),
+            SyntheticBatchProvider("tcm", n_batches=1, batch_size=8, seed=5,
+                                   subject_prefix="eval"),
+        )
+        return trainer
+
+    one, three = run(1), run(3)
+    assert three.best_epoch == 0
+    for pa, pb in zip(one.model.parameters(), three.model.parameters(), strict=True):
+        assert torch.equal(pa, pb), "fit did not restore best-epoch weights"
+
+
+@check
+def e28_report_binds_champion_to_manifest():
+    # R-01: the report path must refuse a champion trained on another manifest
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    import tcm_real_report
+
+    from tcm_real_report import assert_champion_matches_manifest
+
+    manifest = {"manifest_sha256": "a" * 64, "dataset_sha256": "b" * 64}
+    assert_champion_matches_manifest(
+        {"smoke_only": False, "manifest_sha256": "a" * 64,
+         "dataset_sha256": "b" * 64}, manifest,
+    )
+    with pytest_like(ValueError):
+        assert_champion_matches_manifest(
+            {"smoke_only": False, "manifest_sha256": "c" * 64,
+             "dataset_sha256": "b" * 64}, manifest,
+        )
+    with pytest_like(ValueError):
+        assert_champion_matches_manifest(
+            {"smoke_only": False, "manifest_sha256": "a" * 64,
+             "dataset_sha256": "z" * 64}, manifest,
+        )
+    with pytest_like(ValueError):
+        assert_champion_matches_manifest({"smoke_only": True}, manifest)
+    assert "assert_champion_matches_manifest" in inspect.getsource(
+        tcm_real_report.main
+    )
+
+
+@check
+def e29_derived_manifests_mirror_frozen_split():
+    # R-02/R-11: task-variant manifests must reuse the frozen fractions and
+    # exclusions AND verify partition membership instead of relying on
+    # default-argument coincidence
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from tcm_real_report import derived_manifest
+
+    records = fake_records()
+    base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
+    for variant in ({"task_type": "score_regression"},
+                    {"modality_set": "deployable"}):
+        derived = derived_manifest(base, records, notes="n", **variant)
+        for partition in ("train", "dev", "holdout"):
+            assert set(derived["split"][partition]) == set(base["split"][partition]), partition
+    tampered = json.loads(json.dumps(base))
+    tampered["split"]["train"][0] = "mendeley-r999"
+    with pytest_like(ValueError):
+        derived_manifest(tampered, records)
+
+
+@check
+def e30_input_spec_version_discriminates():
+    # R-09: a full-set and a deployable-set manifest must never share an
+    # input spec version
+    records = fake_records()
+    full = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
+    dep = build_real_manifest(records, dataset_sha256=DATASET_SHA,
+                              modality_set="deployable").data
+    v_full, v_dep = real_input_spec(full).version, real_input_spec(dep).version
+    assert v_full != v_dep
+    assert ":full:" in v_full and ":deployable:" in v_dep
+    assert "body_features=" in v_full and "exam_features=" in v_full
+
+
+@check
+def e31_report_interpolates_no_hardcoded_metrics():
+    # R-04: report numbers must come from the summary, never be literals
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    from tcm_real_report import write_reports
+
+    source = inspect.getsource(write_reports)
+    for literal in ("0.345", "0.275", "0.2978", "≈0.29", "<50", "6 个候选"):
+        assert literal not in source, literal
+
+
+@check
+def e32_canonical_dims_single_source():
+    # R-10: baselines must import the frozen canonical order, not redefine it
+    assert CANONICAL_DIMS is CANONICAL_ORDER
+
+
+@check
+def e33_qc_sensitivity_same_denominator():
+    # R-03: the WITH-QC champion must also be evaluated on the reduced dev
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    from tcm_real_report import row_qc_sensitivity
+
+    source = inspect.getsource(row_qc_sensitivity)
+    assert "champion_model" in source
+    assert "dev_subject_mae_champion_on_reduced" in source
+
+
+@check
+def e34_scaler_semantics_recorded():
+    # R-08: the manifest states what the scaler was fit on
+    manifest = build_real_manifest(fake_records(), dataset_sha256=DATASET_SHA).data
+    assert "TRAIN-fold" in manifest["scaler_policy"]
+    assert manifest["scaler_fit_rows"] == len(manifest["split"]["train"])
+
+
+@check
+def e35_chart_rounds_real_axis():
+    # R-12: the rounds chart x-axis uses real round indices, not 1..n
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    from tcm_real_report import chart_rounds
+
+    source = inspect.getsource(chart_rounds)
+    assert "run_id" in source and "rsplit" in source
+    assert "range(1, len" not in source
+
+
+@check
+def e36_subject_identity_declared():
+    # R-07: row-order subject identity is an assumption and must be labelled
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    import tcm_real_report
+
+    assert "subject_identity" in inspect.getsource(tcm_real_report.main)
+    assert "UNVERIFIED" in inspect.getsource(tcm_real_report.write_reports)
+
+
 def check_summary_artifacts(summary_path: str | None, report_path: str | None) -> list[str]:
     problems: list[str] = []
     if summary_path:
@@ -398,6 +590,11 @@ def check_summary_artifacts(summary_path: str | None, report_path: str | None) -
         reg = summary.get("regression_task", {})
         if "mean_predictor_mae" not in json.dumps(reg):
             problems.append("E11: summary.json regression lacks mean-predictor reference")
+        for field in ("records_total", "subjects_in_manifest", "subject_identity"):
+            if field not in summary:
+                problems.append(f"E31/E36: summary.json missing {field}")
+        if "manifest_sha256" not in summary.get("champion_provenance", {}):
+            problems.append("E28: champion_provenance lacks manifest binding")
     if report_path:
         text = Path(report_path).read_text()
         for token, label in (

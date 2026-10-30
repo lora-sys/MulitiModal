@@ -80,6 +80,53 @@ def test_fit_fails_loudly_on_missing_targets():
         trainer.fit(provider)
 
 
+class _DivergingStub(torch.nn.Module):
+    """compute_loss scales a parameter-dependent term by a per-call counter:
+    the counter grows linearly with steps while Adam's step size is
+    scale-invariant, so eval loss provably rises after epoch 0 and
+    best_epoch == 0 by construction — restore is actually exercised."""
+
+    model_type = "stub_diverging"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.lin = torch.nn.Linear(4, 2)
+        self._calls = 0
+
+    @property
+    def model_config(self) -> dict:
+        return {"stub": "diverging"}
+
+    def forward(self, batch):
+        from core.batch import ModelOutput
+
+        return ModelOutput(predictions={})
+
+    def compute_loss(self, batch):
+        self._calls += 1
+        probe = self.lin(torch.ones(4))
+        return float(self._calls) * (probe**2).mean(), {}
+
+
+def test_fit_restores_best_epoch_weights():
+    def run(epochs: int) -> Trainer:
+        torch.manual_seed(0)  # seed BEFORE stub construction: identical init
+        trainer = Trainer(_DivergingStub(), TrainerConfig(seed=0, epochs=epochs))
+        trainer.fit(
+            SyntheticBatchProvider("tcm", n_batches=2, batch_size=8, seed=0),
+            SyntheticBatchProvider(
+                "tcm", n_batches=1, batch_size=8, seed=5, subject_prefix="eval"
+            ),
+        )
+        return trainer
+
+    one = run(1)
+    three = run(3)
+    assert three.best_epoch == 0
+    for pa, pb in zip(one.model.parameters(), three.model.parameters(), strict=True):
+        assert torch.equal(pa, pb), "fit did not restore best-epoch weights"
+
+
 def test_checkpoint_resume_consistency(tmp_path):
     def provider():
         return SyntheticBatchProvider("tcm", n_batches=3, batch_size=8, seed=6)
