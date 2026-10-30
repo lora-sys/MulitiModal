@@ -242,8 +242,13 @@ def row_qc_sensitivity(
 ) -> dict:
     """Retrain with the SAME frozen split minus fingerprint-anomalous
     subjects (exclude_subjects_from_manifest, never a fresh shuffle).
-    champion_model is evaluated on the REDUCED dev as well, so the contrast
-    shares one denominator (40 vs 41 subjects would not be comparable)."""
+    The contrast shares one denominator (40 vs 41 subjects would not be
+    comparable), and each model is evaluated under its OWN manifest: the
+    champion keeps its training-time scaler/spec (a checkpoint's input
+    contract is bound to the manifest it was trained on), the QC model uses
+    the QC manifest's refit scaler — both over the same reduced dev subjects."""
+    from runtime.real_data import real_eval_manifest
+
     qc_rows = qc_rows_from_records(records)
     manifest_qc = exclude_subjects_from_manifest(
         manifest, records, qc_rows,
@@ -258,14 +263,20 @@ def row_qc_sensitivity(
         out_dir / "qc-exclude", trainer_kwargs, seed=seed,
         train_batch_size=train_batch_size,
     )
+    reduced_dev = tuple(manifest_qc["split"]["dev"])
+    champion_reduced = None
+    if champion_model is not None:
+        provider = RealBatchProvider(
+            manifest, records, "dev", subject_ids=reduced_dev
+        )
+        champion_reduced = TCMTrustedEvaluator(real_eval_manifest(manifest)).evaluate(
+            champion_model, provider, partition="dev"
+        ).subject_mae
     return {
         "manifest_sha256": manifest_qc["manifest_sha256"],
         "excluded_subject_rows": list(qc_rows),
         "dev_subject_mae_without": dev_primary(model_qc, manifest_qc, records),
-        "dev_subject_mae_champion_on_reduced": (
-            dev_primary(champion_model, manifest_qc, records)
-            if champion_model is not None else None
-        ),
+        "dev_subject_mae_champion_on_reduced": champion_reduced,
     }
 
 

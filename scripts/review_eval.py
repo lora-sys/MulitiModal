@@ -584,6 +584,35 @@ def e36_subject_identity_declared():
     assert "UNVERIFIED" in inspect.getsource(tcm_real_report.write_reports)
 
 
+@check
+def e37_champion_evaluated_under_own_scaler():
+    # GLM round-3: the champion-on-reduced-dev contrast must not feed the
+    # champion inputs standardized by the QC manifest's refit scaler — each
+    # side of the contrast runs under its own manifest, same subject set.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    from tcm_real_report import row_qc_sensitivity
+
+    source = inspect.getsource(row_qc_sensitivity)
+    assert "real_eval_manifest(manifest)" in source
+    assert 'RealBatchProvider(\n            manifest, records, "dev", subject_ids=reduced_dev' \
+        in source
+    # the provider must reject subjects from other partitions
+    records = fake_records()
+    manifest = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
+    foreign = manifest["split"]["train"][0]
+    try:
+        RealBatchProvider(manifest, records, "dev", subject_ids=(foreign,))
+    except ValueError as exc:
+        assert "outside partition" in str(exc)
+    else:
+        raise AssertionError("cross-partition subject_ids accepted")
+    subset = manifest["split"]["dev"][:3]
+    provider = RealBatchProvider(manifest, records, "dev", subject_ids=subset)
+    assert list(provider.subject_ids) == list(subset)
+
+
 def check_summary_artifacts(summary_path: str | None, report_path: str | None) -> list[str]:
     problems: list[str] = []
     if summary_path:

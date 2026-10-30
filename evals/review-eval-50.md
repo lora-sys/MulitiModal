@@ -58,3 +58,4 @@ Pi），经主流程逐条核验后确认为真实问题的条目。此清单是
 | E34 | Pi R-08 | scaler 逐列有限值拟合的语义与行数未入档 | manifest 记录 `scaler_policy` + `scaler_fit_rows` | review_eval `e34_scaler_semantics_recorded` |
 | E35 | Pi R-12 | rounds 图 x 轴用 1..n 位置序，REVERT 轮压缩坐标 | x 用 run_id 解析的真实轮次号（tcm-0003→3），刻度标 run_id | review_eval `e35_chart_rounds_real_axis` |
 | E36 | Pi R-07/R-12 | 受试者身份=行序属未验证假设；holdout 解锁未成枚举记录 | summary/report 声明 subject_identity=UNVERIFIED；报告枚举 holdout 解锁记录（v1/v2/本次）并要求下次换划分；QC 判定与 holdout 无关的声明补入 | review_eval `e36_subject_identity_declared` + `--summary` 检查 |
+| E37 | GLM round-3 | QC 对照把冠军喂给 QC manifest 重拟合的 scaler（输入契约错配）；QC 派生 manifest 的 `scaler_fit_rows` 过期 | 冠军在缩减 dev 上用**自己的** manifest（训练时 scaler/spec）评估（`RealBatchProvider(subject_ids=…)` 限定分区子集，跨分区拒绝）；`exclude_subjects_from_manifest` 重拟合后同步更新 `scaler_fit_rows` | review_eval `e37_champion_evaluated_under_own_scaler` + pytest |

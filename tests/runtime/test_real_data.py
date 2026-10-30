@@ -106,6 +106,17 @@ def test_regression_targets_carry_constitution_scores(tmp_path):
     assert not bool(batch.target_mask["constitution_scores"][:, 0].any())
 
 
+def test_provider_subject_subset_is_validated(tmp_path):
+    m, _ = manifest_file(tmp_path)
+    records = fake_records()
+    subset = m["split"]["dev"][:3]
+    provider = RealBatchProvider(m, records, "dev", subject_ids=subset)
+    assert provider.subject_ids == tuple(subset)
+    foreign = m["split"]["train"][0]
+    with pytest.raises(ValueError, match="outside partition"):
+        RealBatchProvider(m, records, "dev", subject_ids=(foreign,))
+
+
 def test_real_model_trains_and_saves_non_smoke_checkpoint(tmp_path):
     m, _ = manifest_file(tmp_path, task_type="score_regression")
     model = build_real_model(m, {"include_category_head": False,

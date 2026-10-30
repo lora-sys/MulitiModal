@@ -248,6 +248,8 @@ def exclude_subjects_from_manifest(
     data["excluded_subject_rows"] = sorted(
         set(data.get("excluded_subject_rows", [])) | set(exclude_rows)
     )
+    # the scaler was refit on the REDUCED train fold: provenance must say so
+    data["scaler_fit_rows"] = len(data["split"]["train"])
     if notes:
         data["notes"] = notes
     digest = _manifest_digest(data)

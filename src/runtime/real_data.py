@@ -129,13 +129,26 @@ class RealBatchProvider:
         records: list,
         partition: str,
         batch_size: int = 32,
+        subject_ids: tuple[str, ...] | list[str] | None = None,
     ) -> None:
         if partition not in ("train", "dev", "holdout"):
             raise ValueError(f"unknown partition {partition!r}")
         self.manifest = manifest
         self.partition = partition
         self.batch_size = max(1, int(batch_size))
-        self.subject_ids = tuple(manifest["split"][partition])
+        all_ids = tuple(manifest["split"][partition])
+        if subject_ids is None:
+            self.subject_ids = all_ids
+        else:
+            # subset of the partition (e.g. QC-reduced dev); a subject from
+            # another partition would silently cross the #27 boundary
+            allowed = set(all_ids)
+            foreign = [s for s in subject_ids if s not in allowed]
+            if foreign:
+                raise ValueError(
+                    f"subject_ids outside partition {partition!r}: {foreign[:3]}"
+                )
+            self.subject_ids = tuple(subject_ids)
         self.records_by_row = {r.subject_index: r for r in records}
         missing = [s for s in self.subject_ids
                    if manifest["subject_row_by_id"][s] not in self.records_by_row]
