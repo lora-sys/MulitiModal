@@ -108,10 +108,10 @@ class _DivergingStub(torch.nn.Module):
         return float(self._calls) * (probe**2).mean(), {}
 
 
-def test_fit_restores_best_epoch_weights():
-    def run(epochs: int) -> Trainer:
+def test_fit_restore_semantics():
+    def run(epochs: int, **cfg) -> Trainer:
         torch.manual_seed(0)  # seed BEFORE stub construction: identical init
-        trainer = Trainer(_DivergingStub(), TrainerConfig(seed=0, epochs=epochs))
+        trainer = Trainer(_DivergingStub(), TrainerConfig(seed=0, epochs=epochs, **cfg))
         trainer.fit(
             SyntheticBatchProvider("tcm", n_batches=2, batch_size=8, seed=0),
             SyntheticBatchProvider(
@@ -121,10 +121,19 @@ def test_fit_restores_best_epoch_weights():
         return trainer
 
     one = run(1)
+    # default: LAST-epoch weights, declared in provenance (measured on real
+    # data: best-eval-loss restore picks underfit base-rate epochs)
     three = run(3)
     assert three.best_epoch == 0
-    for pa, pb in zip(one.model.parameters(), three.model.parameters(), strict=True):
-        assert torch.equal(pa, pb), "fit did not restore best-epoch weights"
+    assert any(
+        not torch.equal(pa, pb)
+        for pa, pb in zip(one.model.parameters(), three.model.parameters(), strict=True)
+    ), "default weights are not last-epoch"
+    # opt-in: restore_best selects the best epoch's weights
+    three_best = run(3, restore_best=True)
+    assert three_best.best_epoch == 0
+    for pa, pb in zip(one.model.parameters(), three_best.model.parameters(), strict=True):
+        assert torch.equal(pa, pb), "restore_best did not restore best-epoch weights"
 
 
 def test_checkpoint_resume_consistency(tmp_path):

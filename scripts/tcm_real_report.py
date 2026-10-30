@@ -543,8 +543,10 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"- 冠军由 {ar['rounds_completed']} 个候选在 dev 上选出（winner's curse）；"
         f"消融为单 seed 固定配置；dev {split_sizes['dev']} 人 / holdout "
         f"{split_sizes['holdout']} 人，小数位差异属噪声，未做置信区间重采样。",
-        "- holdout 解锁记录：v1（初次交付）、v2（审查加固重跑）与本次生成"
-        f"（{summary['generated_at']}）——全部如实披露；下一次重评估必须换冻结划分。",
+        "- holdout 解锁记录：旧冻结划分在 v1、v2 两次报告中解锁（均已披露）；"
+        f"本报告使用全新冻结划分（manifest `{summary['manifest_sha256'][:12]}…`，"
+        f"seed {manifest['split']['seed']}），其 holdout 仅本次解锁一次；"
+        "如再次重评估须再换划分。",
         "- 类别支持不均衡（见 chart-support.png）；结果仅代表研究口径，不可临床使用。",
     ]
     (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -647,6 +649,7 @@ def main(argv=None) -> int:
             "dataset_sha256": manifest["dataset_sha256"],
             "label_version": manifest["label_version"],
             "train_batch_size": champion_batch,
+            "weight_epoch": state.get("weight_epoch"),
             "trainer_config": champion_trainer,
             "model_config": champion_cfg,
         },

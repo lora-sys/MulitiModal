@@ -404,9 +404,10 @@ def e26_availability_doc_polarity():
 
 
 @check
-def e27_trainer_restores_best_epoch_weights():
-    # R-06: the checkpoint must hold the best epoch's weights, not the last.
-    # The stub's per-call counter makes eval loss provably rise after epoch 0.
+def e27_trainer_restore_semantics():
+    # R-06, amended (intentional contract change, see E27 note): the default
+    # checkpoint carries LAST-epoch weights declared via weight_epoch; the
+    # restore mechanism is opt-in and actually restores the best epoch.
     from core.batch import ModelOutput
     from runtime.batches import SyntheticBatchProvider
     from runtime.trainer import Trainer, TrainerConfig
@@ -431,9 +432,9 @@ def e27_trainer_restores_best_epoch_weights():
             probe = self.lin(torch.ones(4))
             return float(self._calls) * (probe**2).mean(), {}
 
-    def run(epochs: int) -> Trainer:
+    def run(epochs: int, **cfg) -> Trainer:
         torch.manual_seed(0)  # seed BEFORE stub construction: identical init
-        trainer = Trainer(DivergingStub(), TrainerConfig(seed=0, epochs=epochs))
+        trainer = Trainer(DivergingStub(), TrainerConfig(seed=0, epochs=epochs, **cfg))
         trainer.fit(
             SyntheticBatchProvider("tcm", n_batches=2, batch_size=8, seed=0),
             SyntheticBatchProvider("tcm", n_batches=1, batch_size=8, seed=5,
@@ -443,8 +444,13 @@ def e27_trainer_restores_best_epoch_weights():
 
     one, three = run(1), run(3)
     assert three.best_epoch == 0
-    for pa, pb in zip(one.model.parameters(), three.model.parameters(), strict=True):
-        assert torch.equal(pa, pb), "fit did not restore best-epoch weights"
+    assert any(
+        not torch.equal(pa, pb)
+        for pa, pb in zip(one.model.parameters(), three.model.parameters(), strict=True)
+    ), "default weights are not last-epoch"
+    three_best = run(3, restore_best=True)
+    for pa, pb in zip(one.model.parameters(), three_best.model.parameters(), strict=True):
+        assert torch.equal(pa, pb), "restore_best did not restore best-epoch weights"
 
 
 @check
@@ -454,7 +460,6 @@ def e28_report_binds_champion_to_manifest():
     import inspect
 
     import tcm_real_report
-
     from tcm_real_report import assert_champion_matches_manifest
 
     manifest = {"manifest_sha256": "a" * 64, "dataset_sha256": "b" * 64}

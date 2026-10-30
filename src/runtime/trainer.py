@@ -28,6 +28,12 @@ class TrainerConfig:
     grad_clip: float | None = None
     early_stop_patience: int | None = None
     amp: bool = False
+    # False (default) = checkpoint carries LAST-epoch weights, declared via
+    # the weight_epoch state field. True restores best-eval-loss weights —
+    # counterproductive on imbalanced thresholded targets where the Brier
+    # loss optimum sits near the base rate (measured: dev F1 0.03 vs 0.27),
+    # so it stays opt-in.
+    restore_best: bool = False
 
 
 @dataclass
@@ -74,6 +80,7 @@ class Trainer:
         self._epochs_run = 0
         self.best_epoch: int | None = None
         self.best_eval_loss: float | None = None
+        self._weight_epoch = "last"
 
     def _seed_everything(self, seed: int) -> None:
         random.seed(seed)
@@ -166,12 +173,13 @@ class Trainer:
         report.epochs_run = len(report.history)
         report.best_epoch = self.best_epoch
         report.best_eval_loss = self.best_eval_loss
-        if best_state is not None:
+        if best_state is not None and cfg.restore_best:
             # resume note: weights resume from the best epoch while the
             # optimizer state stays at the last epoch (documented semantics)
             self.model.load_state_dict(
                 {k: v.to(self.device) for k, v in best_state.items()}
             )
+            self._weight_epoch = "best"
         self._epochs_run = start_epoch + len(report.history)
         return report
 
@@ -187,6 +195,7 @@ class Trainer:
             "global_step": self.global_step,
             "best_epoch": self.best_epoch,
             "best_eval_loss": self.best_eval_loss,
+            "weight_epoch": self._weight_epoch,
             "optimizer": self.optimizer.state_dict(),
             "trainer_config": asdict(self.config),
             "torch_rng_state": torch.get_rng_state(),

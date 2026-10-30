@@ -48,7 +48,7 @@ Pi），经主流程逐条核验后确认为真实问题的条目。此清单是
 | ID | 来源 | 问题（一句话） | 修复后行为 | 验证 |
 | --- | --- | --- | --- | --- |
 | E26 | Pi R-05 | `core/batch.py` availability 文档极性写反（写"unusable"，实现 True=可用） | 文档改为 "True = fully observed and usable"；与 encoder/real_data 写入语义一致 | review_eval `e26_availability_doc_polarity` |
-| E27 | Pi R-06 | checkpoint 存 last-epoch 权重却标注 best_eval_loss | `Trainer.fit` 结束时恢复 best-epoch 权重（optimizer 保持末轮状态，语义已在代码注明） | review_eval `e27_trainer_restores_best_epoch_weights` + pytest |
+| E27 | Pi R-06 | checkpoint 存 last-epoch 权重却标注 best_eval_loss | **修订（有意契约变更）**：v3 A/B 实测 best-eval-loss 恢复在不平衡阈值化目标上选中欠拟合基率轮（dev F1 0.03 vs last-epoch 0.27），故默认 last-epoch 并以 `weight_epoch` 字段显式声明；`restore_best=True` 为 opt-in 机制且确实恢复 best 权重 | review_eval `e27_trainer_restore_semantics` + pytest |
 | E28 | Pi R-01 | 报告路径不校验 checkpoint↔manifest 绑定（worker 路径有、报告路径没有） | `assert_champion_matches_manifest`：smoke_only / manifest_sha256 / dataset_sha256 三重 fail-closed；champion_provenance 落盘绑定哈希 | review_eval `e28_report_binds_champion_to_manifest` + `--summary` 检查 |
 | E29 | Pi R-02/R-11 | 派生 manifest（回归/deployable）依赖默认 fractions 巧合一致 | `derived_manifest` 传入冻结 fractions + exclusions 并断言分区成员一致；`build_real_manifest` 改为全量洗牌后剔除，剔除不再改变其余受试者分区 | review_eval `e29_derived_manifests_mirror_frozen_split` + pytest |
 | E30 | Pi R-09 | 所有 real manifest 共用 `tcm-input-real-v1` 版本串，无区分度 | 版本串编入 modality_set 与各模态维度（`tcm-input-real-v1:<set>:<name>=<dim>,…`） | review_eval `e30_input_spec_version_discriminates` + pytest |
