@@ -50,14 +50,49 @@ MODALITY_SETS = {
 }
 
 
-def _nan_aware(values: list[float]) -> tuple[float, float]:
-    """Mean/std over finite values only; (0, 1) when nothing is finite."""
-    finite = [v for v in values if not math.isnan(v)]
-    if not finite:
-        return 0.0, 1.0
-    mean = sum(finite) / len(finite)
-    var = sum((v - mean) ** 2 for v in finite) / len(finite)
-    return mean, math.sqrt(var) or 1.0
+def _fit_scaler(
+    train_rows: list[int],
+    by_row: dict[int, SubjectRecord],
+    groups_by_modality: dict[str, tuple[str, ...]],
+) -> dict[str, dict]:
+    """Column statistics from TRAIN rows exclusively (#29).
+
+    A column with no finite train-fold value or zero variance is marked
+    degenerate: transforms must emit 0.0 for it (neutral) instead of
+    passing raw-magnitude values through at inference time.
+    """
+    scaler: dict[str, dict] = {}
+    for modality, feature_groups in groups_by_modality.items():
+        cols = [[v for g in feature_groups for v in by_row[r].features[g]] for r in train_rows]
+        n_cols = len(cols[0])
+        means: list[float] = []
+        stds: list[float] = []
+        degenerate: list[bool] = []
+        for j in range(n_cols):
+            finite = [c[j] for c in cols if not math.isnan(c[j])]
+            if not finite:
+                means.append(0.0)
+                stds.append(1.0)
+                degenerate.append(True)
+                continue
+            mean = sum(finite) / len(finite)
+            std = math.sqrt(sum((v - mean) ** 2 for v in finite) / len(finite))
+            if std == 0.0:
+                means.append(mean)
+                stds.append(1.0)
+                degenerate.append(True)
+                continue
+            means.append(mean)
+            stds.append(std)
+            degenerate.append(False)
+        scaler[modality] = {"mean": means, "std": stds, "degenerate": degenerate}
+    return scaler
+
+
+def _manifest_digest(data: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(data, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
 
 
 @dataclass
@@ -90,6 +125,11 @@ def build_real_manifest(
         )
     if abs(sum(fractions) - 1.0) > 1e-9:
         raise ValueError("split fractions must sum to 1")
+    indices = [r.subject_index for r in records]
+    if len(set(indices)) != len(indices):
+        raise ValueError(
+            "duplicate subject_index in records; refusing to build a manifest"
+        )
 
     rows = [r.subject_index for r in records if r.subject_index not in exclude_subject_rows]
     if len(rows) < 10:
@@ -105,21 +145,16 @@ def build_real_manifest(
         "dev": order[n_train : n_train + n_dev],
         "holdout": order[n_train + n_dev :],
     }
+    for name, members in partitions.items():
+        if not members:
+            raise ValueError(
+                f"empty {name!r} partition for {n} subjects with fractions "
+                f"{list(fractions)}; adjust the fractions"
+            )
     by_row = {r.subject_index: r for r in records}
 
     # --- fold-only scaler: statistics from TRAIN rows exclusively (#29) ----
-    groups = MODALITY_SETS[modality_set]
-    scaler: dict[str, dict] = {}
-    for modality, feature_groups in groups.items():
-        cols: list[list[float]] = []
-        for r in partitions["train"]:
-            values = [v for g in feature_groups for v in by_row[r].features[g]]
-            cols.append(values)
-        n_cols = len(cols[0])
-        scaler[modality] = {
-            "mean": [_nan_aware([c[j] for c in cols])[0] for j in range(n_cols)],
-            "std": [_nan_aware([c[j] for c in cols])[1] for j in range(n_cols)],
-        }
+    scaler = _fit_scaler(partitions["train"], by_row, MODALITY_SETS[modality_set])
 
     label_version = (
         LABEL_VERSION_CLASSIFICATION
@@ -140,7 +175,7 @@ def build_real_manifest(
                 "feature_groups": list(feature_groups),
                 "dim": len(scaler[modality]["mean"]),
             }
-            for modality, feature_groups in groups.items()
+            for modality, feature_groups in MODALITY_SETS[modality_set].items()
         },
         "split": {
             "seed": split_seed,
@@ -152,9 +187,55 @@ def build_real_manifest(
         "excluded_subject_rows": list(exclude_subject_rows),
         "notes": notes,
     }
-    digest = hashlib.sha256(
-        json.dumps(data, sort_keys=True, ensure_ascii=False).encode()
-    ).hexdigest()
+    digest = _manifest_digest(data)
+    data["manifest_sha256"] = digest
+    return RealManifest(data=data, sha256=digest)
+
+
+def exclude_subjects_from_manifest(
+    manifest: dict,
+    records: list[SubjectRecord],
+    exclude_rows: tuple[int, ...],
+    notes: str = "",
+) -> RealManifest:
+    """Derive a QC-variant manifest WITHOUT reshuffling the frozen split.
+
+    A fresh build_real_manifest with the same seed would reshuffle every
+    remaining subject across partitions once the row set changes; this
+    keeps the original partition assignment minus the excluded subjects
+    and refits the scaler on the reduced train fold only (#eval E01).
+    """
+    data = json.loads(json.dumps(manifest))
+    data.pop("manifest_sha256", None)
+    dropped = {f"mendeley-r{r:03d}" for r in exclude_rows}
+    for partition in ("train", "dev", "holdout"):
+        data["split"][partition] = [
+            s for s in data["split"][partition] if s not in dropped
+        ]
+        if not data["split"][partition]:
+            raise ValueError(f"excluding {sorted(dropped)} empties {partition!r}")
+    data["subject_row_by_id"] = {
+        k: v for k, v in data["subject_row_by_id"].items() if k not in dropped
+    }
+    by_row = {r.subject_index: r for r in records}
+    groups = {
+        modality: tuple(params["feature_groups"])
+        for modality, params in data["modalities"].items()
+    }
+    data["scaler"] = _fit_scaler(
+        [
+            data["subject_row_by_id"][s]
+            for s in data["split"]["train"]
+        ],
+        by_row,
+        groups,
+    )
+    data["excluded_subject_rows"] = sorted(
+        set(data.get("excluded_subject_rows", [])) | set(exclude_rows)
+    )
+    if notes:
+        data["notes"] = notes
+    digest = _manifest_digest(data)
     data["manifest_sha256"] = digest
     return RealManifest(data=data, sha256=digest)
 
@@ -173,11 +254,23 @@ def load_real_manifest(path: str | Path) -> dict:
     return data
 
 
-def derive_classification_targets(scores: list[float | None]) -> tuple[list[float], list[bool]]:
+def derive_classification_targets(
+    scores: list[float | None], score_mask: list[bool] | None = None
+) -> tuple[list[float], list[bool]]:
     """RULE-derived 9D binary labels from canonical scores (see module doc).
 
     Missing (balanced) dims are unobserved — never zero-filled as negative.
+    When score_mask is given it must agree with the score values; a
+    disagreement means the adapter's audit trail and the label derivation
+    have drifted apart, which is refused rather than silently resolved.
     """
+    if score_mask is not None:
+        for score, observed in zip(scores, score_mask, strict=True):
+            if observed != (score is not None):
+                raise ValueError(
+                    "score_mask disagrees with score values; refusing to "
+                    "derive labels from an inconsistent audit trail"
+                )
     labels: list[float] = []
     mask: list[bool] = []
     for s in scores:

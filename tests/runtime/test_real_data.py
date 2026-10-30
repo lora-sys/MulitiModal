@@ -74,16 +74,17 @@ def test_provider_is_deterministic(tmp_path):
 def test_nan_row_is_availability_masked_and_zero_filled(tmp_path):
     m, _ = manifest_file(tmp_path)
     records = fake_records()
-    train_row = m["subject_row_by_id"][m["split"]["train"][0]]
+    train_id = m["split"]["train"][0]
+    train_row = m["subject_row_by_id"][train_id]
     records[train_row - 1].features["meridian"][1] = float("nan")
     provider = RealBatchProvider(m, records, "train", batch_size=32)
-    batch = next(iter(provider)).batch
-    position = m["split"]["train"].index(m["split"]["train"][0])
-    assert bool(batch.availability["exam_features"][position]) is False
-    assert torch.count_nonzero(batch.features["exam_features"][position]) == 0
-    # a different row keeps its standardized values
-    other = position + 1 if position + 1 < len(m["split"]["train"]) else 0
-    assert bool(batch.availability["exam_features"][other]) is True
+    item = next(iter(provider))
+    # train batches are epoch-shuffled: locate the row by subject id
+    position = item.subject_ids.index(train_id)
+    assert bool(item.batch.availability["exam_features"][position]) is False
+    assert torch.count_nonzero(item.batch.features["exam_features"][position]) == 0
+    other = next(i for i, s in enumerate(item.subject_ids) if s != train_id)
+    assert bool(item.batch.availability["exam_features"][other]) is True
 
 
 def test_classification_targets_carry_category_labels_with_balanced_masked(tmp_path):

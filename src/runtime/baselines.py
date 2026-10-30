@@ -61,11 +61,14 @@ def _scaled_vector(
 ) -> tuple[list[float], bool]:
     groups = manifest["modalities"][modality]["feature_groups"]
     values = [v for g in groups for v in rec.features[g]]
-    mean = manifest["scaler"][modality]["mean"]
-    std = manifest["scaler"][modality]["std"]
+    params = manifest["scaler"][modality]
+    mean, std, degenerate = params["mean"], params["std"], params["degenerate"]
     ok = not any(math.isnan(v) for v in values)
     return (
-        [(v - m) / s if ok else 0.0 for v, m, s in zip(values, mean, std, strict=True)],
+        [
+            0.0 if d or not ok else (v - m) / s
+            for v, m, s, d in zip(values, mean, std, degenerate, strict=True)
+        ],
         ok,
     )
 
@@ -75,8 +78,10 @@ def _design_matrix(
 ) -> tuple[np.ndarray, list[int]]:
     """Standardized feature matrix using the manifest's train-fold scaler.
 
-    features: 'full' (all manifest modalities concatenated) or 'bmi_only'
-    (the single standardized BMI column, the last body_features column).
+    features: 'full' (all manifest modalities + one availability bit per
+    modality — the same missing-modality information the neural model
+    receives, so the comparison is fair) or 'bmi_only' (the standardized
+    BMI column + the body_features availability bit).
     """
     rows: list[list[float]] = []
     rows_index: list[int] = []
@@ -85,12 +90,16 @@ def _design_matrix(
         row = manifest["subject_row_by_id"][sid]
         rec: SubjectRecord = records_by_row[row]
         if features == "bmi_only":
-            body, _ = _scaled_vector(rec, manifest, "body_features")
-            vector = [body[body_dim - 1]]  # BH, BW, BMI -> BMI last
+            body, ok = _scaled_vector(rec, manifest, "body_features")
+            vector = [body[body_dim - 1], 1.0 if ok else 0.0]  # BH, BW, BMI -> BMI last
         else:
             vector = []
+            bits = []
             for name in manifest["modalities"]:
-                vector.extend(_scaled_vector(rec, manifest, name)[0])
+                scaled, ok = _scaled_vector(rec, manifest, name)
+                vector.extend(scaled)
+                bits.append(1.0 if ok else 0.0)
+            vector.extend(bits)
         rows.append(vector)
         rows_index.append(row)
     return np.asarray(rows, dtype=np.float64), rows_index
@@ -100,7 +109,8 @@ def _labels(records_by_row: dict, rows_index: list[int]) -> tuple[np.ndarray, np
     y: list[list[float]] = []
     mask: list[list[bool]] = []
     for row in rows_index:
-        labels, m = derive_classification_targets(records_by_row[row].scores)
+        rec = records_by_row[row]
+        labels, m = derive_classification_targets(rec.scores, rec.score_mask)
         y.append(labels)
         mask.append(m)
     return np.asarray(y), np.asarray(mask)
@@ -126,8 +136,35 @@ def _per_dim_f1(y_true: np.ndarray, y_pred: np.ndarray, mask: np.ndarray) -> dic
 
 
 def macro_f1(per_dim: dict) -> float | None:
-    values = [v["f1"] for v in per_dim.values() if v["f1"] is not None]
-    return sum(values) / len(values) if values else None
+    """Macro-F1 over the FIXED set of observed dimensions: an undefined F1
+    (no positive and no predicted positive) counts as 0.0, so the averaging
+    denominator cannot drift between models and reward models that simply
+    never predict a rare dimension (#eval E02)."""
+    observed = [v for v in per_dim.values() if v["n_observed"] > 0]
+    if not observed:
+        return None
+    return sum(v["f1"] or 0.0 for v in observed) / len(observed)
+
+
+def count_undefined_f1(per_dim: dict) -> int:
+    """Observed dimensions whose F1 is undefined (reported alongside macro)."""
+    return sum(
+        1 for v in per_dim.values() if v["n_observed"] > 0 and v["f1"] is None
+    )
+
+
+def subject_mae_from_proba(
+    proba: np.ndarray, y: np.ndarray, mask: np.ndarray
+) -> float | None:
+    """Subject-level MAE of probability outputs against 0/1 labels, same
+    aggregation as TCMTrustedEvaluator (per subject over observed dims)."""
+    obs = mask.astype(bool)
+    rows = obs.any(axis=1)
+    if not rows.any():
+        return None
+    diffs = np.abs(proba - y) * obs
+    per_subject = diffs.sum(axis=1) / np.maximum(obs.sum(axis=1), 1)
+    return float(per_subject[rows].mean())
 
 
 def _proba_matrix(model, X: np.ndarray, n_dims: int) -> np.ndarray:
@@ -174,9 +211,15 @@ def evaluate_baselines(manifest: dict, records: list) -> dict:
                     records_by_row, manifest, manifest["split"][partition], features
                 )
                 y, mask = _labels(records_by_row, rows)
+                mask = mask.astype(bool)
                 proba = _proba_matrix(model, X, y.shape[1])
-                per_dim = _per_dim_f1(y, (proba >= 0.5).astype(float), mask.astype(bool))
-                entry[partition] = {"per_dim": per_dim, "macro_f1": macro_f1(per_dim)}
+                per_dim = _per_dim_f1(y, (proba >= 0.5).astype(float), mask)
+                entry[partition] = {
+                    "per_dim": per_dim,
+                    "macro_f1": macro_f1(per_dim),
+                    "n_undefined_f1": count_undefined_f1(per_dim),
+                    "subject_mae": subject_mae_from_proba(proba, y, mask),
+                }
             result[name] = entry
     return result
 
@@ -205,5 +248,10 @@ def evaluate_neural(model, manifest: dict, records: list, batch_size: int = 64) 
         y = torch.cat(ys).numpy()
         mask = torch.cat(ms).numpy().astype(bool)
         per_dim = _per_dim_f1(y, (proba >= 0.5).astype(float), mask)
-        out[partition] = {"per_dim": per_dim, "macro_f1": macro_f1(per_dim)}
+        out[partition] = {
+            "per_dim": per_dim,
+            "macro_f1": macro_f1(per_dim),
+            "n_undefined_f1": count_undefined_f1(per_dim),
+            "subject_mae": subject_mae_from_proba(proba, y, mask),
+        }
     return out

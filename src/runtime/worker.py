@@ -26,12 +26,23 @@ from pathlib import Path
 from runtime.protocols import train_candidate
 
 #: the only host environment variables a worker may inherit (#45 hard rule:
-#: no credentials, no proxy/auth material from the harness host)
-ALLOWED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "PYTHONUNBUFFERED", "TMPDIR")
+#: no credentials, no proxy/auth material from the harness host). Exact-match
+#: on purpose — a PYTHON* prefix rule would admit PYTHONSTARTUP/PYTHONHOME,
+#: which execute attacker-controlled code at interpreter startup.
+ALLOWED_ENV = (
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "PYTHONPATH",
+    "PYTHONUNBUFFERED",
+    "PYTHONDONTWRITEBYTECODE",
+)
 
 
 def sanitize_env(env: dict) -> dict:
-    return {k: v for k, v in env.items() if k in ALLOWED_ENV or k.startswith("PYTHON")}
+    return {k: v for k, v in env.items() if k in ALLOWED_ENV}
 
 
 def _train(config_path: str) -> dict:

@@ -3,6 +3,7 @@ state, with full provenance (seed, torch version, source commit, SMOKE_ONLY)."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -16,6 +17,20 @@ from core.registry import (
 )
 
 TRAINING_STATE_FILE = "training_state.pt"
+
+
+def _load_verified_state(model_dir: Path) -> dict:
+    """Load training state with the weights file checksum verified first and
+    safe (non-pickle) deserialization for tensors-only state dicts."""
+    metadata = json.loads((model_dir / METADATA_FILE).read_text())
+    digest = hashlib.sha256((model_dir / WEIGHTS_FILE).read_bytes()).hexdigest()
+    if digest != metadata["weights_sha256"]:
+        raise ValueError(
+            f"weights file checksum {digest[:12]}… does not match metadata "
+            f"{metadata['weights_sha256'][:12]}…; refusing to load the artifact"
+        )
+    return torch.load(model_dir / TRAINING_STATE_FILE, map_location="cpu",
+                      weights_only=True)
 
 
 def save_training_checkpoint(
@@ -53,7 +68,7 @@ def load_training_checkpoint(
             "use core.registry.load_model for inference-only artifacts"
         )
     model, metadata = load_model(model_dir, device=device)
-    state = torch.load(model_dir / TRAINING_STATE_FILE, map_location="cpu", weights_only=False)
+    state = _load_verified_state(model_dir)
     if "smoke_only" not in state:
         raise ValueError(
             "checkpoint is missing the explicit smoke_only marker; refusing to trust it"
@@ -70,7 +85,7 @@ def checkpoint_summary(model_dir: str | Path) -> dict:
     """Human/CLI-facing provenance summary without loading weights."""
     model_dir = Path(model_dir)
     metadata = json.loads((model_dir / METADATA_FILE).read_text())
-    state = torch.load(model_dir / TRAINING_STATE_FILE, map_location="cpu", weights_only=False)
+    state = _load_verified_state(model_dir)
     return {
         "model_type": metadata["model_type"],
         "weights_sha256": metadata["weights_sha256"],

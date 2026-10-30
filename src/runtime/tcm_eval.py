@@ -115,8 +115,10 @@ def compute_subject_level_metrics(
 ) -> dict:
     """Hand-checkable core: subject-level MAE/RMSE over observed entries only.
 
-    Per subject: mean abs diff (and mean sq diff) over that subject's observed
-    entries; subjects with nothing observed are excluded (never zero-filled).
+    Per subject: pooled mean abs diff (and mean sq diff) over ALL of that
+    subject's observed entries across rows; subjects with nothing observed
+    are excluded (never zero-filled). Aggregation matches
+    TCMTrustedEvaluator.evaluate — same subject, same number.
     """
     if pred.shape != target.shape or pred.shape != mask.shape:
         raise ValueError("pred/target/mask shape mismatch")
@@ -124,25 +126,25 @@ def compute_subject_level_metrics(
         raise ValueError("subject_ids length must match batch rows")
     subject_sq: dict[str, float] = {}
     subject_abs: dict[str, float] = {}
+    subject_obs: dict[str, int] = {}
     for i, subj in enumerate(subject_ids):
         obs = mask[i]
         if not bool(obs.any()):
             continue
         diffs = (pred[i] - target[i])[obs]
-        subject_sq[subj] = subject_sq.get(subj, 0.0) + float((diffs**2).sum()) / int(
-            obs.sum()
-        )
-        subject_abs[subj] = subject_abs.get(subj, 0.0) + float(diffs.abs().sum()) / int(
-            obs.sum()
-        )
+        subject_sq[subj] = subject_sq.get(subj, 0.0) + float((diffs**2).sum())
+        subject_abs[subj] = subject_abs.get(subj, 0.0) + float(diffs.abs().sum())
+        subject_obs[subj] = subject_obs.get(subj, 0) + int(obs.sum())
     n_labeled = len(subject_abs)
     if n_labeled == 0:
         # fail-closed: an empty observation must never look like a perfect
         # score (same semantics as TCMTrustedEvaluator, #45 audit finding)
         return {"n_subjects": len(set(subject_ids)), "n_labeled": 0,
                 "subject_mae": None, "subject_rmse": None}
-    mae = sum(subject_abs.values()) / n_labeled
-    rmse = (sum(subject_sq.values()) / n_labeled) ** 0.5
+    per_subject_abs = {s: subject_abs[s] / subject_obs[s] for s in subject_abs}
+    per_subject_sq = {s: subject_sq[s] / subject_obs[s] for s in subject_sq}
+    mae = sum(per_subject_abs.values()) / n_labeled
+    rmse = (sum(per_subject_sq.values()) / n_labeled) ** 0.5
     return {
         "n_subjects": len(set(subject_ids)),
         "n_labeled": n_labeled,

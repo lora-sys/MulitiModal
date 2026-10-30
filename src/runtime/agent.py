@@ -126,7 +126,13 @@ def validate_source_patch(source: str) -> None:
 
 
 def apply_config_patch(base: dict, patch: dict) -> dict:
-    """Return a deep-merged candidate config; keys were validated already."""
+    """Return a deep-merged candidate config; keys were validated already.
+
+    Deliberately whitelist-shaped: the result contains ONLY the five known
+    sections (task/model/trainer/train_provider/eval_provider) plus the
+    patch. Callers that need base keys outside this set (data, out_dir,
+    data_mode) must re-add them after merging — the harness does.
+    """
     cfg = {
         "task": base["task"],
         "model": dict(base.get("model", {})),

@@ -131,7 +131,12 @@ def trusted_score(artifact_dir: str | Path, seed: int = 1234) -> dict:
     """
     from .checkpoint import load_training_checkpoint
 
-    model, _, metadata = load_training_checkpoint(artifact_dir)
+    model, state, metadata = load_training_checkpoint(artifact_dir)
+    if not state.get("smoke_only", False):
+        raise ValueError(
+            "trusted_score evaluates synthetic fixtures only; a real-data "
+            "checkpoint must go through the worker's real-data scoring path"
+        )
     task = "tcm" if metadata["model_type"].startswith("tcm") else "physio"
     provider = SyntheticBatchProvider(
         task, n_batches=3, batch_size=8, seed=seed,

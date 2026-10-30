@@ -12,6 +12,7 @@ All provenance travels in the manifest; batches stay in memory only.
 from __future__ import annotations
 
 import math
+import random
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -77,16 +78,18 @@ def _row_tensors(
             values = [v for g in params["feature_groups"] for v in record.features[g]]
             mean = manifest["scaler"][name]["mean"]
             std = manifest["scaler"][name]["std"]
+            degenerate = manifest["scaler"][name]["degenerate"]
             ok = not any(math.isnan(v) for v in values)
             scaled = [
-                (v - m) / s if ok else 0.0 for v, m, s in zip(values, mean, std, strict=True)
+                0.0 if d or not ok else (v - m) / s
+                for v, m, s, d in zip(values, mean, std, degenerate, strict=True)
             ]
             features[name].append(scaled)
             availability[name].append(ok)
         if task_type == "derived_multilabel_classification":
             from data.real_split import derive_classification_targets
 
-            labels, mask = derive_classification_targets(record.scores)
+            labels, mask = derive_classification_targets(record.scores, record.score_mask)
             target_key = "category_labels"
         else:
             labels = [s if s is not None else 0.0 for s in record.scores]
@@ -132,6 +135,7 @@ class RealBatchProvider:
         self._features, self._availability, self._targets, self._target_mask = _row_tensors(
             self.records_by_row, manifest, self.subject_ids, manifest["task_type"]
         )
+        self._epoch = 0
 
     def input_spec(self) -> InputSpecSet:
         return real_input_spec(self.manifest)
@@ -141,17 +145,25 @@ class RealBatchProvider:
 
     def __iter__(self) -> Iterator[BatchItem]:
         n = len(self.subject_ids)
+        order = list(range(n))
+        if self.partition == "train":
+            # deterministic epoch-level shuffle: identical (manifest, call
+            # sequence) -> identical batch order, but batches are no longer
+            # locked to subject-index order within every epoch
+            rng = random.Random(f"{self.manifest['manifest_sha256']}:{self._epoch}")
+            rng.shuffle(order)
+            self._epoch += 1
         for lo in range(0, n, self.batch_size):
             hi = min(lo + self.batch_size, n)
-            sl = slice(lo, hi)
+            idx = order[lo:hi]
             yield BatchItem(
                 batch=ModelBatch(
-                    features={k: v[sl] for k, v in self._features.items()},
-                    availability={k: v[sl] for k, v in self._availability.items()},
-                    targets={k: v[sl] for k, v in self._targets.items()},
-                    target_mask={k: v[sl] for k, v in self._target_mask.items()},
+                    features={k: v[idx] for k, v in self._features.items()},
+                    availability={k: v[idx] for k, v in self._availability.items()},
+                    targets={k: v[idx] for k, v in self._targets.items()},
+                    target_mask={k: v[idx] for k, v in self._target_mask.items()},
                 ),
-                subject_ids=list(self.subject_ids[lo:hi]),
+                subject_ids=[self.subject_ids[i] for i in idx],
             )
 
 
