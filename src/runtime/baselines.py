@@ -1,0 +1,209 @@
+"""Fair baselines for the #50 real-data TCM evaluation.
+
+Dummy majority, BMI-only logistic and full-feature logistic regression —
+all fit on the frozen TRAIN partition only (fold-only preprocessing, #29),
+evaluated on the same partitions and label contract as the neural model so
+the comparison is fair. Complex-network scores are never accepted as
+evidence of clinical validity; these baselines exist to show whether the
+network learned anything beyond body-size proxies (#50).
+"""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+from sklearn.base import BaseEstimator, ClassifierMixin
+
+from data.mendeley import SubjectRecord
+from data.real_split import derive_classification_targets
+
+CANONICAL_DIMS = (
+    "balanced", "qi_deficiency", "yang_deficiency", "yin_deficiency",
+    "phlegm_damp", "damp_heat", "blood_stasis", "qi_depression", "special_diathesis",
+)
+
+
+class _LogisticPerDim(BaseEstimator, ClassifierMixin):
+    """LogisticRegression that falls back to the constant class when a
+    dimension has a single class in the training fold (rare dimensions)."""
+
+    def __init__(self, C: float = 1.0, max_iter: int = 2000) -> None:
+        self.C = C
+        self.max_iter = max_iter
+
+    def fit(self, X, y) -> _LogisticPerDim:
+        from sklearn.linear_model import LogisticRegression
+
+        self._lr = None
+        self.classes_ = np.unique(y)
+        if self.classes_.size > 1:
+            self._lr = LogisticRegression(
+                C=self.C, max_iter=self.max_iter
+            ).fit(X, y)
+        return self
+
+    def predict_proba(self, X):
+        if self._lr is None:
+            out = np.zeros((len(X), 2))
+            out[:, int(self.classes_[0])] = 1.0
+            return out
+        return self._lr.predict_proba(X)
+
+    def predict(self, X):
+        if self._lr is None:
+            return np.full(len(X), self.classes_[0])
+        return self._lr.predict(X)
+
+
+def _scaled_vector(
+    rec: SubjectRecord, manifest: dict, modality: str
+) -> tuple[list[float], bool]:
+    groups = manifest["modalities"][modality]["feature_groups"]
+    values = [v for g in groups for v in rec.features[g]]
+    mean = manifest["scaler"][modality]["mean"]
+    std = manifest["scaler"][modality]["std"]
+    ok = not any(math.isnan(v) for v in values)
+    return (
+        [(v - m) / s if ok else 0.0 for v, m, s in zip(values, mean, std, strict=True)],
+        ok,
+    )
+
+
+def _design_matrix(
+    records_by_row: dict, manifest: dict, subject_ids: tuple[str, ...], features: str
+) -> tuple[np.ndarray, list[int]]:
+    """Standardized feature matrix using the manifest's train-fold scaler.
+
+    features: 'full' (all manifest modalities concatenated) or 'bmi_only'
+    (the single standardized BMI column, the last body_features column).
+    """
+    rows: list[list[float]] = []
+    rows_index: list[int] = []
+    body_dim = manifest["modalities"]["body_features"]["dim"]
+    for sid in subject_ids:
+        row = manifest["subject_row_by_id"][sid]
+        rec: SubjectRecord = records_by_row[row]
+        if features == "bmi_only":
+            body, _ = _scaled_vector(rec, manifest, "body_features")
+            vector = [body[body_dim - 1]]  # BH, BW, BMI -> BMI last
+        else:
+            vector = []
+            for name in manifest["modalities"]:
+                vector.extend(_scaled_vector(rec, manifest, name)[0])
+        rows.append(vector)
+        rows_index.append(row)
+    return np.asarray(rows, dtype=np.float64), rows_index
+
+
+def _labels(records_by_row: dict, rows_index: list[int]) -> tuple[np.ndarray, np.ndarray]:
+    y: list[list[float]] = []
+    mask: list[list[bool]] = []
+    for row in rows_index:
+        labels, m = derive_classification_targets(records_by_row[row].scores)
+        y.append(labels)
+        mask.append(m)
+    return np.asarray(y), np.asarray(mask)
+
+
+def _per_dim_f1(y_true: np.ndarray, y_pred: np.ndarray, mask: np.ndarray) -> dict:
+    """Binary F1 per dim over observed entries only; None when undefined."""
+    out = {}
+    for d, dim in enumerate(CANONICAL_DIMS):
+        obs = mask[:, d]
+        t, p = y_true[obs, d], y_pred[obs, d]
+        tp = float(((t == 1) & (p == 1)).sum())
+        fp = float(((t == 0) & (p == 1)).sum())
+        fn = float(((t == 1) & (p == 0)).sum())
+        f1 = 2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) else None
+        out[dim] = {
+            "f1": f1,
+            "support_positive": int((t == 1).sum()),
+            "n_observed": int(obs.sum()),
+            "positive_rate": float(t.mean()) if obs.any() else None,
+        }
+    return out
+
+
+def macro_f1(per_dim: dict) -> float | None:
+    values = [v["f1"] for v in per_dim.values() if v["f1"] is not None]
+    return sum(values) / len(values) if values else None
+
+
+def _proba_matrix(model, X: np.ndarray, n_dims: int) -> np.ndarray:
+    """Column of positive-class probabilities per dim from a
+    MultiOutputClassifier (its predict_proba returns per-output arrays)."""
+    cols = []
+    for d in range(n_dims):
+        est = model.estimators_[d]
+        if len(est.classes_) == 1:
+            cols.append(np.full(len(X), float(est.classes_[0])))
+            continue
+        col = 1 if est.classes_[1] == 1 else 0
+        cols.append(est.predict_proba(X)[:, col])
+    return np.stack(cols, axis=1)
+
+
+def evaluate_baselines(manifest: dict, records: list) -> dict:
+    """Fit the three baselines on TRAIN, evaluate F1 on dev and holdout."""
+    from sklearn.dummy import DummyClassifier
+    from sklearn.multioutput import MultiOutputClassifier
+
+    records_by_row = {r.subject_index: r for r in records}
+    result: dict = {"label_version": manifest["label_version"]}
+    for features in ("bmi_only", "full"):
+        X_train, rows_train = _design_matrix(
+            records_by_row, manifest, manifest["split"]["train"], features
+        )
+        y_train, _ = _labels(records_by_row, rows_train)
+        models = {}
+        if features == "bmi_only":
+            models["dummy_majority"] = MultiOutputClassifier(
+                DummyClassifier(strategy="most_frequent")
+            )
+            models["bmi_only_logistic"] = MultiOutputClassifier(_LogisticPerDim())
+        else:
+            models["feature_logistic"] = MultiOutputClassifier(
+                _LogisticPerDim(max_iter=5000)
+            )
+        for name, model in models.items():
+            model.fit(X_train, y_train)
+            entry: dict = {"features": features}
+            for partition in ("dev", "holdout"):
+                X, rows = _design_matrix(
+                    records_by_row, manifest, manifest["split"][partition], features
+                )
+                y, mask = _labels(records_by_row, rows)
+                proba = _proba_matrix(model, X, y.shape[1])
+                per_dim = _per_dim_f1(y, (proba >= 0.5).astype(float), mask.astype(bool))
+                entry[partition] = {"per_dim": per_dim, "macro_f1": macro_f1(per_dim)}
+            result[name] = entry
+    return result
+
+
+def evaluate_neural(model, manifest: dict, records: list, batch_size: int = 64) -> dict:
+    """Per-dim F1/positive-rate for the neural model on dev and holdout."""
+    import torch
+
+    from .real_data import RealBatchProvider
+
+    out: dict = {}
+    for partition in ("dev", "holdout"):
+        provider = RealBatchProvider(manifest, records, partition, batch_size=batch_size)
+        probs, ys, ms = [], [], []
+        was_training = model.training
+        model.eval()
+        with torch.no_grad():
+            for item in provider:
+                out_model = model(item.batch)
+                probs.append(out_model.predictions["category_probs"])
+                ys.append(item.batch.targets["category_labels"])
+                ms.append(item.batch.target_mask["category_labels"])
+        if was_training:
+            model.train()
+        proba = torch.cat(probs).numpy()
+        y = torch.cat(ys).numpy()
+        mask = torch.cat(ms).numpy().astype(bool)
+        per_dim = _per_dim_f1(y, (proba >= 0.5).astype(float), mask)
+        out[partition] = {"per_dim": per_dim, "macro_f1": macro_f1(per_dim)}
+    return out

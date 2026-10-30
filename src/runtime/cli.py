@@ -102,15 +102,87 @@ def cmd_checkpoint_reload(args: argparse.Namespace) -> int:
 
 
 def cmd_research(args: argparse.Namespace) -> int:
-    from runtime.harness import TCM_ONLY_MESSAGE, AutoResearchHarness, default_tcm_runspec
+    from runtime.harness import (
+        REAL_TCM_PLAN,
+        TCM_ONLY_MESSAGE,
+        AutoResearchHarness,
+        default_real_tcm_runspec,
+        default_tcm_runspec,
+    )
 
     if args.profile != "tcm":
         print(json.dumps({"ok": False, "error": TCM_ONLY_MESSAGE}))
         return 2
-    runspec = default_tcm_runspec(rounds=args.rounds, timeout_s=args.timeout)
+    if args.data_manifest:
+        if not args.dataset:
+            print(json.dumps({"ok": False, "error": "--dataset is required with --data-manifest"}))
+            return 2
+        runspec = default_real_tcm_runspec(
+            args.data_manifest, args.dataset, rounds=args.rounds, timeout_s=args.timeout
+        )
+    else:
+        runspec = default_tcm_runspec(rounds=args.rounds, timeout_s=args.timeout)
     runspec["seed"] = args.seed
-    harness = AutoResearchHarness(runspec, out_dir=args.out)
+    provider = None
+    if args.data_manifest:
+        from runtime.agent import DeterministicStubProvider
+
+        provider = DeterministicStubProvider(plan=REAL_TCM_PLAN)
+    harness = AutoResearchHarness(runspec, provider=provider, out_dir=args.out)
     print(json.dumps(harness.run(), indent=2))
+    return 0
+
+
+def cmd_research_status(args: argparse.Namespace) -> int:
+    from runtime.manifest import MANIFEST_FILE, RunManifestStore
+
+    store = RunManifestStore(Path(args.out) / MANIFEST_FILE)
+    entries = store.load()
+    champion = store.champion()
+    print(json.dumps({
+        "out_dir": str(args.out),
+        "rounds_completed": len(entries),
+        "runs": [
+            {k: e.get(k) for k in ("run_id", "decision", "status", "reason", "best_so_far")}
+            for e in entries
+        ],
+        "champion": {
+            "run_id": champion.get("run_id"),
+            "artifact_dir": champion.get("artifact_dir"),
+            "best_so_far": champion.get("best_so_far"),
+        } if champion else None,
+    }, indent=2))
+    return 0
+
+
+def cmd_research_report(args: argparse.Namespace) -> int:
+    from runtime.manifest import MANIFEST_FILE, RunManifestStore
+
+    store = RunManifestStore(Path(args.out) / MANIFEST_FILE)
+    entries = store.load()
+    champion = store.champion()
+    print(json.dumps({
+        "rounds_completed": len(entries),
+        "keep": [e["run_id"] for e in entries if e.get("decision") == "KEEP"],
+        "revert": [e["run_id"] for e in entries if e.get("decision") == "REVERT"],
+        "per_round": [
+            {
+                "run_id": e["run_id"],
+                "intent": e.get("intent"),
+                "decision": e.get("decision"),
+                "primary_value": (e.get("metrics") or {}).get("primary_value"),
+                "smoke_only": e.get("smoke_only"),
+                "artifact_sha256": e.get("artifact_sha256"),
+            }
+            for e in entries
+        ],
+        "champion": {
+            "run_id": champion.get("run_id"),
+            "artifact_dir": champion.get("artifact_dir"),
+            "best_so_far": champion.get("best_so_far"),
+            "artifact_sha256": champion.get("artifact_sha256"),
+        } if champion else None,
+    }, indent=2))
     return 0
 
 
@@ -147,7 +219,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--timeout", type=float, default=300.0)
     p.add_argument("--out", default="runs/autoresearch")
+    p.add_argument("--data-manifest", default=None,
+                   help="frozen real-data manifest (#50); enables real training mode")
+    p.add_argument("--dataset", default=None,
+                   help="audited dataset file path (with --data-manifest)")
     p.set_defaults(func=cmd_research)
+
+    p = sub.add_parser("research-status")
+    p.add_argument("--out", default="runs/autoresearch")
+    p.set_defaults(func=cmd_research_status)
+
+    p = sub.add_parser("research-report")
+    p.add_argument("--out", default="runs/autoresearch")
+    p.set_defaults(func=cmd_research_report)
     return parser
 
 

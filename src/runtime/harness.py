@@ -39,6 +39,84 @@ TCM_ONLY_MESSAGE = (
 )
 
 
+def default_real_tcm_runspec(
+    manifest_path: str,
+    dataset_path: str,
+    rounds: int = 5,
+    timeout_s: float = 900.0,
+) -> dict:
+    """Frozen real-data TCM runspec (#50): the manifest carries the audited
+    dataset hash, subject-disjoint split, train-fold scaler and RULE-derived
+    label contract; AutoResearch may only optimize the editable scope."""
+    from data.real_split import load_real_manifest
+
+    manifest = load_real_manifest(manifest_path)
+    return {
+        "task_id": "tcm_constitution",
+        "profile": "TCM_V1_REAL",
+        "task": "tcm",
+        "data_mode": "real",
+        "frozen": {
+            "dataset_hash": manifest["dataset_sha256"],
+            "data_manifest_hash": manifest["manifest_sha256"],
+            "label_manifest_hash": manifest["label_version"],
+            "standard_version": manifest["standard_version"],
+            "split_hash": f"manifest:{manifest['manifest_sha256'][:16]}",
+            "evaluator": "runtime.tcm_eval.TCMTrustedEvaluator",
+            "metric_version": "tcm-eval-v0",
+            "primary_metric": "category_probs/subject_mae",
+        },
+        "data": {
+            "manifest_path": str(manifest_path),
+            "dataset_path": str(dataset_path),
+        },
+        "seed": 0,
+        "budget": {
+            "max_candidates": rounds,
+            "per_run_timeout_s": timeout_s,
+            "max_wall_clock_s": timeout_s * (rounds + 1),
+        },
+        "editable_scope": [
+            "model.hidden_dim",
+            "model.fusion_dim",
+            "trainer.epochs",
+            "trainer.learning_rate",
+            "trainer.grad_clip",
+            "trainer.batch_size",
+        ],
+        "base_config": {
+            "task": "tcm",
+            "data_mode": "real",
+            "data": {
+                "manifest_path": str(manifest_path),
+                "dataset_path": str(dataset_path),
+                "task_type": manifest["task_type"],
+            },
+            "model": {"hidden_dim": 32, "fusion_dim": 32},
+            "trainer": {"epochs": 40, "learning_rate": 3e-3, "seed": 0},
+            "train_provider": {"batch_size": 32},
+        },
+    }
+
+
+#: deterministic candidate plan for real-data rounds (#50: agent modifies
+#: model/training within the editable scope; provider status stays
+#: AGENT_NOT_VERIFIED until isolation is verified per #45)
+REAL_TCM_PLAN: list[tuple[str, dict]] = [
+    ("baseline: 32-wide trunk, 40 epochs, lr 3e-3", {}),
+    ("wider trunk (64/64)", {"model.hidden_dim": 64, "model.fusion_dim": 64}),
+    ("longer schedule (80 epochs)", {"trainer.epochs": 80}),
+    ("higher LR with grad clip",
+     {"trainer.learning_rate": 1e-2, "trainer.grad_clip": 1.0}),
+    ("smaller batches (16), 64 epochs",
+     {"trainer.batch_size": 16, "trainer.epochs": 64}),
+    ("wide + high LR + long (combined best guess)",
+     {"model.hidden_dim": 64, "model.fusion_dim": 64,
+      "trainer.learning_rate": 1e-2, "trainer.grad_clip": 1.0,
+      "trainer.epochs": 80}),
+]
+
+
 def default_tcm_runspec(rounds: int = 3, timeout_s: float = 300.0) -> dict:
     """Frozen TCM synthetic runspec per #44 section 4."""
     return {
@@ -80,9 +158,14 @@ def default_tcm_runspec(rounds: int = 3, timeout_s: float = 300.0) -> dict:
 
 
 def _worker_env() -> dict:
-    env = dict(os.environ)
+    # sanitized whitelist: workers never inherit host credentials/proxy/auth
+    # material from the harness environment (#45 audit finding)
+    from .worker import ALLOWED_ENV, sanitize_env
+
+    env = sanitize_env(dict(os.environ))
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(SRC_DIR) + (os.pathsep + existing if existing else "")
+    assert "PATH" in ALLOWED_ENV
     return env
 
 
@@ -129,16 +212,21 @@ class AutoResearchHarness:
         self.provider = provider or DeterministicStubProvider()
         self.out_dir = Path(out_dir)
         self.store = RunManifestStore(self.out_dir / MANIFEST_FILE)
+        self.real_data = not self.runspec["frozen"]["dataset_hash"].startswith("synthetic")
+        if self.real_data:
+            # the frozen manifest must exist and hash-verify before any run
+            from data.real_split import load_real_manifest
+
+            load_real_manifest(self.runspec["data"]["manifest_path"])
         self.mode = (
-            "ENGINEERING_SMOKE"
-            if isinstance(self.provider, DeterministicStubProvider)
-            else "AGENT_INTEGRATED"
-        )
+            "REAL_DATA_TRAINING" if self.real_data else "ENGINEERING_SMOKE"
+        ) if isinstance(self.provider, DeterministicStubProvider) else "AGENT_INTEGRATED"
         self.agent_status = (
             "AGENT_NOT_VERIFIED"
             if isinstance(self.provider, DeterministicStubProvider)
             else "AGENT_ISOLATION_UNVERIFIED"
         )
+        self.smoke_only = not self.real_data
 
     # -- frozen-continuity ------------------------------------------------
 
@@ -165,7 +253,7 @@ class AutoResearchHarness:
             "intent": proposal.intent,
             "patch": proposal.config_patch,
             "mode": self.mode,
-            "smoke_only": True,
+            "smoke_only": self.smoke_only,
             "source_commit": _git_sha(),
             "frozen_hashes": self._frozen_hashes(),
         }
@@ -192,9 +280,16 @@ class AutoResearchHarness:
         # Controlled comparison: every candidate uses the frozen runspec seed
         # and the same train/eval pools; only the editable patch differs.
         config["trainer"]["seed"] = self.runspec["seed"]
-        config["train_provider"]["seed"] = self.runspec["seed"]
-        # eval subjects must stay disjoint from the train pool (#27)
-        config["eval_provider"]["subject_prefix"] = f"eval-{run_id}"
+        if self.real_data:
+            config["data_mode"] = "real"
+            config["data"] = {
+                **self.runspec["data"],
+                "task_type": self.runspec["base_config"]["data"]["task_type"],
+            }
+        else:
+            config["train_provider"]["seed"] = self.runspec["seed"]
+            # eval subjects must stay disjoint from the train pool (#27)
+            config["eval_provider"]["subject_prefix"] = f"eval-{run_id}"
 
         try:
             train_report = _worker(
@@ -205,10 +300,14 @@ class AutoResearchHarness:
         except (RuntimeError, OSError) as exc:
             return finish("REVERT", "crash", f"training failed: {exc}")
 
+        score_cmd = ["score", "--artifact", str(candidate_dir)]
+        if self.real_data:
+            score_cmd += [
+                "--manifest", str(self.runspec["data"]["manifest_path"]),
+                "--dataset", str(self.runspec["data"]["dataset_path"]),
+            ]
         try:
-            score = _worker(
-                ["score", "--artifact", str(candidate_dir)], timeout_s
-            )
+            score = _worker(score_cmd, timeout_s)
         except subprocess.TimeoutExpired:
             return finish("REVERT", "timeout", f"scoring exceeded {timeout_s}s budget")
         except (RuntimeError, OSError, json.JSONDecodeError) as exc:
@@ -290,7 +389,7 @@ class AutoResearchHarness:
             "mode": self.mode,
             "agent_status": self.agent_status,
             "isolation": "AGENT_ISOLATION_UNVERIFIED",
-            "smoke_only": True,
+            "smoke_only": self.smoke_only,
         }
 
 

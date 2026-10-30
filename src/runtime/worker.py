@@ -1,23 +1,37 @@
 """Isolated worker entry for the #45 harness.
 
 The harness starts this module in a separate process so training and trusted
-scoring run outside the harness/agent process boundary (a first isolation
-step; OS/container-level isolation is still AGENT_ISOLATION_UNVERIFIED until
-the real-provider smoke in #45).
+scoring run outside the harness/agent process boundary. The environment is
+sanitized to a whitelist (no host secrets/credentials are inherited), a step
+toward the OS/container isolation that remains AGENT_ISOLATION_UNVERIFIED
+until verified per #45.
 
 Usage:
   PYTHONPATH=src python -m runtime.worker train --config <config.json>
-  PYTHONPATH=src python -m runtime.worker score --artifact <dir>
+  PYTHONPATH=src python -m runtime.worker score --artifact <dir> \
+      [--manifest <real-data-manifest.json> --dataset <data.xls>]
+
+Real-data scoring (#50) evaluates against the frozen manifest's dev
+partition and fails closed when nothing is observable.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from runtime.protocols import train_candidate
+
+#: the only host environment variables a worker may inherit (#45 hard rule:
+#: no credentials, no proxy/auth material from the harness host)
+ALLOWED_ENV = ("PATH", "HOME", "LANG", "LC_ALL", "PYTHONUNBUFFERED", "TMPDIR")
+
+
+def sanitize_env(env: dict) -> dict:
+    return {k: v for k, v in env.items() if k in ALLOWED_ENV or k.startswith("PYTHON")}
 
 
 def _train(config_path: str) -> dict:
@@ -25,7 +39,40 @@ def _train(config_path: str) -> dict:
     return train_candidate(config)
 
 
-def _score(artifact_dir: str, seed: int) -> dict:
+def _score_real(artifact_dir: str, manifest_path: str, dataset_path: str) -> dict:
+    from data.mendeley import load_mendeley_scores
+
+    from .checkpoint import load_training_checkpoint
+    from .real_data import RealBatchProvider, manifest_from_path, real_eval_manifest
+    from .tcm_eval import TCMTrustedEvaluator
+
+    manifest = manifest_from_path(manifest_path)
+    model, state, metadata = load_training_checkpoint(artifact_dir)
+    if not model.model_type.startswith("tcm"):
+        raise ValueError(
+            f"trusted TCM scoring does not support model_type {model.model_type!r} (#45 TCM_ONLY)"
+        )
+    if state.get("smoke_only", True):
+        raise ValueError("refusing real-data scoring of a SMOKE_ONLY checkpoint")
+    if state.get("manifest_sha256") != manifest["manifest_sha256"]:
+        raise ValueError(
+            "checkpoint was trained on a different real-data manifest "
+            f"({state.get('manifest_sha256')}) than the scorer's ({manifest['manifest_sha256']})"
+        )
+    records = load_mendeley_scores(dataset_path)
+    provider = RealBatchProvider(manifest, records, "dev")
+    evaluator = TCMTrustedEvaluator(real_eval_manifest(manifest))
+    report = evaluator.evaluate(model, provider, partition="dev")
+    out = report.to_dict()
+    out["manifest_sha256"] = manifest["manifest_sha256"]
+    return out
+
+
+def _score(artifact_dir: str, manifest: str | None, dataset: str | None) -> dict:
+    if bool(manifest) != bool(dataset):
+        raise ValueError("--manifest and --dataset must be given together")
+    if manifest is not None:
+        return _score_real(artifact_dir, manifest, dataset)
     from runtime.batches import SyntheticBatchProvider
     from runtime.checkpoint import load_training_checkpoint
     from runtime.tcm_eval import EvalManifest, TCMTrustedEvaluator
@@ -37,10 +84,10 @@ def _score(artifact_dir: str, seed: int) -> dict:
             f"trusted TCM scoring does not support model_type {model_type!r} (#45 TCM_ONLY)"
         )
     provider = SyntheticBatchProvider(
-        "tcm", n_batches=2, batch_size=8, seed=seed,
+        "tcm", n_batches=2, batch_size=8, seed=1234,
         subject_prefix="trusted-eval-tcm",
     )
-    manifest = EvalManifest(
+    manifest_obj = EvalManifest(
         version="trusted-eval-v0",
         input_spec_version="tcm-input-v0",
         standard_version="SYNTHETIC-CONTRACT-V0",
@@ -49,7 +96,7 @@ def _score(artifact_dir: str, seed: int) -> dict:
         dev_subjects=tuple(provider.subject_ids),
         holdout_subjects=(),
     )
-    report = TCMTrustedEvaluator(manifest).evaluate(model, provider, partition="dev")
+    report = TCMTrustedEvaluator(manifest_obj).evaluate(model, provider, partition="dev")
     return report.to_dict()
 
 
@@ -63,8 +110,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("score")
     p.add_argument("--artifact", required=True)
-    p.add_argument("--seed", type=int, default=1234)
-    p.set_defaults(func=lambda a: _score(a.artifact, a.seed))
+    p.add_argument("--manifest", default=None)
+    p.add_argument("--dataset", default=None)
+    p.set_defaults(func=lambda a: _score(a.artifact, a.manifest, a.dataset))
 
     args = parser.parse_args(argv)
     print(json.dumps(args.func(args)))
@@ -72,4 +120,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    os.environ = sanitize_env(dict(os.environ))  # noqa: B003 — deliberate whitelist
     sys.exit(main())

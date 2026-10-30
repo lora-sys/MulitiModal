@@ -163,7 +163,11 @@ class Trainer:
         return report
 
     def save_checkpoint(
-        self, out_dir: str | Path, source_commit: str | None = None
+        self,
+        out_dir: str | Path,
+        source_commit: str | None = None,
+        smoke_only: bool = True,
+        extra_state: dict | None = None,
     ) -> Path:
         state = {
             "epoch": self._epochs_run,
@@ -177,7 +181,8 @@ class Trainer:
         if self.device.type == "cuda":
             state["cuda_rng_state"] = torch.cuda.get_rng_state()
         return save_training_checkpoint(
-            self.model, state, out_dir, source_commit=source_commit
+            self.model, state, out_dir, source_commit=source_commit,
+            smoke_only=smoke_only, extra_state=extra_state,
         )
 
     @classmethod

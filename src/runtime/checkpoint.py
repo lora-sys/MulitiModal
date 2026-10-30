@@ -23,6 +23,8 @@ def save_training_checkpoint(
     training_state: dict,
     out_dir: str | Path,
     source_commit: str | None = None,
+    smoke_only: bool = True,
+    extra_state: dict | None = None,
 ) -> Path:
     model_config = getattr(model, "model_config", None)
     if model_config is None:
@@ -31,7 +33,11 @@ def save_training_checkpoint(
         )
     out = save_model(model, model_config, out_dir, source_commit=source_commit)
     state = dict(training_state)
-    state["smoke_only"] = True  # no real-data training exists in this phase
+    if extra_state:
+        state.update(extra_state)
+    # explicit marker either way: the loader refuses a missing marker, so a
+    # real-data run (smoke_only=False) is visible in provenance, never silent
+    state["smoke_only"] = bool(smoke_only)
     torch.save(state, out / TRAINING_STATE_FILE)
     return out
 
@@ -48,8 +54,15 @@ def load_training_checkpoint(
         )
     model, metadata = load_model(model_dir, device=device)
     state = torch.load(model_dir / TRAINING_STATE_FILE, map_location="cpu", weights_only=False)
-    if not state.get("smoke_only", False):
-        raise ValueError("checkpoint is missing the SMOKE_ONLY marker; refusing to trust it")
+    if "smoke_only" not in state:
+        raise ValueError(
+            "checkpoint is missing the explicit smoke_only marker; refusing to trust it"
+        )
+    if not state["smoke_only"] and not state.get("manifest_sha256"):
+        raise ValueError(
+            "SMOKE_ONLY marker flipped to False without real-data manifest "
+            "provenance (manifest_sha256); refusing to trust the checkpoint"
+        )
     return model, state, metadata
 
 

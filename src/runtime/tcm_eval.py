@@ -68,7 +68,11 @@ class EvalManifest:
 
 @dataclass(frozen=True)
 class TCMReport:
-    """Immutable evaluation report; mutation attempts raise (read-only gate)."""
+    """Immutable evaluation report; mutation attempts raise (read-only gate).
+
+    subject_mae/subject_rmse are None when no label is observable
+    (fail-closed: an empty observation must never look like a perfect
+    score, #45 audit finding)."""
 
     metric_version: str
     primary_metric: str
@@ -78,8 +82,8 @@ class TCMReport:
     smoke_only: bool
     n_subjects: int
     n_labeled: int
-    subject_mae: float
-    subject_rmse: float
+    subject_mae: float | None
+    subject_rmse: float | None
     per_dim: dict = field(default_factory=dict)
     provenance: dict = field(default_factory=dict)
     not_computable: tuple = field(default_factory=tuple)
@@ -240,13 +244,25 @@ class TCMTrustedEvaluator:
         subject_mae = (
             sum(sum(v) / len(v) for v in all_abs.values()) / n_labeled
             if n_labeled
-            else 0.0
+            else None
         )
         subject_rmse = (
             (sum(sum(v) / len(v) for v in all_sq.values()) / n_labeled) ** 0.5
             if n_labeled
-            else 0.0
+            else None
         )
+        smoke_only = self.manifest.label_tier == "SMOKE_ONLY"
+        not_computable = []
+        if smoke_only:
+            not_computable.append(
+                "real-data subject-level metrics require #37/#38 labels "
+                "passing #47 QC; synthetic run reports SMOKE_ONLY numbers only"
+            )
+        if not n_labeled:
+            not_computable.append(
+                f"no observable labels in partition {partition!r}; "
+                "primary metric is NOT_COMPUTABLE (fail-closed)"
+            )
         per_dim = (
             compute_per_dim_stats(target_tensor, mask_tensor)
             if target_tensor is not None
@@ -258,7 +274,7 @@ class TCMTrustedEvaluator:
             partition=partition,
             standard_version=self.manifest.standard_version,
             label_tier=self.manifest.label_tier,
-            smoke_only=self.manifest.label_tier == "SMOKE_ONLY",
+            smoke_only=smoke_only,
             n_subjects=len(set(subject_ids)),
             n_labeled=n_labeled,
             subject_mae=subject_mae,
@@ -269,10 +285,7 @@ class TCMTrustedEvaluator:
                 "input_spec_version": self.manifest.input_spec_version,
                 "manifest_version": self.manifest.version,
             },
-            not_computable=(
-                "real-data subject-level metrics require #37/#38 labels "
-                "passing #47 QC; synthetic run reports SMOKE_ONLY numbers only",
-            ),
+            not_computable=tuple(not_computable),
         )
 
 
