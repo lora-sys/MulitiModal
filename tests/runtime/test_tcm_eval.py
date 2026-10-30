@@ -77,7 +77,8 @@ def test_subject_metrics_exclude_unlabeled_subjects():
     target = torch.tensor([[1.0]])
     mask = torch.tensor([[False]])
     stats = compute_subject_level_metrics(pred, target, mask, ["a"])
-    assert stats["n_labeled"] == 0 and stats["subject_mae"] == 0.0
+    # fail-closed: nothing observable must never look like a perfect score
+    assert stats["n_labeled"] == 0 and stats["subject_mae"] is None
 
 
 def test_per_dim_stats_count_only_valid_labels():
@@ -214,3 +215,28 @@ def test_predictor_rejects_non_tcm_or_bad_format(tmp_path, trained_artifact):
     metadata_path.write_text(json.dumps(metadata))
     with pytest.raises(ValueError, match="format_version"):
         TCMPredictor(trained_artifact)
+
+
+def test_predictor_reports_real_marker_from_training_state(tmp_path):
+    from runtime.checkpoint import save_training_checkpoint
+
+    torch.manual_seed(0)
+    model, _ = default_tcm_model(hidden_dim=8, fusion_dim=8)
+    artifact = save_training_checkpoint(
+        model,
+        {"epoch": 1, "global_step": 1, "best_epoch": None,
+         "best_eval_loss": None, "optimizer": {}, "trainer_config": {},
+         "torch_rng_state": torch.get_rng_state(),
+         "manifest_sha256": "c" * 64},
+        tmp_path / "real", smoke_only=False,
+    )
+    predictor = TCMPredictor(artifact)
+    assert predictor.smoke_only is False
+    feats = {"body_features": torch.rand(12).tolist()}
+    assert predictor.predict_single(feats)["smoke_only"] is False
+
+    state = torch.load(artifact / "training_state.pt", weights_only=False)
+    state.pop("smoke_only")
+    torch.save(state, artifact / "training_state.pt")
+    with pytest.raises(ValueError, match="smoke_only marker"):
+        TCMPredictor(artifact)

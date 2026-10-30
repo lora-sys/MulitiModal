@@ -37,6 +37,23 @@ class TCMPredictor:
                 f"unknown model_type {self.metadata['model_type']!r}"
             )
         self.spec_version = spec_version
+        self.smoke_only = self._read_smoke_marker(model_dir)
+
+    @staticmethod
+    def _read_smoke_marker(model_dir: str | Path) -> bool:
+        """Honest provenance: a training checkpoint's explicit smoke_only
+        marker travels into inference output; an inference-only artifact
+        (no training state) stays conservatively SMOKE_ONLY."""
+        state_file = Path(model_dir) / "training_state.pt"
+        if not state_file.exists():
+            return True
+        state = torch.load(state_file, map_location="cpu", weights_only=False)
+        if "smoke_only" not in state:
+            raise ValueError(
+                f"{state_file} has no explicit smoke_only marker; refusing "
+                "to report an unlabeled artifact as real-data inference"
+            )
+        return bool(state["smoke_only"])
 
     def _row_usable(self, batch: ModelBatch, i: int) -> bool:
         for name in self.model.input_spec.names():
@@ -94,7 +111,7 @@ class TCMPredictor:
             "status": "OK",
             "input_spec_version": self.spec_version,
             "model_type": self.metadata["model_type"],
-            "smoke_only": True,
+            "smoke_only": self.smoke_only,
             "category_probs": probs_per_row,
         }
 
@@ -104,6 +121,6 @@ class TCMPredictor:
             "status": "ABSTAIN",
             "input_spec_version": self.spec_version,
             "model_type": self.metadata["model_type"],
-            "smoke_only": True,
+            "smoke_only": self.smoke_only,
             "category_probs": None,
         }

@@ -137,8 +137,10 @@ def compute_subject_level_metrics(
         )
     n_labeled = len(subject_abs)
     if n_labeled == 0:
+        # fail-closed: an empty observation must never look like a perfect
+        # score (same semantics as TCMTrustedEvaluator, #45 audit finding)
         return {"n_subjects": len(set(subject_ids)), "n_labeled": 0,
-                "subject_mae": 0.0, "subject_rmse": 0.0}
+                "subject_mae": None, "subject_rmse": None}
     mae = sum(subject_abs.values()) / n_labeled
     rmse = (sum(subject_sq.values()) / n_labeled) ** 0.5
     return {
