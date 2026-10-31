@@ -6,8 +6,9 @@ load. Honest scope of this guarantee (review round-5 R-01/R-02):
 
 - Leading entries written before the chain existed pass through unverified;
   an UNCHAINED line after any chained entry is rejected (forgery/insertion).
-- append() refuses entries that already carry a hash and heals a torn
-  (newline-less) trailing line, so it cannot self-poison the store.
+- append() refuses entries that already carry a hash and repairs an
+  interrupted (newline-less or truncated) trailing line before loading, so
+  a killed append cannot wedge the store.
 - Deleting the last entry, or rewriting the file with a RECOMPUTED chain,
   is undetectable: the hash is unkeyed and the store lives in the same
   agent-writable out_dir as the artifacts. This is tamper-EVIDENCE against
@@ -85,25 +86,37 @@ class RunManifestStore:
                 "append() chains entries itself; refusing an entry that "
                 "already carries entry_sha256"
             )
-        tail = self.load()
+        tail = self._heal_torn_tail()
         previous = tail[-1] if tail else None
         entry["prev_entry_sha256"] = (
             previous["entry_sha256"]
             if previous and "entry_sha256" in previous else ""
         )
         entry["entry_sha256"] = _entry_digest(entry)
-        # heal a torn write (process killed mid-append leaves the file
-        # without a trailing newline; chaining on would concatenate two
-        # JSON objects into one unparsable line, review round-6)
-        torn = (
-            self.path.exists()
-            and self.path.stat().st_size > 0
-            and self.path.read_bytes()[-1:] != b"\n"
-        )
         with self.path.open("a") as fh:
-            if torn:
-                fh.write("\n")
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def _heal_torn_tail(self) -> list[dict]:
+        """Load the store, first repairing an interrupted append: a completed
+        append always ends with a newline, so a file that does not has a torn
+        trailing line from a killed process. If that line is valid JSON it is
+        only missing its newline (newline-terminate it); if it is truncated
+        mid-object it never became a recorded entry and is dropped. Without
+        this, load() would raise JSONDecodeError on the torn line and wedge
+        append permanently (review round-6/round-7)."""
+        if not (self.path.exists() and self.path.stat().st_size > 0):
+            return self.load()
+        if self.path.read_bytes()[-1:] == b"\n":
+            return self.load()
+        text = self.path.read_text()
+        lines = text.splitlines()
+        try:
+            json.loads(lines[-1])
+        except json.JSONDecodeError:
+            self.path.write_text("".join(line + "\n" for line in lines[:-1]))
+        else:
+            self.path.write_text(text + "\n")
+        return self.load()
 
     def champion(self) -> dict | None:
         """Artifact dir + best metric of the last KEEP entry, or None."""

@@ -193,7 +193,10 @@ def _artifact_sha256(artifact_dir: str | Path) -> str:
 
 def _primary_value(score: dict) -> float | None:
     value = score.get("primary_value")
-    if value is None or isinstance(value, str):
+    if value is None or isinstance(value, str) \
+            or not isinstance(value, (int, float)):
+        # a malformed report type routes to score_failed instead of raising
+        # TypeError past every guard (review round-7 R-01)
         return None
     value = float(value)
     return None if math.isnan(value) else value
@@ -430,6 +433,7 @@ class AutoResearchHarness:
             context = self.research_context()
             if context["round_index"] >= max_candidates:
                 break  # budget already consumed by a previous run (resume)
+            round_started = time.monotonic()
             try:
                 proposal = self.provider.propose(
                     context["round_index"], context
@@ -448,6 +452,7 @@ class AutoResearchHarness:
                     "decision": "REVERT", "status": "agent_error",
                     "reason": f"agent proposal failed: "
                               f"{type(exc).__name__}: {exc}",
+                    "elapsed_s": round(time.monotonic() - round_started, 2),
                     "best_so_far": None,
                 }
                 self.store.append(failed)

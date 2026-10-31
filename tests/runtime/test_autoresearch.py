@@ -403,6 +403,51 @@ def test_manifest_chain_round6_hardening(tmp_path):
         store.load()
 
 
+def test_round7_primary_value_type_guard():
+    # a malformed report type routes to score_failed instead of raising
+    # TypeError past every guard (round-7 R-01)
+    from runtime.harness import _primary_value
+
+    assert _primary_value({"primary_value": ["x"]}) is None
+    assert _primary_value({"primary_value": {"v": 1}}) is None
+    assert _primary_value({"primary_value": "0.3"}) is None
+    assert _primary_value({"primary_value": 0.3}) == 0.3
+    assert _primary_value({"primary_value": float("nan")}) is None
+
+
+def test_agent_error_entry_carries_elapsed_s(tmp_path):
+    # key-shape parity with finish()-built entries (round-7 R-02)
+    class Broken:
+        def propose(self, round_index, context):
+            raise ValueError("boom")
+
+    harness(tmp_path, Broken(), rounds=1).run()
+    entry = RunManifestStore(tmp_path / "ar" / "manifest.jsonl").load()[0]
+    assert isinstance(entry["elapsed_s"], float)
+
+
+def test_append_heals_truncated_torn_line(tmp_path):
+    # a killed append can truncate the JSON mid-object; the next append must
+    # drop that never-completed line instead of wedging on JSONDecodeError
+    # (round-7 R-03)
+    store = RunManifestStore(tmp_path / "m.jsonl")
+    store.append({"run_id": "tcm-0000", "decision": "KEEP", "status": "done"})
+    path = tmp_path / "m.jsonl"
+    path.write_text(path.read_text() + '{"run_id": "tcm-0001", "dec')  # torn
+    store.append({"run_id": "tcm-0002", "decision": "REVERT", "status": "done"})
+    entries = store.load()
+    assert [e["run_id"] for e in entries] == ["tcm-0000", "tcm-0002"]
+
+    # a torn line that parses fine only needed its newline
+    store.append({"run_id": "tcm-0003", "decision": "KEEP", "status": "done"})
+    path.write_text(path.read_text().rstrip("\n"))
+    store.append({"run_id": "tcm-0004", "decision": "REVERT", "status": "done"})
+    entries = store.load()
+    assert [e["run_id"] for e in entries] == [
+        "tcm-0000", "tcm-0002", "tcm-0003", "tcm-0004",
+    ]
+
+
 def test_resume_continues_plan_without_replay(tmp_path):
     plan = [
         ("baseline", {}),

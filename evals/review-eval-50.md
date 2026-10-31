@@ -97,3 +97,13 @@ Round-6 delegate 在产出最终报告前再次被 turn-limit 截断；以下发
 | E52 | round-6 分析 | 只有 `entry_sha256` 没有 `prev_entry_sha256` 的行抛 KeyError，与"完整性失败 = RuntimeError"的契约不一致 | `_verify_chain` 改用 `entry.get(...)`，统一 RuntimeError（"prev_entry_sha256 mismatch"） | pytest 同上 |
 
 Round-6 结论：三条均为 manifest 健壮性加固（fail-closed 语义下的一致性与可恢复性），不涉及训练数值路径，#50 数字与 provenance 不受影响；审查循环至此连续一轮无高严重度缺陷，round-4/5 的 impactful findings 均已关闭并冻结进 eval。
+
+## 第七轮审查（收口确认轮，范围收紧到 manifest.py + harness.py → E53–E55）
+
+| 编号 | 来源 | 发现 | 冻结修复 | 验证 |
+| --- | --- | --- | --- | --- |
+| E53 | round-7 R-01 | `_primary_value` 只防 None/str，list/dict 类型的 `primary_value` 抛 TypeError 且不在任何捕获列表——循环死在 scoring 与 append 之间、无 manifest 记录 | 类型守卫改为非 (int, float) 一律返回 None → 走既有 `score_failed` REVERT 路径 | pytest `test_round7_primary_value_type_guard` |
+| E54 | round-7 R-02 | agent_error 条目缺 `elapsed_s`（与 finish() 条目唯一的键形不对称） | propose 前打时间戳，条目补 `elapsed_s` | pytest `test_agent_error_entry_carries_elapsed_s` |
+| E55 | round-7 R-03 | 撕裂写若截断 JSON 至对象中途，`load()` 的 JSONDecodeError 先于补换行执行 → append 永久卡死（fail-closed 但需手工修） | 撕裂尾行处理提前到 load 之前：可解析只补换行；截断行从未成为完整记录、直接丢弃 | pytest `test_append_heals_truncated_torn_line` |
+
+Round-7 结论：1 条 medium（E53）+ 2 条 low，均为记录健壮性，不触及训练数值路径；审查报告在 R-04 处被 turn-limit 截断，已请原线程补发 R-04 与 VERDICT。round-4 起的全部 impactful findings（R-01 链伪造、R-03 fail-open、R-01(round-5) 等）至此全部关闭并冻结进 eval。
