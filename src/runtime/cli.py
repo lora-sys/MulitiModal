@@ -211,6 +211,20 @@ def cmd_research_step(args: argparse.Namespace) -> int:
         if args.context_file:
             seen = json.loads(Path(args.context_file).read_text())
             provenance["context_sha256"] = context_digest(seen)
+            # The digest alone cannot separate "the agent read this state, then
+            # proposed" from "a batch of proposals was written earlier and the
+            # context file was generated at apply time to satisfy the check".
+            # File mtimes can: a proposal older than the context it is paired
+            # with was composed before that state existed. This is the same
+            # evidence grade as the manifest hash chain (catches the lazy and
+            # the accidental, not a determined forger), so it is recorded as a
+            # fact for a reader to weigh rather than silently assumed.
+            ctx_path = Path(args.context_file)
+            prop_path = Path(args.proposal_file)
+            if ctx_path.exists() and prop_path.exists():
+                provenance["proposal_predates_context"] = (
+                    prop_path.stat().st_mtime < ctx_path.stat().st_mtime
+                )
         if args.proposal_raw:
             raw = Path(args.proposal_raw).read_bytes()
             provenance["proposal_raw_sha256"] = hashlib.sha256(raw).hexdigest()

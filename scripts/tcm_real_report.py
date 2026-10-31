@@ -604,6 +604,59 @@ def _fmt(value: float | None, digits: int = 3) -> str:
     return f"{value:.{digits}f}" if value is not None else "N/A"
 
 
+def check_proposal_ordering(runs_dir: Path) -> dict:
+    """Did each proposal exist before the research state it claims to rest on?
+
+    The manifest records `context_sha256` (the state at apply time) and
+    `proposal_sha256`, which together cannot distinguish "the agent read the
+    state, then proposed" from "a batch of proposals was written earlier and
+    the context file was generated at apply time to pass the digest check".
+    The drivers leave both files in the run directory, so their mtimes
+    separate the two cases mechanically — including for runs recorded before
+    the harness started flagging it.
+
+    Returns counts plus the rounds concerned. Empty when the run directory
+    keeps no proposal/context files (agent-driven runs through `step()` do,
+    a scripted `research` run does not).
+    """
+    pairs: list[tuple[str, bool]] = []
+    if not runs_dir.is_dir():
+        return {"pairs": 0, "proposal_predates_context": 0, "rounds": []}
+    for ctx in sorted(runs_dir.glob("ctx-[0-9][0-9][0-9][0-9].json")):
+        n = ctx.stem.split("-", 1)[1]
+        prop = runs_dir / f"p-{n}.json"
+        if not prop.exists():
+            continue
+        pairs.append(
+            (f"tcm-{n}", prop.stat().st_mtime < ctx.stat().st_mtime)
+        )
+    flagged = [run_id for run_id, predates in pairs if predates]
+    return {
+        "pairs": len(pairs),
+        "proposal_predates_context": len(flagged),
+        "rounds": flagged,
+    }
+
+
+def _ordering_line(ar: dict) -> str:
+    """Report what the proposal/context mtime check found, or nothing."""
+    ordering = ar.get("proposal_ordering") or {}
+    pairs = ordering.get("pairs") or 0
+    if not pairs:
+        return ""
+    predates = ordering.get("proposal_predates_context") or 0
+    if not predates:
+        return (f" 提案/上下文文件时间戳自检：{pairs} 对均正常，"
+                "无提案早于其所依据的研究状态。")
+    rounds = "、".join(ordering.get("rounds") or []) or "—"
+    return (
+        f" **提案/上下文文件时间戳自检：{predates}/{pairs} 轮的提案文件早于其所配的"
+        f"上下文文件**（{rounds}）——这些轮的 digest 只证明「应用时刻的研究状态与所声称的"
+        "一致」，不证明提案者事先读过该状态（批量预写提案的必然结果）。后续轮次须逐轮"
+        "读取上下文后再提案。"
+    )
+
+
 def agent_status_line(ar: dict) -> str:
     """Provenance line derived from the run entries, never hardcoded."""
     rounds = ar.get("per_round", [])
@@ -864,7 +917,8 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "- 溯源强度：`proposer` / `context_sha256` / `proposal_sha256` 由驱动方"
         "（操作者）写入，属于**自报归属**——它证明「提交的提案与它声称依据的研究状态」"
         "一致」，不证明「该 agent 真的读取了上下文」或「该 agent 真的生成了它」。"
-        "要升级为可证明的 agent 驱动，需要 provider 端 request/response id 或签名。",
+        + _ordering_line(ar)
+        + "要升级为可证明的 agent 驱动，需要 provider 端 request/response id 或签名。",
         "- 类别支持不均衡（见 chart-support.png）；结果仅代表研究口径，不可临床使用。",
     ]
     (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1035,6 +1089,7 @@ def main(argv=None) -> int:
         },
         "availability": availability_rates(manifest, records),
         "autoresearch": {
+            "proposal_ordering": check_proposal_ordering(Path(args.runs_dir)),
             "selection": {
                 "folds": sorted({
                     (e.get("selection") or {}).get("folds", 1) for e in entries

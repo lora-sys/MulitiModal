@@ -286,6 +286,8 @@ def e15_report_tolerates_none():
         "label_version": "l", "standard_version": "s",
         "split_sizes": {"train": 1, "dev": 1, "holdout": 1},
         "autoresearch": {
+            "proposal_ordering": {"pairs": 0, "proposal_predates_context": 0,
+                                  "rounds": []},
             "rounds_completed": 0,
             "champion": {"run_id": "r", "artifact_dir": "d",
                          "artifact_sha256": None, "best_so_far": None},
@@ -1560,6 +1562,70 @@ def main(argv=None) -> int:
     total = len(CHECKS) + bool(args.summary or args.report)
     print(f"\n{total - len(failures)}/{total} checks passed")
     return 1 if failures else 0
+
+
+@check
+def e75_proposal_ordering_is_checked_mechanically():
+    # The manifest's context_sha256 certifies the research state at APPLY
+    # time. A driver that wrote a batch of proposals earlier and generated
+    # the context file afterwards satisfies that digest while never having
+    # read the state — the v8 run did exactly this in 22 of 24 rounds. The
+    # two files' mtimes separate the cases, so the report must derive the
+    # count from the run directory instead of asserting provenance in prose.
+    import os
+    import time
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from tcm_real_report import check_proposal_ordering
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        assert check_proposal_ordering(tmp / "missing") == {
+            "pairs": 0, "proposal_predates_context": 0, "rounds": []
+        }
+        # read-then-propose: proposal written after the context it is based on
+        (tmp / "ctx-0000.json").write_text("{}")
+        time.sleep(0.01)
+        (tmp / "p-0000.json").write_text("{}")
+        # pre-declared batch: proposal written long before the context file
+        (tmp / "p-0001.json").write_text("{}")
+        time.sleep(0.01)
+        (tmp / "ctx-0001.json").write_text("{}")
+        # a round with no proposal file is not counted either way
+        (tmp / "ctx-0002.json").write_text("{}")
+        os.utime(tmp / "ctx-0000.json", (1, 1))
+        os.utime(tmp / "p-0000.json", (1e9, 1e9))
+
+        result = check_proposal_ordering(tmp)
+        assert result["pairs"] == 2, result
+        assert result["proposal_predates_context"] == 1, result
+        assert result["rounds"] == ["tcm-0001"], result
+
+
+@check
+def e76_every_defined_check_actually_runs():
+    # A @check block appended AFTER the __main__ guard registers on import
+    # but never during a script run, because main() has already executed.
+    # e75 shipped that way and the "47/47 passed" summary hid it: the total
+    # was counted from CHECKS, which was still one short. Compare the number
+    # of decorated definitions in the source against the registry instead.
+    import inspect
+    import re
+
+    source = Path(__file__).read_text()
+    defined = len(re.findall(r"^@check\n", source, flags=re.MULTILINE))
+    guard_at = source.index('if __name__ == "__main__":')
+    after_guard = len(re.findall(r"^@check\n", source[guard_at:], flags=re.MULTILINE))
+    assert after_guard == 0, (
+        f"{after_guard} @check blocks sit after the __main__ guard; "
+        "they never run when the file is executed"
+    )
+    assert defined == len(CHECKS), (
+        f"source defines {defined} checks but the registry holds {len(CHECKS)}"
+    )
+    # and the runner must report the registry size, not a hand-maintained count
+    main_source = inspect.getsource(main)
+    assert "len(CHECKS)" in main_source, main_source
 
 
 if __name__ == "__main__":
