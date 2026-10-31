@@ -323,12 +323,19 @@ def chart_rounds(entries: list[dict], out: Path) -> None:
     best = min(ys)
     ax.axhline(best, color="#264653", linestyle="--", linewidth=1,
                label=f"best {best:.4f}")
+    # the two fill colours carry the decision; without a key the reader cannot
+    # tell a kept round from a rolled-back one
+    from matplotlib.patches import Patch
+
+    handles, labels = ax.get_legend_handles_labels()
+    handles += [Patch(color=KEEP_COLOR), Patch(color=REVERT_COLOR)]
+    labels += ["KEEP (new champion)", "REVERT (rolled back)"]
     ax.set_xticks(xs)
     ax.set_xticklabels([e["run_id"] for e in rounds], fontsize=8)
     ax.set_xlabel("AutoResearch round")
     ax.set_ylabel("dev subject MAE\n(lower is better)")
     ax.set_title("AutoResearch rounds — primary metric")
-    ax.legend()
+    ax.legend(handles, labels, fontsize=8)
     for x, y in zip(xs, ys, strict=True):
         ax.text(x, y, f"{y:.4f}", ha="center", va="bottom", fontsize=8)
     fig.tight_layout()
@@ -411,13 +418,47 @@ def chart_regression(regression: dict, out: Path) -> None:
         ax.set_xticklabels(dims, rotation=30, ha="right", fontsize=9)
         ax.set_ylabel(f"{partition} MAE (0-100 score points)")
         ax.set_title(
-            "8-score PUBLISHED regression — per-dimension MAE vs train-mean "
-            "predictor (balanced dim unobserved, not shown)"
+            f"8-score PUBLISHED regression — {partition} per-dimension MAE\n"
+            "neural model vs train-mean predictor (balanced dim unobserved)"
         )
         ax.legend()
         fig.tight_layout()
         fig.savefig(out / fname, dpi=150)
         plt.close(fig)
+
+
+def _regression_verdict(regression: dict) -> str:
+    """State the outcome of the 8-score regression against its own reference,
+    rather than leaving the reader to diff two bar series (#audit: the report
+    said 'see summary.json' while the model lost to the mean predictor on
+    every holdout dimension)."""
+    dims = [d for d in CANONICAL_DIMS if d != "balanced"]
+    parts: list[str] = []
+    for partition in ("dev", "holdout"):
+        per_dim = regression["per_dim"].get(partition, {})
+        wins = 0
+        compared = 0
+        for dim in dims:
+            entry = per_dim.get(dim) or {}
+            model_mae, ref_mae = entry.get("mae"), entry.get("mean_predictor_mae")
+            if model_mae is None or ref_mae is None:
+                continue
+            compared += 1
+            wins += model_mae < ref_mae
+        if not compared:
+            continue
+        verdict = (
+            "未优于训练均值预测器" if wins == 0
+            else f"在 {wins}/{compared} 维优于训练均值预测器"
+        )
+        parts.append(f"{partition} {verdict}")
+    if not parts:
+        return ""
+    return (
+        "逐维对比结果：" + "；".join(parts)
+        + "。回归头与分类头共享训练、每维样本量更小，当前证据不支持把它当作"
+        "评分预测已成立的证据。"
+    )
 
 
 def _fmt(value: float | None, digits: int = 3) -> str:
@@ -426,16 +467,23 @@ def _fmt(value: float | None, digits: int = 3) -> str:
 
 def agent_status_line(ar: dict) -> str:
     """Provenance line derived from the run entries, never hardcoded."""
-    statuses = {
-        e.get("agent_status") for e in ar.get("per_round", [])
-        if e.get("agent_status")
-    }
-    if "AGENT_ISOLATION_UNVERIFIED" in statuses:
-        provider = "外部 LLM agent（patch-only，白名单校验后由 harness 执行）"
+    rounds = ar.get("per_round", [])
+    statuses = {e.get("agent_status") for e in rounds if e.get("agent_status")}
+    proposers = sorted({e["proposer"] for e in rounds if e.get("proposer")})
+    if proposers:
+        provider = "外部 LLM agent " + "、".join(f"`{p}`" for p in proposers)
+        agent_note = (
+            f"每轮记录提案者与上下文摘要（{sum(1 for e in rounds if e.get('proposer'))}"
+            f"/{len(rounds)} 轮带完整溯源）"
+        )
+    elif "AGENT_ISOLATION_UNVERIFIED" in statuses:
+        provider = "外部 agent（提案者未记录，provenance 不完整）"
+        agent_note = "manifest 未记录 proposer/context 摘要"
     else:
         provider = "确定性计划"
+        agent_note = "无外部 agent"
     return (
-        f"- 训练模式：REAL_DATA_TRAINING（agent provider={provider}；"
+        f"- 训练模式：REAL_DATA_TRAINING（agent provider={provider}；{agent_note}；"
         "agent 状态 AGENT_ISOLATION_UNVERIFIED：OS/container 级隔离仍未验证）。"
     )
 
@@ -488,13 +536,16 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"`{(ar['champion']['artifact_sha256'] or '')[:16]}…`）。",
         "所有候选使用相同冻结种子与批次顺序（epoch 级确定性 shuffle），仅可编辑超参不同。",
         "",
-        "| 轮 | 意图 | 决定 | dev MAE |",
-        "| --- | --- | --- | --- |",
+        "| 轮 | 意图 | 提案者 | 决定 | dev MAE |",
+        "| --- | --- | --- | --- | --- |",
     ]
     for e in ar["per_round"]:
         value = e.get("primary_value")
         cell = f"{value:.4f}" if value is not None else "—"
-        lines.append(f"| {e['run_id']} | {e['intent']} | {e['decision']} | {cell} |")
+        lines.append(
+            f"| {e['run_id']} | {e['intent']} | {e.get('proposer') or '—'} "
+            f"| {e['decision']} | {cell} |"
+        )
     lines += [
         "",
         "## 最终评估（holdout 在研究结束后解锁；历次解锁见「证据状态与限制」，"
@@ -543,7 +594,8 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"- **8-score PUBLISHED 回归**（独立 manifest，固定配置）：逐维 MAE 与"
         f"训练均值预测器参照见 `summary.json`（regression_task）；"
         f"manifest `{regression['manifest_sha256'][:16]}…`。"
-        "该任务包含 QC 异常行、未做敏感性对照，属已知限制。",
+        "该任务包含 QC 异常行、未做敏感性对照，属已知限制。"
+        + _regression_verdict(regression),
         f"- **row-QC 敏感性**（同一冻结划分剔除 {qc['excluded_subject_rows']} 后重训练，"
         f"冠军同配置）：剔除后模型的 dev subject MAE "
         f"{_fmt(qc.get('dev_subject_mae_without'), 4)} vs 含 QC 行训练的冠军在同一"
@@ -642,7 +694,9 @@ def main(argv=None) -> int:
 
     per_round = [
         {**{k: e.get(k) for k in ("run_id", "intent", "decision", "status",
-                                  "artifact_sha256", "agent_status")},
+                                  "artifact_sha256", "agent_status",
+                                  "proposer", "context_sha256",
+                                  "proposal_sha256", "proposal_raw_sha256")},
          "primary_value": (e.get("metrics") or {}).get("primary_value")}
         for e in entries
     ]
