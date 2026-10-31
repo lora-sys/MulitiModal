@@ -312,6 +312,61 @@ def cmd_research_finalize(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_src_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--out", default="runs/research-src")
+    p.add_argument("--data-manifest", required=True)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--folds", type=int, default=4)
+    p.add_argument("--repeats", type=int, default=2)
+    p.add_argument("--margin-sem", type=float, default=1.0)
+    p.add_argument("--seed", type=int, default=0)
+
+
+def cmd_research_src_state(args: argparse.Namespace) -> int:
+    """Print the state a source-level proposer needs (no holdout, no evaluator)."""
+    from research.loop import GitWorktree, SourceResearchLoop
+
+    loop = _src_loop(args, GitWorktree(Path(args.worktree), args.branch))
+    print(json.dumps(loop.state(), indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_research_src_round(args: argparse.Namespace) -> int:
+    """Apply ONE source patch through the full loop and report the decision."""
+    from research.loop import GitWorktree, SourceResearchLoop
+
+    worktree = GitWorktree(Path(args.worktree), args.branch)
+    loop = _src_loop(args, worktree)
+    patch = Path(args.patch_file).read_text(encoding="utf-8")
+    entry = loop.run_round(
+        patch, args.intent, proposer=args.proposer,
+        proposal_mtime=Path(args.patch_file).stat().st_mtime,
+    )
+    print(json.dumps(entry, indent=2, ensure_ascii=False))
+    return 0 if entry["decision"] == "KEEP" else 1
+
+
+def cmd_research_src_run(args: argparse.Namespace) -> int:
+    """Run a list of pre-supplied patches (JSON: [{"patch","intent"}, ...])."""
+    from research.loop import GitWorktree, SourceResearchLoop
+
+    loop = _src_loop(args, GitWorktree(Path(args.worktree), args.branch))
+    proposals = json.loads(Path(args.proposals).read_text())
+    print(json.dumps(loop.run(proposals), indent=2, ensure_ascii=False))
+    return 0
+
+
+def _src_loop(args: argparse.Namespace, worktree):
+    from research.loop import SourceResearchLoop
+
+    return SourceResearchLoop(
+        worktree=worktree, out_dir=args.out,
+        manifest_path=args.data_manifest, dataset_path=args.dataset,
+        folds=args.folds, repeats=args.repeats,
+        margin_sem=args.margin_sem, seed=args.seed,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="runtime.cli", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -397,6 +452,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--timeout", type=float, default=1800.0)
     p.set_defaults(func=cmd_research_finalize)
+
+    p = sub.add_parser("research-src-state",
+                       help="source-level loop: print the proposer's state")
+    _add_src_args(p)
+    p.add_argument("--worktree", required=True)
+    p.add_argument("--branch", default="autoresearch/main")
+    p.set_defaults(func=cmd_research_src_state)
+
+    p = sub.add_parser("research-src-round",
+                       help="source-level loop: apply ONE source patch")
+    _add_src_args(p)
+    p.add_argument("--worktree", required=True)
+    p.add_argument("--branch", default="autoresearch/main")
+    p.add_argument("--patch-file", required=True)
+    p.add_argument("--intent", default="")
+    p.add_argument("--proposer", default=None)
+    p.set_defaults(func=cmd_research_src_round)
+
+    p = sub.add_parser("research-src-run",
+                       help="source-level loop: run a list of patches")
+    _add_src_args(p)
+    p.add_argument("--worktree", required=True)
+    p.add_argument("--branch", default="autoresearch/main")
+    p.add_argument("--proposals", required=True)
+    p.set_defaults(func=cmd_research_src_run)
 
     p = sub.add_parser("research-report")
     p.add_argument("--out", default="runs/autoresearch")
