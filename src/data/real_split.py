@@ -227,7 +227,10 @@ def exclude_subjects_from_manifest(
         data["split"][partition] = [
             s for s in data["split"][partition] if s not in dropped
         ]
-        if not data["split"][partition]:
+        # a partition that was already empty (the selection-pool manifest has
+        # no dev rows) is not "emptied" by the exclusion; one that loses its
+        # last subject is
+        if not data["split"][partition] and manifest["split"][partition]:
             raise ValueError(f"excluding {sorted(dropped)} empties {partition!r}")
     data["subject_row_by_id"] = {
         k: v for k, v in data["subject_row_by_id"].items() if k not in dropped

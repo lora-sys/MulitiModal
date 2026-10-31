@@ -150,6 +150,13 @@ class RealBatchProvider:
                 )
             self.subject_ids = tuple(subject_ids)
         self.records_by_row = {r.subject_index: r for r in records}
+        if not self.subject_ids:
+            # an empty partition is not an empty iterator: target_key is set
+            # per row, so the tensor build below would fail with an
+            # UnboundLocalError far from the actual cause
+            raise ValueError(
+                f"partition {partition!r} has no subjects; refusing to build a provider"
+            )
         missing = [s for s in self.subject_ids
                    if manifest["subject_row_by_id"][s] not in self.records_by_row]
         if missing:

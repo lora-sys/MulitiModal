@@ -185,7 +185,10 @@ def _fixed_training(
     trainer = Trainer(model, config)
     trainer.fit(
         RealBatchProvider(manifest, records, "train", batch_size=train_batch_size),
-        RealBatchProvider(manifest, records, "dev", batch_size=64),
+        # a pool manifest has no dev rows; passing an empty provider would be
+        # both meaningless and (before the guard) an obscure crash
+        RealBatchProvider(manifest, records, "dev", batch_size=64)
+        if manifest["split"]["dev"] else None,
     )
     trainer.save_checkpoint(
         out_dir, smoke_only=False,
@@ -259,19 +262,23 @@ def row_qc_sensitivity(
     manifest, records, out_dir: Path, champion_cfg: dict, champion_trainer: dict,
     champion_model=None, seed: int = 0, train_batch_size: int = 32,
 ) -> dict:
-    """Retrain with the SAME frozen split minus fingerprint-anomalous
-    subjects (exclude_subjects_from_manifest, never a fresh shuffle).
-    The contrast shares one denominator (40 vs 41 subjects would not be
-    comparable), and each model is evaluated under its OWN manifest: the
-    champion keeps its training-time scaler/spec (a checkpoint's input
-    contract is bound to the manifest it was trained on), the QC model uses
-    the QC manifest's refit scaler — both over the same reduced dev subjects."""
+    """Retrain without fingerprint-anomalous subjects and compare on the SAME
+    holdout (exclude_subjects_from_manifest, never a fresh shuffle).
+
+    Both sides of the contrast are fitted on the selection pool (the manifest
+    passed in) and scored on the untouched holdout: one denominator, one
+    scoring partition, and each model under its OWN manifest — the champion
+    keeps the scaler it was trained with (a checkpoint's input contract is
+    bound to its training manifest), the QC model uses the QC manifest's
+    refit scaler. The dev partition is empty in a pool manifest, so a dev
+    contrast would have no subjects to average over.
+    """
     from runtime.real_data import real_eval_manifest
 
     qc_rows = qc_rows_from_records(records)
     manifest_qc = exclude_subjects_from_manifest(
         manifest, records, qc_rows,
-        notes="row-QC sensitivity: frozen split minus fingerprint-anomalous subjects",
+        notes="row-QC sensitivity: selection pool minus fingerprint-anomalous subjects",
     ).data
     trainer_kwargs = {
         k: champion_trainer[k] for k in ("learning_rate", "grad_clip")
@@ -282,33 +289,55 @@ def row_qc_sensitivity(
         out_dir / "qc-exclude", trainer_kwargs, seed=seed,
         train_batch_size=train_batch_size,
     )
-    reduced_dev = tuple(manifest_qc["split"]["dev"])
-    champion_reduced = None
+    holdout = tuple(manifest_qc["split"]["holdout"])
+    champion_without = None
     if champion_model is not None:
         provider = RealBatchProvider(
-            manifest, records, "dev", subject_ids=reduced_dev
+            manifest, records, "holdout", subject_ids=holdout
         )
-        champion_reduced = TCMTrustedEvaluator(real_eval_manifest(manifest)).evaluate(
-            champion_model, provider, partition="dev"
+        champion_without = TCMTrustedEvaluator(real_eval_manifest(manifest)).evaluate(
+            champion_model, provider, partition="holdout"
         ).subject_mae
     return {
         "manifest_sha256": manifest_qc["manifest_sha256"],
         "excluded_subject_rows": list(qc_rows),
-        "dev_subject_mae_without": dev_primary(model_qc, manifest_qc, records),
-        "dev_subject_mae_champion_on_reduced": champion_reduced,
+        "fit_rows_without": len(manifest_qc["split"]["train"]),
+        "holdout_subject_mae_without": holdout_primary(model_qc, manifest_qc, records),
+        "holdout_subject_mae_champion_on_reduced": champion_without,
     }
+
+
+def holdout_primary(model, manifest, records) -> float | None:
+    """Subject MAE on the holdout partition (the only partition a model
+    refit on the selection pool is allowed to be scored on)."""
+    evaluator = TCMTrustedEvaluator(real_eval_manifest(manifest))
+    provider = RealBatchProvider(manifest, records, "holdout")
+    return evaluator.evaluate(model, provider, partition="holdout").subject_mae
 
 
 def deployable_ablation(
     manifest, records, out_dir: Path, champion_cfg: dict, champion_trainer: dict,
     seed: int = 0, train_batch_size: int = 32,
 ) -> dict:
-    """Body/Vitals-only training on the same split with the champion's
-    training configuration, isolating the feature-set effect."""
-    manifest_dep = derived_manifest(
-        manifest, records, modality_set="deployable",
-        notes="deployable Body/Vitals-only ablation (no exam hardware needed)",
-    )
+    """Body/Vitals-only training with the champion's configuration, isolating
+    the feature-set effect.
+
+    The ablation is fitted on the same SELECTION POOL (train+dev) as the
+    deliverable: an ablation fitted on the frozen train fold alone would
+    differ in training rows as well as in features, and could not be read as
+    "only the feature set changed". Its dev partition is empty by
+    construction, so it is scored on the holdout like the deliverable.
+    """
+    from data.real_split import pool_manifest
+
+    manifest_dep = pool_manifest(
+        derived_manifest(
+            manifest, records, modality_set="deployable",
+            notes="deployable Body/Vitals-only ablation (no exam hardware needed)",
+        ),
+        records,
+        notes="deployable ablation fitted on the AutoResearch selection pool",
+    ).data
     trainer_kwargs = {
         k: champion_trainer[k] for k in ("learning_rate", "grad_clip")
         if champion_trainer.get(k) is not None
@@ -320,7 +349,8 @@ def deployable_ablation(
     )
     return {
         "manifest_sha256": manifest_dep["manifest_sha256"],
-        "dev_subject_mae": dev_primary(model_dep, manifest_dep, records),
+        "fit_rows": len(manifest_dep["split"]["train"]),
+        "holdout_subject_mae": holdout_primary(model_dep, manifest_dep, records),
         "f1": evaluate_neural(model_dep, manifest_dep, records),
     }
 
@@ -573,9 +603,47 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
             "KEEP 需超过冠军一个由折间 std 派生的余量，避免把噪声当改进"
         )
     dev_label = (
-        f"dev（{split_sizes['dev']} 人；**已被最终模型拟合，属样本内**，仅作诊断）"
+        f"dev（{split_sizes['dev']} 人）**已并入选择池、不再单独评分**"
         if in_sample_dev else f"dev（{split_sizes['dev']} 人；样本外）"
     )
+    # with a pool refit the trusted evaluator forbids a dev score (dev ⊆ train),
+    # so the deliverable has exactly one honest partition: the holdout
+    scope_line = (
+        f"评分口径：交付模型在选择池（{_fmt(deliverable['refit_rows'], 0)} 行）上重训，"
+        f"dev {split_sizes['dev']} 人已并入该池，受信评估器禁止 train/dev 重叠，"
+        f"因此**只在 holdout {split_sizes['holdout']} 人上评分**；下方所有对照"
+        "（Dummy / BMI / 全特征逻辑回归）都在同一池上拟合、同一 holdout 上评分，"
+        "不靠少给基线 41 行来抬高神经模型的数字。"
+        if in_sample_dev else
+        f"评分口径：交付模型在冻结 train 折上训练，dev {split_sizes['dev']} 人"
+        f"为样本外、holdout {split_sizes['holdout']} 人一次解锁。"
+    )
+    if in_sample_dev:
+        neural_lines = [
+            f"- 神经冠军 holdout macro-F1 {_fmt(neural['holdout']['macro_f1'])}"
+            f"（macro 对全部可观测维度平均，未定义 F1 计 0，分母不随模型漂移；"
+            f"未定义维度 {neural['holdout']['n_undefined_f1']} 个）",
+            f"- 神经冠军 holdout subject MAE {_fmt(neural['holdout']['subject_mae'], 4)}"
+            "（诊断口径；选择指标是 macro-F1，即上方口径）",
+            f"- 神经冠军 holdout subject RMSE（Brier 诊断，非选择指标）"
+            f"{_fmt(neural['holdout']['subject_rmse'], 4)}；Dummy（多数类）holdout "
+            f"subject RMSE {_fmt(base['dummy_majority']['holdout']['subject_rmse'], 4)}",
+        ]
+    else:
+        neural_lines = [
+            f"- 神经冠军：{dev_label} macro-F1 {_fmt(neural['dev']['macro_f1'])}，"
+            f"holdout macro-F1 {_fmt(neural['holdout']['macro_f1'])}"
+            f"（macro 对全部可观测维度平均，未定义 F1 计 0，分母不随模型漂移；"
+            f"dev 未定义维度 {neural['dev']['n_undefined_f1']} 个，holdout "
+            f"{neural['holdout']['n_undefined_f1']} 个）",
+            f"- 神经冠军 subject MAE：dev（同上口径）{_fmt(neural['dev']['subject_mae'], 4)}，"
+            f"holdout {_fmt(neural['holdout']['subject_mae'], 4)}"
+            "（诊断口径；选择指标是 macro-F1，即上方口径）",
+            f"- 神经冠军 subject RMSE（Brier 诊断，非选择指标）：dev "
+            f"{_fmt(neural['dev']['subject_rmse'], 4)}，holdout "
+            f"{_fmt(neural['holdout']['subject_rmse'], 4)}；Dummy（多数类）holdout "
+            f"subject RMSE {_fmt(base['dummy_majority']['holdout']['subject_rmse'], 4)}",
+        ]
     selection_header = (
         "选择 macro-F1（dev 单划分）" if folds == [1]
         else f"选择 macro-F1（{folds[-1]} 折均值 ± 折间 std）"
@@ -627,18 +695,8 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "## 最终评估（holdout 在研究结束后解锁；历次解锁见「证据状态与限制」，"
         "均已如实披露）",
         "",
-        f"- 神经冠军：{dev_label} macro-F1 {_fmt(neural['dev']['macro_f1'])}，"
-        f"holdout macro-F1 {_fmt(neural['holdout']['macro_f1'])}"
-        f"（macro 对全部可观测维度平均，未定义 F1 计 0，分母不随模型漂移；"
-        f"dev 未定义维度 {neural['dev']['n_undefined_f1']} 个，holdout "
-        f"{neural['holdout']['n_undefined_f1']} 个）",
-        f"- 神经冠军 subject MAE：dev（同上口径）{_fmt(neural['dev']['subject_mae'], 4)}，"
-        f"holdout {_fmt(neural['holdout']['subject_mae'], 4)}"
-        f"（诊断口径；选择指标是 macro-F1，即上方口径）",
-        f"- 神经冠军 subject RMSE（Brier 诊断，非选择指标）：dev "
-        f"{_fmt(neural['dev']['subject_rmse'], 4)}，holdout "
-        f"{_fmt(neural['holdout']['subject_rmse'], 4)}；Dummy（多数类）holdout "
-        f"subject RMSE {_fmt(base['dummy_majority']['holdout']['subject_rmse'], 4)}",
+        scope_line,
+        *neural_lines,
         _zero_dims_line(neural),
         f"- Dummy（多数类）：holdout macro-F1 {holdout_macro_f1(base['dummy_majority'])}，"
         f"holdout subject MAE {_fmt(base['dummy_majority']['holdout']['subject_mae'], 4)}",
@@ -679,20 +737,29 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "",
         "## 独立交付任务",
         "",
+        "本节三个任务都在 holdout 上评分，训练口径各自不同：**8-score 回归**在"
+        f"冻结 train 折（{split_sizes['train']} 行）上训练；**row-QC 敏感性**与"
+        f"**Deployable 消融**在与交付模型相同的选择池"
+        f"（{_fmt(deliverable['refit_rows'], 0)} 行）上训练。它们各自内部两臂同口径，"
+        "用来回答「该组件/该特征集是否改变结果」；回归头训练的模型与交付模型不同，"
+        "两个 holdout 数字不能直接相减。",
+        "",
         f"- **8-score PUBLISHED 回归**（独立 manifest，固定配置）：逐维 MAE 与"
         f"训练均值预测器参照见 `summary.json`（regression_task）；"
         f"manifest `{regression['manifest_sha256'][:16]}…`。"
         "该任务包含 QC 异常行、未做敏感性对照，属已知限制。"
         + _regression_verdict(regression),
-        f"- **row-QC 敏感性**（同一冻结划分剔除 {qc['excluded_subject_rows']} 后重训练，"
-        f"冠军同配置）：剔除后模型的 dev 指标 "
-        f"{_fmt(qc.get('dev_subject_mae_without'), 4)} vs 含 QC 行训练的冠军 "
-        f"{_fmt(qc.get('dev_subject_mae_champion_on_reduced'), 4)}。"
-        "该行位于 train 折，dev 分区不变（若两值完全相同，说明差异只落在训练侧）。",
-        f"- **Deployable（Body/Vitals-only）消融**（冠军同超参，仅换特征集）："
-        f"dev subject MAE {_fmt(dep['dev_subject_mae'], 4)}，"
-        f"dev macro-F1 {_fmt((dep.get('f1') or {}).get('dev', {}).get('macro_f1'))}。"
-        "单 seed、dev 41 人、无区间估计——只作方向参考，不构成特征贡献的显著证据。",
+        f"- **row-QC 敏感性**（选择池剔除 {qc['excluded_subject_rows']} 后重训，"
+        f"冠军同配置，{_fmt(qc.get('fit_rows_without'), 0)} 行 vs 交付模型 "
+        f"{_fmt(deliverable['refit_rows'], 0)} 行）：剔除后模型 holdout subject MAE "
+        f"{_fmt(qc.get('holdout_subject_mae_without'), 4)} vs 含 QC 行训练的冠军 "
+        f"{_fmt(qc.get('holdout_subject_mae_champion_on_reduced'), 4)}。"
+        "两侧都只在 holdout 上评分（同一分区、同一分母），差异只来自训练侧。",
+        f"- **Deployable（Body/Vitals-only）消融**（冠军同超参、同一选择池 "
+        f"{_fmt(dep.get('fit_rows'), 0)} 行，仅换特征集）："
+        f"holdout subject MAE {_fmt(dep['holdout_subject_mae'], 4)}，"
+        f"holdout macro-F1 {_fmt((dep.get('f1') or {}).get('holdout', {}).get('macro_f1'))}。"
+        "单 seed、holdout 42 人、无区间估计——只作方向参考，不构成特征贡献的显著证据。",
         "",
         "## 证据状态与限制",
         "",
@@ -787,6 +854,16 @@ def main(argv=None) -> int:
     champion_seed = int(champion_trainer.get("seed", 0))
     champion_batch = int(state.get("train_batch_size", 32))
     refit_partition = state.get("refit_partition")
+    # the deliverable was refit on train+dev, so the frozen dev partition is
+    # inside its training data. Score it, and every model it is compared
+    # against, on the selection pool: same 232 fit rows, same holdout, and the
+    # trusted evaluator's no-overlap rule keeps dev out of the scoring path.
+    from data.real_split import pool_manifest
+
+    pool = pool_manifest(
+        manifest, records,
+        notes="report-time view: the selection pool the deliverable was fitted on",
+    ).data
     in_sample_dev = refit_partition == "train+dev"
     deliverable = {
         "dir": str(champion_dir),
@@ -799,13 +876,13 @@ def main(argv=None) -> int:
         "dev_metrics_are_in_sample": in_sample_dev,
     }
 
-    neural_eval = evaluate_neural(model, manifest, records)
-    baselines = evaluate_baselines(manifest, records)
+    neural_eval = evaluate_neural(model, pool, records)
+    baselines = evaluate_baselines(pool, records)
     regression = regression_task(manifest, records, out)
-    qc = row_qc_sensitivity(manifest, records, out, champion_cfg, champion_trainer,
+    qc = row_qc_sensitivity(pool, records, out, champion_cfg, champion_trainer,
                             champion_model=model, seed=champion_seed,
                             train_batch_size=champion_batch)
-    qc["dev_subject_mae_with"] = dev_primary(model, manifest, records)
+    qc["holdout_subject_mae_with"] = neural_eval["holdout"]["subject_mae"]
     deployable = deployable_ablation(manifest, records, out, champion_cfg,
                                      champion_trainer, seed=champion_seed,
                                      train_batch_size=champion_batch)
@@ -923,8 +1000,8 @@ def main(argv=None) -> int:
                 "subject_mae": v["holdout"].get("subject_mae")}
             for k, v in baselines.items() if isinstance(v, dict) and "holdout" in v
         },
-        "row_qc_without": qc["dev_subject_mae_without"],
-        "deployable_dev_mae": deployable["dev_subject_mae"],
+        "row_qc_without": qc["holdout_subject_mae_without"],
+        "deployable_holdout_mae": deployable["holdout_subject_mae"],
     }, indent=2))
     return 0
 

@@ -382,6 +382,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "the rounds already recorded")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--timeout", type=float, default=1800.0)
+    p.set_defaults(func=cmd_research_finalize)
 
     p = sub.add_parser("research-report")
     p.add_argument("--out", default="runs/autoresearch")
@@ -390,7 +391,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    # a subparser without set_defaults(func=...) parses fine and then dies on
+    # `args.func` at dispatch time, i.e. only when a human runs that command
+    # (research-finalize shipped that way). Fail at dispatch for every
+    # subcommand instead of one at a time.
+    if not callable(getattr(args, "func", None)):
+        parser.error(f"subcommand {args.command!r} has no handler wired")
     return args.func(args)
 
 

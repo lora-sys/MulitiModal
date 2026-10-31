@@ -305,8 +305,11 @@ def e15_report_tolerates_none():
                                 "feature_logistic")},
         "regression_task": {"manifest_sha256": "0", "per_dim": {}},
         "row_qc_sensitivity": {"excluded_subject_rows": [],
-                               "dev_subject_mae_without": None},
-        "deployable_ablation": {"dev_subject_mae": None, "f1": {}},
+                               "holdout_subject_mae_without": None,
+                               "fit_rows_without": None,
+                               "holdout_subject_mae_champion_on_reduced": None},
+        "deployable_ablation": {"holdout_subject_mae": None, "fit_rows": None,
+                                "f1": {}},
         "availability": {},
         "deliverable": {
             "dir": "d", "weights_sha256": None, "refit_partition": None,
@@ -548,7 +551,10 @@ def e32_canonical_dims_single_source():
 
 @check
 def e33_qc_sensitivity_same_denominator():
-    # R-03: the WITH-QC champion must also be evaluated on the reduced dev
+    # R-03: the WITH-QC champion must also be evaluated on the reduced
+    # partition. v8 moved the contrast to the holdout, because a pool refit
+    # leaves no dev subjects to average over; the property under test is the
+    # shared denominator, not the name of the partition.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import inspect
 
@@ -556,7 +562,8 @@ def e33_qc_sensitivity_same_denominator():
 
     source = inspect.getsource(row_qc_sensitivity)
     assert "champion_model" in source
-    assert "dev_subject_mae_champion_on_reduced" in source
+    assert "holdout_subject_mae_champion_on_reduced" in source
+    assert 'holdout = tuple(manifest_qc["split"]["holdout"])' in source
 
 
 @check
@@ -594,9 +601,11 @@ def e36_subject_identity_declared():
 
 @check
 def e37_champion_evaluated_under_own_scaler():
-    # GLM round-3: the champion-on-reduced-dev contrast must not feed the
+    # GLM round-3: the champion side of the QC contrast must not feed the
     # champion inputs standardized by the QC manifest's refit scaler — each
     # side of the contrast runs under its own manifest, same subject set.
+    # v8: the shared partition is the holdout (a pool refit has no dev rows),
+    # the property is unchanged.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import inspect
 
@@ -604,7 +613,7 @@ def e37_champion_evaluated_under_own_scaler():
 
     source = inspect.getsource(row_qc_sensitivity)
     assert "real_eval_manifest(manifest)" in source
-    assert 'RealBatchProvider(\n            manifest, records, "dev", subject_ids=reduced_dev' \
+    assert 'RealBatchProvider(\n            manifest, records, "holdout", subject_ids=holdout' \
         in source
     # the provider must reject subjects from other partitions
     records = fake_records()
@@ -1094,21 +1103,31 @@ def e62_committed_docs_check_bites_and_does_not_false_positive():
             "## 冠军\n\n冠军 **tcm-0003**：{width} 宽 trunk、60 epochs。\n"
         )
         doc = tmp / "doc.md"
+        # isolate the supporting evidence: the ambient artifacts/ directory
+        # may legitimately contain any number, including the one this test
+        # uses to prove the check bites
+        empty_root = tmp / "artifacts"
+        empty_root.mkdir()
+
+        def check() -> list[str]:
+            return check_committed_docs_numbers(
+                str(summary), doc, artifacts_root=empty_root
+            )
 
         doc.write_text(base.format(width=32))
-        assert check_committed_docs_numbers(str(summary), doc) == [], \
+        assert check() == [], \
             "historical narrative about the old defect false-positived"
 
         doc.write_text(base.format(width=64))
-        problems = check_committed_docs_numbers(str(summary), doc)
+        problems = check()
         assert any("64-wide" in p and "32-wide" in p for p in problems), problems
 
         doc.write_text("## 冠军\n\n冠军 **tcm-0003** 跑了 60 epochs。\n")
-        problems = check_committed_docs_numbers(str(summary), doc)
+        problems = check()
         assert any("never states the champion's width" in p for p in problems), problems
 
         doc.write_text(base.format(width=32) + "\n部署 macro-F1 0.349。\n")
-        problems = check_committed_docs_numbers(str(summary), doc)
+        problems = check()
         assert any("0.349" in p for p in problems), problems
 
 
@@ -1301,12 +1320,21 @@ def e74_finalize_writes_the_deliverable_from_the_pool():
 
 
 def check_committed_docs_numbers(
-    summary_path: str | None, docs_path: str | Path | None = None
+    summary_path: str | None,
+    docs_path: str | Path | None = None,
+    artifacts_root: str | Path | None = None,
 ) -> list[str]:
     """E59: every metric-looking number in the committed report must be
     backed by summary.json. The 2026-10-31 audit found a stale deployable
     macro-F1 (0.349 vs artifact 0.2191), a wrong holdout positive rate
-    (0.32 vs 0.1994) and a mismatched regression manifest hash."""
+    (0.32 vs 0.1994) and a mismatched regression manifest hash.
+
+    `artifacts_root` is the set of sibling summaries treated as supporting
+    evidence. It is a parameter, not a constant, because the self-test must
+    not depend on whatever runs happen to sit in the working tree: a real
+    summary containing 0.349 made the "unsupported number" case pass for the
+    wrong reason.
+    """
     problems: list[str] = []
     if not summary_path:
         return problems
@@ -1319,7 +1347,10 @@ def check_committed_docs_numbers(
     supported = _flatten_numbers(summary)
     # a cross-run narrative legitimately cites earlier delivered runs; those
     # numbers must still be checkable, so every sibling artifact summary counts
-    root = Path(__file__).resolve().parent.parent / "artifacts"
+    root = (
+        Path(artifacts_root) if artifacts_root is not None
+        else Path(__file__).resolve().parent.parent / "artifacts"
+    )
     if root.exists():
         for other in sorted(root.glob("*/summary.json")):
             try:

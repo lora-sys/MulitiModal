@@ -194,7 +194,17 @@ def _proba_matrix(model, X: np.ndarray, n_dims: int) -> np.ndarray:
 
 
 def evaluate_baselines(manifest: dict, records: list) -> dict:
-    """Fit the three baselines on TRAIN, evaluate F1 on dev and holdout."""
+    """Fit the three baselines on `manifest`'s TRAIN partition, evaluate on
+    its dev and holdout partitions.
+
+    Pass the SELECTION-POOL manifest to compare against the deliverable: the
+    deliverable is refit on train+dev, so a baseline fitted on train alone
+    would be handicapped by 41 rows it never saw. Under the pool manifest
+    `dev` is empty (those subjects are in train), and the trusted-evaluator
+    contract forbids scoring a partition that overlaps training — the
+    comparison is therefore holdout-only, which is the one partition neither
+    side ever saw.
+    """
     from sklearn.dummy import DummyClassifier
     from sklearn.multioutput import MultiOutputClassifier
 
@@ -219,6 +229,9 @@ def evaluate_baselines(manifest: dict, records: list) -> dict:
             model.fit(X_train, y_train)
             entry: dict = {"features": features}
             for partition in ("dev", "holdout"):
+                if not manifest["split"][partition]:
+                    entry[partition] = _empty_partition()
+                    continue
                 X, rows = _design_matrix(
                     records_by_row, manifest, manifest["split"][partition], features
                 )
@@ -237,6 +250,22 @@ def evaluate_baselines(manifest: dict, records: list) -> dict:
     return result
 
 
+def _empty_partition() -> dict:
+    """Null metrics for a partition that holds no subjects.
+
+    A pool manifest has an empty dev partition by construction, and the
+    report still walks the dev column — emitting nulls keeps the absence
+    explicit instead of crashing or silently printing a stale number.
+    """
+    return {
+        "per_dim": {},
+        "macro_f1": None,
+        "n_undefined_f1": 0,
+        "subject_mae": None,
+        "subject_rmse": None,
+    }
+
+
 def evaluate_neural(model, manifest: dict, records: list, batch_size: int = 64) -> dict:
     """Per-dim F1/positive-rate for the neural model on dev and holdout."""
     import torch
@@ -245,6 +274,9 @@ def evaluate_neural(model, manifest: dict, records: list, batch_size: int = 64) 
 
     out: dict = {}
     for partition in ("dev", "holdout"):
+        if not manifest["split"][partition]:
+            out[partition] = _empty_partition()
+            continue
         provider = RealBatchProvider(manifest, records, partition, batch_size=batch_size)
         probs, ys, ms = [], [], []
         was_training = model.training

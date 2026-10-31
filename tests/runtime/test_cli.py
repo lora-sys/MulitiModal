@@ -4,10 +4,28 @@ import json
 
 import pytest
 
-from runtime.cli import main
+from runtime.cli import build_parser, main
 from runtime.protocols import train_candidate, trusted_score
 
 pytestmark = pytest.mark.synthetic
+
+
+def test_every_subcommand_is_wired_to_a_handler():
+    # `research-finalize` shipped without set_defaults(func=...): the parser
+    # accepted the command and dispatch died with AttributeError, so the bug
+    # was invisible to any test that called the harness directly. Assert the
+    # wiring for all subcommands at once instead of one crash at a time.
+    parser = build_parser()
+    subparsers = [
+        action for action in parser._actions
+        if action.__class__.__name__ == "_SubParsersAction"
+    ]
+    assert subparsers, "cli exposes no subcommands"
+    unwired = [
+        name for name, sub in subparsers[0].choices.items()
+        if not callable(sub.get_default("func"))
+    ]
+    assert not unwired, f"subcommands without a handler: {unwired}"
 
 
 def test_list_models(capsys):
