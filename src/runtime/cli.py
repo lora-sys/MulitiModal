@@ -356,6 +356,37 @@ def cmd_research_src_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research_src_finalize(args: argparse.Namespace) -> int:
+    """Refit the champion on the selection pool and read the holdout ONCE."""
+    from research.finalize import refit_and_score
+    from research.loop import GitWorktree
+
+    worktree = GitWorktree(Path(args.worktree), args.branch)
+    worktree.assert_clean()
+    store_champion = _src_loop(args, worktree).champion()
+    if not store_champion:
+        print(json.dumps({"ok": False, "error": "no champion in the manifest store"}))
+        return 1
+    commit = store_champion.get("git_commit_sha") or worktree.head()
+    if worktree.head() != commit:
+        print(json.dumps({
+            "ok": False,
+            "error": f"worktree HEAD {worktree.head()[:8]} is not the champion commit "
+                     f"{commit[:8]}; check the branch out before finalising",
+        }))
+        return 1
+    result = refit_and_score(
+        worktree=worktree.path, out_dir=Path(args.out),
+        manifest_path=args.data_manifest, dataset_path=args.dataset,
+        editable="src/research/candidate.py", commit=commit, seed=args.seed,
+    )
+    (Path(args.out) / "finalize-result.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False)
+    )
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    return 0
+
+
 def _src_loop(args: argparse.Namespace, worktree):
     from research.loop import SourceResearchLoop
 
@@ -477,6 +508,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--branch", default="autoresearch/main")
     p.add_argument("--proposals", required=True)
     p.set_defaults(func=cmd_research_src_run)
+
+    p = sub.add_parser("research-src-finalize",
+                       help="source-level loop: refit the champion and read the holdout once")
+    _add_src_args(p)
+    p.add_argument("--worktree", required=True)
+    p.add_argument("--branch", default="autoresearch/main")
+    p.set_defaults(func=cmd_research_src_finalize)
 
     p = sub.add_parser("research-report")
     p.add_argument("--out", default="runs/autoresearch")
