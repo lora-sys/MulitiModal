@@ -22,6 +22,27 @@ Phase 1 工程闭环（#51/#48/#39/#49/#40/#44/#45）+ 证据注册表与 GO 门
 5. 标签分层 RULE / PUBLISHED / LLM_SILVER 不可互换，LLM_SILVER 永不作真值（#38）。
 6. 三层放行独立判定：GO_ENGINEERING / GO_REAL_DATA_TRAINING / GO_RESEARCH_CLAIMS（#47）。
 
+## 源码级 AutoResearch（`src/research/`，v9）
+
+`runtime/harness.py` 的 harness 只让 Agent 改 **6 个超参取值**，实测 23/23 REVERT、冠军从未移动——**空搜索空间产生不了研究**。`src/research/` 是真正那一层：
+
+| 上游要素 | 本项目 |
+| --- | --- |
+| Agent 改的是源码 | 唯一可改文件 `src/research/candidate.py`（架构/损失/优化器/调度/循环），其余路径的补丁被 guard 拒收 |
+| 固定墙钟预算 | `research/frozen.py` 的 `TIME_BUDGET_SECONDS = 20`（每折），超预算记 `overran → REVERT` |
+| keep/discard = 分支前进 | 运行在自己的 git worktree、`autoresearch/*` 分支上；KEEP 提交、REVERT `reset --hard` 回冠军提交 |
+| simplicity 是目标的一部分 | `loop.decide`：增益须过 1×SEM 门槛且 ≥0.001×净增行数；**删代码且不更差直接 KEEP** |
+
+```bash
+PYTHONPATH=src python -m runtime.cli research-src-state  --worktree <wt> --branch autoresearch/v9 \
+  --data-manifest <manifest.json> --dataset "<Share data.xls>" --out runs/research-src
+PYTHONPATH=src python -m runtime.cli research-src-round  --worktree <wt> --branch autoresearch/v9 \
+  --patch-file pending.patch --intent "..." --proposer "<agent-id>" \
+  --data-manifest <manifest.json> --dataset "<Share data.xls>" --out runs/research-src
+```
+
+运行记录与冻结契约：[docs/reports/research-src-v9.md](docs/reports/research-src-v9.md)。
+
 ## 快速开始
 
 ```bash
