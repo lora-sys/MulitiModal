@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from data.mendeley import SubjectRecord
+from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord
 from data.real_split import (
     LABEL_VERSION_CLASSIFICATION,
     LABEL_VERSION_REGRESSION,
@@ -27,13 +27,11 @@ def fake_records(n=30, seed=7):
         records.append(
             SubjectRecord(
                 subject_index=i,
+                # every group comes from the audited contract, so a fixture
+                # can never drift from the column layout the adapter reads
                 features={
-                    "demographics": [float(rng.randint(20, 70)), float(i % 2)],
-                    "anthropometrics": [float(rng.randint(150, 190)),
-                                        float(rng.randint(45, 95)), 22.5],
-                    "meridian": [rng.random() for _ in range(3)],
-                    "pulse_wave": [rng.random() for _ in range(2)],
-                    "tongue": [rng.random()],
+                    name: [rng.random() for _ in range(size)]
+                    for name, size in FEATURE_GROUP_SIZES.items()
                 },
                 scores=scores,
                 score_mask=[s is not None for s in scores],

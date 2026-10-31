@@ -131,6 +131,66 @@ def _per_dim_f1(y_true: np.ndarray, y_pred: np.ndarray, mask: np.ndarray) -> dic
     return out
 
 
+def _per_dim_ap(y_true: np.ndarray, proba: np.ndarray, mask: np.ndarray) -> dict:
+    """Per-dim average precision from PROBABILITIES; None when a dimension has
+    no positive label (no PR curve exists, which is not the same as a model
+    that fails to find any)."""
+    out = {}
+    for d, dim in enumerate(CANONICAL_DIMS):
+        obs = mask[:, d].astype(bool)
+        if not obs.any():
+            # an unobserved dimension is ABSENT from this dict, exactly as
+            # macro_f1 excludes it via n_observed — a dim with no labels must
+            # not enter the denominator as a permanent zero
+            continue
+        out[dim] = average_precision(proba[obs, d], y_true[obs, d])
+    return out
+
+
+def macro_average_precision(per_dim_ap: dict) -> float | None:
+    """Mean AP over the FIXED set of observed dimensions; a dimension with no
+    positive label counts as 0.0, mirroring `macro_f1` — the denominator is the
+    count of observed dimensions either way, so a model cannot be rewarded for
+    ignoring a rare dimension."""
+    if not per_dim_ap:
+        return None
+    return sum(0.0 if ap is None else ap for ap in per_dim_ap.values()) / len(per_dim_ap)
+
+
+def average_precision(proba: np.ndarray, targets: np.ndarray) -> float | None:
+    """Area under the precision-recall curve as sum_k (R_k - R_{k-1}) * P_k
+    over DISTINCT scores.
+
+    Not "the mean of the precisions at each positive": that estimator breaks
+    ties by row order, so a model emitting a constant score would be ranked by
+    where its positives happen to sit in the manifest — unusable for a
+    selection metric. The step form assigns one operating point per distinct
+    score, so a constant predictor scores its positive prevalence no matter how
+    the rows are ordered.
+
+    None when the dimension has no positive label: there is no curve to
+    integrate, which is not the same as a model that fails to find any.
+    """
+    y = targets > 0.5
+    n_pos = int(y.sum())
+    if n_pos == 0:
+        return None
+    order = np.argsort(-proba, kind="stable")
+    scores, hits = proba[order], y[order]
+    n = scores.size
+    # one operating point per distinct score: keep the LAST index of each run
+    cut = np.ones(n, dtype=bool)
+    if n > 1:
+        cut[:-1] = scores[:-1] != scores[1:]
+    cum = np.cumsum(hits)
+    tp = cum[cut].astype(float)
+    fp = (np.arange(1, n + 1) - cum)[cut].astype(float)
+    precision = tp / (tp + fp)
+    recall = tp / n_pos
+    prev = np.concatenate([[0.0], recall[:-1]])
+    return float(((recall - prev) * precision).sum())
+
+
 def macro_f1(per_dim: dict) -> float | None:
     """Macro-F1 over the FIXED set of observed dimensions: an undefined F1
     (no positive and no predicted positive) counts as 0.0, so the averaging
@@ -239,9 +299,11 @@ def evaluate_baselines(manifest: dict, records: list) -> dict:
                 mask = mask.astype(bool)
                 proba = _proba_matrix(model, X, y.shape[1])
                 per_dim = _per_dim_f1(y, (proba >= 0.5).astype(float), mask)
+                per_dim_ap = _per_dim_ap(y, proba, mask)
                 entry[partition] = {
                     "per_dim": per_dim,
                     "macro_f1": macro_f1(per_dim),
+                    "macro_ap": macro_average_precision(per_dim_ap),
                     "n_undefined_f1": count_undefined_f1(per_dim),
                     "subject_mae": subject_mae_from_proba(proba, y, mask),
                     "subject_rmse": subject_rmse_from_proba(proba, y, mask),
@@ -260,6 +322,7 @@ def _empty_partition() -> dict:
     return {
         "per_dim": {},
         "macro_f1": None,
+        "macro_ap": None,
         "n_undefined_f1": 0,
         "subject_mae": None,
         "subject_rmse": None,
@@ -293,9 +356,11 @@ def evaluate_neural(model, manifest: dict, records: list, batch_size: int = 64) 
         y = torch.cat(ys).numpy()
         mask = torch.cat(ms).numpy().astype(bool)
         per_dim = _per_dim_f1(y, (proba >= 0.5).astype(float), mask)
+        per_dim_ap = _per_dim_ap(y, proba, mask)
         out[partition] = {
             "per_dim": per_dim,
             "macro_f1": macro_f1(per_dim),
+            "macro_ap": macro_average_precision(per_dim_ap),
             "n_undefined_f1": count_undefined_f1(per_dim),
             "subject_mae": subject_mae_from_proba(proba, y, mask),
             "subject_rmse": subject_rmse_from_proba(proba, y, mask),

@@ -65,12 +65,36 @@ EXPECTED_ITEMS = {
 }
 
 # column groups per the audited header layout (docs/data/dataset-audit-report.md)
+#
+# The meridian device block does not stop at column 20. Columns 21-35
+# (RET L / RET_R resistance, HR bpm, six sSA_* and six tSA_* meridian-energy
+# channels) were never read by any model in v1-v8: the first audit wrote
+# "meridian 9-20" and the 15 columns between the meridian and pulse-wave
+# blocks went unmentioned, while `b` (column 62, tongue-image blue channel,
+# 274/274 observed) was dismissed as undefined. An independent review
+# measured the gap: 16 of 63 input columns, i.e. 25%, never reached the model.
 FEATURE_GROUPS = {
     "demographics": slice(0, 6),      # gender..surgery hx
     "anthropometrics": slice(6, 9),   # BH/BW/BMI
-    "meridian": slice(9, 21),         # h2/h3 left/right
+    "meridian": slice(9, 21),         # h2/h3 left/right conductance
+    "meridian_dynamics": slice(21, 36),  # RET, HR, sSA_* and tSA_* channels
     "pulse_wave": slice(36, 51),      # SYS..MWTCI
-    "tongue": slice(51, 62),          # tongue max width..HSV S
+    "tongue": slice(51, 63),          # tongue max width..HSV S and colour b
+}
+
+#: every feature column index the adapter is expected to read. Anything in the
+#: workbook outside this set and outside SCORE_COLUMNS is an unread column and
+#: must be justified in the audit report — the v1-v8 omission was not.
+AUDITED_FEATURE_COLUMNS = tuple(
+    i for s in FEATURE_GROUPS.values() for i in range(s.start, s.stop)
+)
+
+#: how many values each group must yield. Fixtures and the adapter both read
+#: this instead of restating lengths: the v1-v8 feature omission survived
+#: because three separate test fixtures each hardcoded their own copy of the
+#: group layout and none of them noticed 15 columns were unread.
+FEATURE_GROUP_SIZES = {
+    name: group.stop - group.start for name, group in FEATURE_GROUPS.items()
 }
 
 EXPECTED_SHA256 = "6206f432b683f8a7b9a75dae23e598a4f01a41a4f8af84b099924b9d85d08a96"
@@ -191,6 +215,17 @@ def load_mendeley_scores(path: str | Path) -> list[SubjectRecord]:
                 v = sheet.cell_value(r, c)
                 values.append(float(v) if v != "" else float("nan"))
             features[group] = values
+            # the contract, checked against the real workbook: a group whose
+            # column range silently shrank (or was never widened to cover the
+            # meridian-dynamics block) fails here instead of producing a model
+            # that quietly reads fewer inputs than the audit describes
+            if len(values) != FEATURE_GROUP_SIZES[group]:
+                raise ValueError(
+                    f"feature group {group!r} yielded {len(values)} values but "
+                    f"the audited contract expects {FEATURE_GROUP_SIZES[group]} "
+                    f"(columns {FEATURE_GROUPS[group].start}.."
+                    f"{FEATURE_GROUPS[group].stop - 1}); refusing to load"
+                )
         # canonical order: balanced unobserved at index 0, then the biased dims
         by_dim = {
             dim: float(sheet.cell_value(r, score_idx[col]))

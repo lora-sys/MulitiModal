@@ -32,9 +32,15 @@ def _input_spec_version(manifest: dict) -> str:
     """Version string that discriminates modality sets and dims: a full-set
     model and a deployable-set model must never share an input spec version
     (a deployable checkpoint scored against a full-set spec would silently
-    mis-bind otherwise)."""
+    mis-bind otherwise).
+
+    v2 marks the 2026-10-31 feature-set correction: the meridian-dynamics
+    group (15 columns) and the tongue colour channel are now part of the
+    contract, so a v1 checkpoint's spec — and therefore its input meaning —
+    is not the same contract as this one even where dims happen to overlap.
+    """
     dims = ",".join(f"{name}={params['dim']}" for name, params in manifest["modalities"].items())
-    return f"tcm-input-real-v1:{manifest['modality_set']}:{dims}"
+    return f"tcm-input-real-v2:{manifest['modality_set']}:{dims}"
 
 
 def real_input_spec(manifest: dict) -> InputSpecSet:

@@ -30,9 +30,14 @@ from .agent import (
     validate_source_patch,
 )
 from .manifest import MANIFEST_FILE, RunManifestStore
+from .tcm_eval import PRIMARY_METRIC as PRIMARY_METRIC_NAME
 
 SRC_DIR = Path(__file__).resolve().parents[1]
-PRIMARY_METRIC = "primary_value"  # TCMTrustedEvaluator report: macro_f1
+#: field of the trusted-evaluator report the loop reads. It is the
+#: report's own `primary_value`, i.e. whichever metric tcm_eval
+#: currently declares — never a copy of the metric name, which is how
+#: a stale target survives a metric change (see agent.build_research_prompt).
+PRIMARY_METRIC = "primary_value"
 TCM_ONLY_MESSAGE = (
     "physio profile is interface-only in #45 milestone 1 (TCM_ONLY); "
     "physio data/labels are NOT_AVAILABLE until #37/#42"
@@ -64,7 +69,7 @@ def default_real_tcm_runspec(
             "split_hash": f"manifest:{manifest['manifest_sha256'][:16]}",
             "evaluator": "runtime.tcm_eval.TCMTrustedEvaluator",
             "metric_version": "tcm-eval-v0",
-            "primary_metric": "category_probs/macro_f1",
+            "primary_metric": PRIMARY_METRIC_NAME,
             "primary_direction": "max",
             # selection runs on subject-level k-fold over the pool, not on the
             # 41-subject dev split: the between-split spread of ONE config
@@ -149,7 +154,7 @@ def default_tcm_runspec(rounds: int = 3, timeout_s: float = 300.0) -> dict:
             "split_hash": "manifest:trusted-eval-v0",
             "evaluator": "runtime.tcm_eval.TCMTrustedEvaluator",
             "metric_version": "tcm-eval-v0",
-            "primary_metric": "category_probs/macro_f1",
+            "primary_metric": PRIMARY_METRIC_NAME,
             "primary_direction": "max",
             # selection runs on subject-level k-fold over the pool, not on the
             # 41-subject dev split: the between-split spread of ONE config
@@ -359,11 +364,20 @@ class AutoResearchHarness:
             return finish("REVERT", "rejected", f"static check: {exc}")
 
         entry["effective_config"] = {
+            # FULL sections, never a hand-picked subset: this dict is the only
+            # record of what the champion actually ran, and _champion_config()
+            # rebuilds the next candidate's start from it. Recording just
+            # `train_provider.batch_size` silently dropped `n_batches`, so the
+            # round after a KEEP trained on a different amount of data while
+            # the manifest claimed the configs were identical (found when the
+            # metric change made a "same candidate, same score" assertion
+            # bite — it had been passing only because the old metric
+            # saturated).
             "model": dict(config["model"]),
             "trainer": {
                 k: v for k, v in config["trainer"].items() if k != "seed"
             },
-            "train_provider": {"batch_size": config["train_provider"].get("batch_size")},
+            "train_provider": dict(config.get("train_provider", {})),
         }
 
         candidate_dir = self.out_dir / run_id
@@ -379,8 +393,15 @@ class AutoResearchHarness:
             }
         else:
             config["train_provider"]["seed"] = self.runspec["seed"]
-            # eval subjects must stay disjoint from the train pool (#27)
-            config["eval_provider"]["subject_prefix"] = f"eval-{run_id}"
+            # eval subjects must stay disjoint from the train pool (#27) — but
+            # they must NOT change from round to round: a per-round prefix
+            # (`eval-{run_id}`) gave every candidate its own evaluation set, so
+            # two rounds with the SAME config and seed scored differently and
+            # the KEEP/REVERT comparison was between different denominators.
+            # The synthetic smoke path therefore could not test "an identical
+            # candidate must not replace the champion" — that test passed only
+            # while the old metric happened to saturate on every eval set.
+            config["eval_provider"]["subject_prefix"] = "eval-synthetic"
 
         folds = int(self.runspec["frozen"].get("selection_folds", 1) or 1)
         repeats = int(self.runspec["frozen"].get("selection_repeats", 1) or 1)

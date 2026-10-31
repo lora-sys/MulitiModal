@@ -19,7 +19,10 @@ from data.datasets import (
     verify_files,
 )
 from data.mendeley import (
+    AUDITED_FEATURE_COLUMNS,
     EXPECTED_ITEMS,
+    FEATURE_GROUP_SIZES,
+    FEATURE_GROUPS,
     SCORE_COLUMNS,
     SOURCE_COLUMN_MAPPING,
     assert_mapping_is_audited,
@@ -146,11 +149,15 @@ def test_mendeley_adapter_contract():
     }
     assert set(observed) == set(SOURCE_COLUMN_MAPPING.values())
     assert all(0.0 <= s <= 100.0 for s in observed.values())
-    assert set(first.features) == {
-        "demographics", "anthropometrics", "meridian", "pulse_wave", "tongue",
-    }
-    assert len(first.features["pulse_wave"]) == 15  # SYS..MWTCI
-    assert len(first.features["tongue"]) == 11
+    assert set(first.features) == set(FEATURE_GROUPS)
+    for group, size in FEATURE_GROUP_SIZES.items():
+        assert len(first.features[group]) == size, group
+    # the 2026-10-31 correction: the meridian block runs to column 35, and the
+    # tongue block includes the colour channel at 62
+    assert FEATURE_GROUPS["meridian_dynamics"] == slice(21, 36)
+    assert FEATURE_GROUPS["tongue"] == slice(51, 63)
+    assert len(AUDITED_FEATURE_COLUMNS) == len(set(AUDITED_FEATURE_COLUMNS))
+    assert len(AUDITED_FEATURE_COLUMNS) == 63
     provenance = first.provenance
     assert provenance["standard_version"] == "ZYYXH/T157-2009"
     assert provenance["label_source"] == "PUBLISHED"

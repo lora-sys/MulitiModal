@@ -6,7 +6,7 @@ import random
 import pytest
 import torch
 
-from data.mendeley import SubjectRecord
+from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord
 from data.real_split import build_real_manifest
 from runtime.checkpoint import load_training_checkpoint, save_training_checkpoint
 from runtime.real_data import (
@@ -35,13 +35,11 @@ def fake_records(n=30, seed=7, all_unlabeled=False):
         records.append(
             SubjectRecord(
                 subject_index=i,
+                # every group comes from the audited contract, so a fixture
+                # can never drift from the column layout the adapter reads
                 features={
-                    "demographics": [float(rng.randint(20, 70)), float(i % 2)],
-                    "anthropometrics": [float(rng.randint(150, 190)),
-                                        float(rng.randint(45, 95)), 22.5],
-                    "meridian": [rng.random() for _ in range(3)],
-                    "pulse_wave": [rng.random() for _ in range(2)],
-                    "tongue": [rng.random()],
+                    name: [rng.random() for _ in range(size)]
+                    for name, size in FEATURE_GROUP_SIZES.items()
                 },
                 scores=scores,
                 score_mask=[s is not None for s in scores],
@@ -143,7 +141,7 @@ def test_real_eval_manifest_mirrors_frozen_split(tmp_path):
     assert em.version.startswith("real-")
     # the spec version must discriminate modality set and dims: a full-set
     # and a deployable-set manifest must never share one (#eval E30)
-    assert em.input_spec_version.startswith("tcm-input-real-v1:full:")
+    assert em.input_spec_version.startswith("tcm-input-real-v2:full:")
     assert "body_features=" in em.input_spec_version
     dep = dict(m)
     dep["modalities"] = {"body_features": m["modalities"]["body_features"]}

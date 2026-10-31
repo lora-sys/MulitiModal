@@ -46,7 +46,7 @@ MODALITY_SETS = {
     },
     "full": {
         "body_features": ("demographics", "anthropometrics"),
-        "exam_features": ("meridian", "pulse_wave", "tongue"),
+        "exam_features": ("meridian", "meridian_dynamics", "pulse_wave", "tongue"),
     },
 }
 

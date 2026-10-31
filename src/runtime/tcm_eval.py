@@ -20,22 +20,29 @@ from core.registry import batch_predict
 
 from .batches import BatchProvider
 
-EVAL_METRIC_VERSION = "tcm-eval-v0"
-# The selection metric is the deliverable metric: nine-dim classification at a
-# 0.5 threshold, macro-F1 over the fixed observed-dimension denominator.
+EVAL_METRIC_VERSION = "tcm-eval-v1"
+# The selection metric is threshold-free: macro average precision (PR-AUC)
+# over the fixed observed-dimension denominator.
 #
-# Two probability-loss surrogates were tried first and both mis-rank models for
-# THIS task:
+# Metric history — every step was rejected by measurement, not by taste:
 #   * subject_mae (L1) is minimised by the median, which is 0 for a binary label
-#     whose positive rate is below 0.5 — a hill climb on it cannot beat an
+#     whose positive rate is below 0.5, so a hill climb on it cannot beat an
 #     all-zero predictor (measured: dummy 0.2292 held the holdout lead);
 #   * subject_rmse (Brier) is proper, but its optimum for a model with no usable
-#     signal is the base-rate constant, so the loop converged on a model with
-#     dev macro-F1 0.021 while a plain logistic regression scored 0.308.
-# A calibrated constant is the honest answer to "how confident are you on this
-# subject", but it is not a classifier. Optimising the reported metric keeps the
-# search aligned with what the model is for; Brier/MAE stay as diagnostics.
-PRIMARY_METRIC = "category_probs/macro_f1"
+#     signal is the base-rate constant: the loop converged on a model with dev
+#     macro-F1 0.021 while a plain logistic regression scored 0.308;
+#   * macro_f1 at a hard 0.5 threshold (v7/v8) is the deliverable's metric, but
+#     it measures the probability SCALE as much as the ranking. With positive
+#     rates of 0.20-0.36 a calibrated logistic regression predicts almost
+#     nothing above 0.5 and scores 0.215, while the SAME model thresholded at
+#     its training prevalence scores 0.3844 — indistinguishable from the neural
+#     champion's 0.3827 (verified 2026-10-31). Selecting on F1@0.5 was partly
+#     selecting for overconfidence.
+# Average precision depends only on the ranking, so no operating point has to be
+# fixed in order to rank candidates. F1 is still reported, at 0.5 and at each
+# dimension's training prevalence, because a deployed model needs a decision
+# rule and a reader needs to see how threshold-sensitive the result is.
+PRIMARY_METRIC = "category_probs/macro_ap"
 PRIMARY_DIRECTION = "max"
 KNOWN_PREDICTION_KEYS = frozenset({"category_probs", "constitution_scores"})
 PARTITIONS = ("train", "dev", "holdout")
@@ -85,9 +92,9 @@ class EvalManifest:
 class TCMReport:
     """Immutable evaluation report; mutation attempts raise (read-only gate).
 
-    the primary value is macro-F1 over the fixed observed-dimension
-    denominator (see PRIMARY_METRIC); subject_mae/subject_rmse are reported as
-    diagnostics. The probability losses are None
+    the primary value is macro average precision over the fixed
+    observed-dimension denominator (see PRIMARY_METRIC); macro-F1 (at 0.5) and
+    subject_mae/subject_rmse are reported as diagnostics. The probability losses are None
     when no label is observable (fail-closed: an empty observation must never
     look like a perfect score, #45 audit finding)."""
 
@@ -102,16 +109,26 @@ class TCMReport:
     subject_mae: float | None
     subject_rmse: float | None
     macro_f1: float | None = None
+    macro_ap: float | None = None
     n_undefined_f1: int = 0
     per_dim: dict = field(default_factory=dict)
     provenance: dict = field(default_factory=dict)
     not_computable: tuple = field(default_factory=tuple)
 
+    @property
+    def primary_value(self) -> float | None:
+        """The value of `primary_metric`, resolved FROM the metric name so a
+        change of selection metric cannot leave a stale number behind."""
+        return {
+            "category_probs/macro_ap": self.macro_ap,
+            "category_probs/macro_f1": self.macro_f1,
+        }.get(self.primary_metric)
+
     def to_dict(self) -> dict:
         return {
             "metric_version": self.metric_version,
             "primary_metric": self.primary_metric,
-            "primary_value": self.macro_f1,
+            "primary_value": self.primary_value,
             "partition": self.partition,
             "standard_version": self.standard_version,
             "label_tier": self.label_tier,
@@ -121,6 +138,7 @@ class TCMReport:
             "subject_mae": self.subject_mae,
             "subject_rmse": self.subject_rmse,
             "macro_f1": self.macro_f1,
+            "macro_ap": self.macro_ap,
             "n_undefined_f1": self.n_undefined_f1,
             "per_dim": self.per_dim,
             "provenance": self.provenance,
@@ -223,11 +241,62 @@ def _macro_f1_from_tensors(pred_bin, target, mask) -> tuple[float | None, int]:
     return sum(scores) / len(scores), undefined
 
 
+def _average_precision_from_tensors(proba, target, mask) -> float | None:
+    """Macro average precision over the FIXED observed-dimension denominator.
+
+    AP is the area under the precision-recall curve as sum_k (R_k - R_{k-1}) *
+    P_k over DISTINCT scores, which is invariant to row order and to the
+    probability scale (only the ranking matters). A dimension with no positive
+    label has no PR curve and contributes 0.0, exactly as an undefined F1 does
+    — the denominator is the count of observed dimensions either way, so a
+    candidate cannot be rewarded for ignoring a rare dimension.
+
+    Unlike F1 at a fixed threshold, this does not depend on where the model
+    puts its probability mass: a calibrated model and an overconfident one with
+    the same ranking score the same.
+    """
+    if proba is None or target is None or mask is None:
+        return None
+    mask = mask.bool()
+    scores: list[float] = []
+    for d in range(target.shape[1]):
+        obs = mask[:, d]
+        if not bool(obs.any()):
+            continue
+        t = target[obs, d] > 0.5
+        s = proba[obs, d]
+        n_pos = int(t.sum())
+        if n_pos == 0:
+            scores.append(0.0)
+            continue
+        order = torch.argsort(s, descending=True)
+        scores_sorted = s[order]
+        hits = t[order].float()
+        cum = torch.cumsum(hits, dim=0)
+        n = hits.numel()
+        # one operating point per distinct score (keep the last index of each
+        # run): the mean-precision-at-positives estimator breaks ties by row
+        # order, which would rank a constant scorer by row layout
+        cut = torch.ones(n, dtype=torch.bool)
+        if n > 1:
+            cut[:-1] = scores_sorted[:-1] != scores_sorted[1:]
+        positions = torch.arange(1, n + 1, dtype=torch.float32)
+        tp = cum[cut]
+        fp = (positions - cum)[cut]
+        precision = tp / (tp + fp)
+        recall = tp / float(n_pos)
+        prev = torch.cat([torch.zeros(1), recall[:-1]])
+        scores.append(float(((recall - prev) * precision).sum()))
+    if not scores:
+        return None
+    return sum(scores) / len(scores)
+
+
 class TCMTrustedEvaluator:
     """Read-only scorer over a frozen manifest; the single primary metric is
-    category_probs/macro_f1 (the deliverable metric — see PRIMARY_METRIC for
-    why neither MAE nor Brier is used for selection). AutoResearch must
-    optimize against this and never touch holdout labels (#40/#45)."""
+    category_probs/macro_ap (threshold-free — see PRIMARY_METRIC for why MAE,
+    Brier and F1@0.5 were each rejected). AutoResearch must optimize against
+    this and never touch holdout labels (#40/#45)."""
 
     def __init__(
         self,
@@ -263,6 +332,7 @@ class TCMTrustedEvaluator:
         all_sq: dict[str, list[float]] = {}
         all_abs: dict[str, list[float]] = {}
         all_pred: list = []
+        all_proba: list = []
         target_tensor = mask_tensor = None
         subject_ids: list[str] = []
         model_type = type(model).__name__
@@ -288,6 +358,7 @@ class TCMTrustedEvaluator:
                 all_sq.setdefault(s, []).extend((diffs**2).tolist())
                 all_abs.setdefault(s, []).extend(diffs.abs().tolist())
             all_pred.append((pred.detach() >= 0.5).to(target.dtype))
+            all_proba.append(pred.detach())
             if target_tensor is None:
                 target_tensor, mask_tensor = target.detach(), mask.detach()
                 subject_ids = list(subj)
@@ -305,6 +376,10 @@ class TCMTrustedEvaluator:
             )
             if target_tensor is not None
             else (None, 0)
+        )
+        macro_ap = _average_precision_from_tensors(
+            torch.cat(all_proba) if all_proba else None,
+            target_tensor, mask_tensor,
         )
         subject_mae = (
             sum(sum(v) / len(v) for v in all_abs.values()) / n_labeled
@@ -345,6 +420,7 @@ class TCMTrustedEvaluator:
             subject_mae=subject_mae,
             subject_rmse=subject_rmse,
             macro_f1=macro_f1,
+            macro_ap=macro_ap,
             n_undefined_f1=n_undefined_f1,
             per_dim=per_dim,
             provenance={

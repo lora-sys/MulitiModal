@@ -23,7 +23,7 @@ import numpy as np
 import torch
 
 from core.models import default_tcm_model
-from data.mendeley import SubjectRecord
+from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord
 from data.real_split import (
     build_real_manifest,
     derive_classification_targets,
@@ -59,13 +59,12 @@ def fake_records(n=30, seed=7, qc_row=None):
         records.append(
             SubjectRecord(
                 subject_index=i,
+                # built from the audited contract, never from a restated copy
+                # of the group layout: three fixtures each hardcoded their own
+                # lengths and none of them noticed 15 columns going unread
                 features={
-                    "demographics": [float(rng.randint(20, 70)), float(i % 2)],
-                    "anthropometrics": [float(rng.randint(150, 190)),
-                                        float(rng.randint(45, 95)), 22.5],
-                    "meridian": [rng.random() for _ in range(3)],
-                    "pulse_wave": [rng.random() for _ in range(2)],
-                    "tongue": [rng.random()],
+                    name: [rng.random() for _ in range(size)]
+                    for name, size in FEATURE_GROUP_SIZES.items()
                 },
                 scores=scores,
                 score_mask=[s is not None for s in scores],
@@ -188,17 +187,27 @@ def e08_subject_metrics_fail_closed():
 def e09_degenerate_columns_zeroed():
     records = fake_records(n=20)
     for r in records:
-        r.features["tongue"] = [1.0]  # constant column -> degenerate
+        r.features["tongue"] = [1.0] * FEATURE_GROUP_SIZES["tongue"]  # constant -> degenerate
     manifest = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
-    exam = manifest["scaler"]["exam_features"]  # tongue is its last column
-    assert exam["degenerate"][-1], "constant tongue column must be marked degenerate"
-    assert not any(exam["degenerate"][:-1])
+    exam = manifest["scaler"]["exam_features"]
+    # offsets from the contract, not from "tongue is one column wide": the
+    # tongue group became 12 wide when the colour channel was added, and the
+    # old slice assumption then failed for the right reason on the wrong range
+    offset = sum(
+        FEATURE_GROUP_SIZES[g]
+        for g in manifest["modalities"]["exam_features"]["feature_groups"]
+        if g != "tongue"
+    )
+    assert all(exam["degenerate"][offset:]), "constant tongue columns must be degenerate"
+    assert not any(exam["degenerate"][:offset]), "unrelated columns marked degenerate"
     provider = RealBatchProvider(manifest, records, "dev", batch_size=64)
     item = next(iter(provider))
     assert torch.count_nonzero(item.batch.features["exam_features"][:, -1]) == 0
     # a real value in a degenerate column must still be zeroed
     dev_subject = manifest["split"]["dev"][0]
-    records[manifest["subject_row_by_id"][dev_subject]].features["tongue"] = [99.0]
+    records[manifest["subject_row_by_id"][dev_subject]].features["tongue"] = (
+        [99.0] * FEATURE_GROUP_SIZES["tongue"]
+    )
     provider = RealBatchProvider(manifest, records, "dev", batch_size=64)
     item = next(iter(provider))
     position = item.subject_ids.index(dev_subject)
@@ -971,37 +980,71 @@ def _flatten_numbers(obj) -> list[float]:
 
 @check
 def e63_selection_metric_tracks_the_deliverable():
-    # Audits A-06 + the v6 run together: the AutoResearch objective must rank
-    # models the way the deliverable ranks them. subject_mae (L1) is minimised
-    # by the median — 0 for a binary label under 50% prevalence — so a hill
-    # climb on it cannot beat an all-zero predictor; subject_rmse (Brier) is
-    # proper but its optimum for a signal-free model is the base-rate constant
-    # (measured: that champion scored dev macro-F1 0.021). The selection metric
-    # is now the reported classifier metric, maximised.
+    # Audits A-06 + the v6/v8 runs together: the AutoResearch objective must
+    # rank models the way the deliverable ranks them, and it must not measure
+    # the probability SCALE. Three rejections by measurement:
+    #   * subject_mae (L1) is minimised by the median — 0 for a binary label
+    #     under 50% prevalence — so a hill climb on it cannot beat an all-zero
+    #     predictor;
+    #   * subject_rmse (Brier) is proper but its optimum for a signal-free model
+    #     is the base-rate constant (that champion scored dev macro-F1 0.021);
+    #   * macro-F1 at a hard 0.5 threshold scores a calibrated logistic
+    #     regression at 0.215 while the SAME model at its training prevalence
+    #     scores 0.3844 — level with the neural champion's 0.3827. Selecting on
+    #     it was partly selecting for overconfidence.
+    # Average precision depends only on the ranking, so no operating point is
+    # fixed in order to rank candidates.
     import numpy as np
+    import torch
 
-    from runtime.baselines import _per_dim_f1, macro_f1
-    from runtime.tcm_eval import PRIMARY_DIRECTION, PRIMARY_METRIC, TCMReport
+    from runtime.baselines import _per_dim_ap, average_precision, macro_average_precision
+    from runtime.tcm_eval import (
+        PRIMARY_DIRECTION,
+        PRIMARY_METRIC,
+        TCMReport,
+        _average_precision_from_tensors,
+    )
 
-    assert PRIMARY_METRIC == "category_probs/macro_f1", PRIMARY_METRIC
+    assert PRIMARY_METRIC == "category_probs/macro_ap", PRIMARY_METRIC
     assert PRIMARY_DIRECTION == "max", PRIMARY_DIRECTION
     report = TCMReport(
         metric_version="t", primary_metric=PRIMARY_METRIC, partition="dev",
         standard_version="s", label_tier="RULE", smoke_only=False,
         n_subjects=8, n_labeled=8, subject_mae=0.3, subject_rmse=0.5,
-        macro_f1=0.42,
+        macro_ap=0.42,
     )
-    assert report.to_dict()["primary_value"] == 0.42, "primary_value is not F1"
+    assert report.to_dict()["primary_value"] == 0.42, "primary_value is not the AP"
 
-    y = np.zeros((4, 9))                        # nine canonical dims
+    # the degenerate "never predicts positive" classifier must score 0, and the
+    # perfect ranking must score 1 — a metric that cannot tell them apart is
+    # not usable as a selection objective
+    y = np.zeros((4, 9))
     y[:, 0] = [1.0, 0.0, 1.0, 0.0]
     mask = np.ones_like(y, dtype=bool)
-    never_positive = np.zeros_like(y)          # the degenerate classifier
-    real = y.copy()                            # a classifier with actual skill
-    f1_degenerate = macro_f1(_per_dim_f1(y, never_positive, mask))
-    f1_real = macro_f1(_per_dim_f1(y, real, mask))
-    assert f1_degenerate == 0.0, f1_degenerate
-    assert f1_real is not None and f1_real > f1_degenerate, (f1_real, f1_degenerate)
+    never = np.zeros_like(y)
+    perfect = y.copy()
+    # a constant scorer scores the positive prevalence of the only labeled
+    # dimension (2 of 4) and the other eight observed-but-empty dims count 0,
+    # exactly as an undefined F1 does — so 0.5/9, and crucially the SAME value
+    # no matter how the rows are ordered
+    assert macro_average_precision(_per_dim_ap(y, never, mask)) == 0.5 / 9
+    shuffled = np.array([2, 0, 3, 1])
+    assert macro_average_precision(_per_dim_ap(y[shuffled], never[shuffled], mask)) \
+        == 0.5 / 9, "AP must not depend on row order"
+    assert macro_average_precision(_per_dim_ap(y, perfect, mask)) == 1.0 / 9
+    # probabilities, not thresholded labels: a ranking with the right order but
+    # a compressed scale must score the same as the raw labels
+    scaled = y * 0.01 + 0.001
+    assert average_precision(scaled[:, 0][mask[:, 0]], y[:, 0][mask[:, 0]]) == 1.0
+
+    # the torch implementation inside the trusted evaluator must agree with the
+    # numpy one used by the baselines, or the loop and the report rank differently
+    torch_proba = torch.tensor(scaled, dtype=torch.float32)
+    torch_y = torch.tensor(y, dtype=torch.float32)
+    torch_mask = torch.tensor(mask)
+    left = _average_precision_from_tensors(torch_proba, torch_y, torch_mask)
+    right = macro_average_precision(_per_dim_ap(y, scaled, mask))
+    assert abs(left - right) < 1e-9, (left, right)
 
 
 @check
@@ -1216,7 +1259,7 @@ def e72_cross_validation_never_reads_the_holdout():
 
         def evaluate(self, model, provider, partition="dev"):
             class _Report:
-                macro_f1 = 0.5
+                primary_value = 0.5
 
             return _Report()
 
@@ -1281,7 +1324,7 @@ def e72_cross_validation_never_reads_the_holdout():
 
 @check
 def e73_pool_refit_moves_dev_into_train_and_keeps_the_holdout():
-    from data.real_split import build_real_manifest, pool_manifest
+    from data.real_split import pool_manifest
 
     records = fake_records()
     base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data

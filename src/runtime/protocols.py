@@ -164,11 +164,13 @@ def cross_val_candidate(
             trainer.fit(provider)  # no eval provider: nothing may steer fitting
             val = RealBatchProvider(fold, records, "dev", batch_size=64)
             evaluator = TCMTrustedEvaluator(real_eval_manifest(fold))
-            per_fold.append(evaluator.evaluate(model, val, partition="dev").macro_f1)
+            per_fold.append(
+                evaluator.evaluate(model, val, partition="dev").primary_value
+            )
 
     scored = [v for v in per_fold if v is not None]
     if not scored:
-        raise ValueError("no fold produced a scoreable macro-F1")
+        raise ValueError("no fold produced a scoreable primary metric")
     mean = sum(scored) / len(scored)
     variance = sum((v - mean) ** 2 for v in scored) / len(scored)
     std = variance ** 0.5
