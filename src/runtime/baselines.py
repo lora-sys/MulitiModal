@@ -163,6 +163,22 @@ def subject_mae_from_proba(
     return float(per_subject[rows].mean())
 
 
+def subject_rmse_from_proba(
+    proba: np.ndarray, y: np.ndarray, mask: np.ndarray
+) -> float | None:
+    """Subject-level RMSE (= Brier score up to a monotone root), the same
+    aggregation as TCMTrustedEvaluator. This is the AutoResearch selection
+    metric; it is a proper scoring rule, so a base-rate constant does not
+    automatically beat a real model the way it does under L1."""
+    obs = mask.astype(bool)
+    rows = obs.any(axis=1)
+    if not rows.any():
+        return None
+    sq = ((proba - y) ** 2) * obs
+    per_subject = sq.sum(axis=1) / np.maximum(obs.sum(axis=1), 1)
+    return float(np.sqrt(per_subject[rows].mean()))
+
+
 def _proba_matrix(model, X: np.ndarray, n_dims: int) -> np.ndarray:
     """Column of positive-class probabilities per dim from a
     MultiOutputClassifier (its predict_proba returns per-output arrays)."""
@@ -215,6 +231,7 @@ def evaluate_baselines(manifest: dict, records: list) -> dict:
                     "macro_f1": macro_f1(per_dim),
                     "n_undefined_f1": count_undefined_f1(per_dim),
                     "subject_mae": subject_mae_from_proba(proba, y, mask),
+                    "subject_rmse": subject_rmse_from_proba(proba, y, mask),
                 }
             result[name] = entry
     return result
@@ -249,5 +266,6 @@ def evaluate_neural(model, manifest: dict, records: list, batch_size: int = 64) 
             "macro_f1": macro_f1(per_dim),
             "n_undefined_f1": count_undefined_f1(per_dim),
             "subject_mae": subject_mae_from_proba(proba, y, mask),
+            "subject_rmse": subject_rmse_from_proba(proba, y, mask),
         }
     return out

@@ -293,11 +293,14 @@ def e15_report_tolerates_none():
                            "primary_value": None}],
         },
         "neural_evaluation": {"dev": {"macro_f1": None, "n_undefined_f1": 0,
-                                      "subject_mae": None, "per_dim": {}},
+                                      "subject_mae": None, "subject_rmse": None,
+                                      "per_dim": {}},
                               "holdout": {"macro_f1": None, "n_undefined_f1": 0,
-                                          "subject_mae": None, "per_dim": {}}},
+                                          "subject_mae": None,
+                                          "subject_rmse": None, "per_dim": {}}},
         "baselines": {k: {"dev": {}, "holdout": {"macro_f1": None,
-                                                 "subject_mae": None}}
+                                                 "subject_mae": None,
+                                                 "subject_rmse": None}}
                       for k in ("dummy_majority", "bmi_only_logistic",
                                 "feature_logistic")},
         "regression_task": {"manifest_sha256": "0", "per_dim": {}},
@@ -950,6 +953,123 @@ def _flatten_numbers(obj) -> list[float]:
 
 
 @check
+def e63_selection_metric_tracks_the_deliverable():
+    # Audits A-06 + the v6 run together: the AutoResearch objective must rank
+    # models the way the deliverable ranks them. subject_mae (L1) is minimised
+    # by the median — 0 for a binary label under 50% prevalence — so a hill
+    # climb on it cannot beat an all-zero predictor; subject_rmse (Brier) is
+    # proper but its optimum for a signal-free model is the base-rate constant
+    # (measured: that champion scored dev macro-F1 0.021). The selection metric
+    # is now the reported classifier metric, maximised.
+    import numpy as np
+
+    from runtime.baselines import _per_dim_f1, macro_f1
+    from runtime.tcm_eval import PRIMARY_DIRECTION, PRIMARY_METRIC, TCMReport
+
+    assert PRIMARY_METRIC == "category_probs/macro_f1", PRIMARY_METRIC
+    assert PRIMARY_DIRECTION == "max", PRIMARY_DIRECTION
+    report = TCMReport(
+        metric_version="t", primary_metric=PRIMARY_METRIC, partition="dev",
+        standard_version="s", label_tier="RULE", smoke_only=False,
+        n_subjects=8, n_labeled=8, subject_mae=0.3, subject_rmse=0.5,
+        macro_f1=0.42,
+    )
+    assert report.to_dict()["primary_value"] == 0.42, "primary_value is not F1"
+
+    y = np.zeros((4, 9))                        # nine canonical dims
+    y[:, 0] = [1.0, 0.0, 1.0, 0.0]
+    mask = np.ones_like(y, dtype=bool)
+    never_positive = np.zeros_like(y)          # the degenerate classifier
+    real = y.copy()                            # a classifier with actual skill
+    f1_degenerate = macro_f1(_per_dim_f1(y, never_positive, mask))
+    f1_real = macro_f1(_per_dim_f1(y, real, mask))
+    assert f1_degenerate == 0.0, f1_degenerate
+    assert f1_real is not None and f1_real > f1_degenerate, (f1_real, f1_degenerate)
+
+
+@check
+def e65_the_two_f1_implementations_agree():
+    # The selection metric is computed by the trusted evaluator (tensors), the
+    # published metric by the report script (numpy). If they ever diverge, the
+    # loop optimises something other than what the report prints.
+    import numpy as np
+    import torch
+
+    from runtime.baselines import _per_dim_f1, macro_f1
+    from runtime.tcm_eval import _macro_f1_from_tensors
+
+    rng = np.random.default_rng(0)
+    for _ in range(5):
+        y = (rng.random((12, 9)) < 0.3).astype(float)
+        pred = (rng.random((12, 9)) < 0.35).astype(float)
+        mask = rng.random((12, 9)) < 0.9
+        mask[0, :] = True  # every dim observed at least once
+        per_dim = _per_dim_f1(y, pred, mask)
+        expected = macro_f1(per_dim)
+        got, undefined = _macro_f1_from_tensors(
+            torch.tensor(pred), torch.tensor(y), torch.tensor(mask)
+        )
+        assert got is not None and abs(expected - got) < 1e-12, (expected, got)
+        assert undefined == sum(
+            1 for v in per_dim.values() if v["n_observed"] > 0 and v["f1"] is None
+        ), (undefined, per_dim)
+
+
+@check
+def e64_batch_real_data_run_refuses_the_deterministic_stub():
+    # Audit A-03: `research --data-manifest` silently replayed a human-written
+    # plan from DeterministicStubProvider, so a batch run was indistinguishable
+    # from agent-driven research. It must refuse, and when explicitly allowed
+    # every round must name the stub as proposer.
+    import contextlib
+    import io
+
+    import runtime.harness as harness_mod
+    from runtime.cli import main
+
+    original = harness_mod.default_real_tcm_runspec
+    harness_mod.default_real_tcm_runspec = lambda *a, **k: _fake_real_runspec()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                rc = main(["research", "--profile", "tcm", "--rounds", "1",
+                           "--data-manifest", "m.json", "--dataset", "d.xls",
+                           "--out", tmp])
+            assert rc == 2, buffer.getvalue()
+            assert "research-step" in buffer.getvalue(), buffer.getvalue()
+            assert not (Path(tmp) / "manifest.jsonl").exists(), \
+                "a refused run still wrote a manifest"
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                rc = main(["research", "--profile", "tcm", "--rounds", "1",
+                           "--data-manifest", "m.json", "--dataset", "d.xls",
+                           "--out", tmp, "--allow-deterministic-stub"])
+            assert rc == 0, buffer.getvalue()
+            entries = [
+                json.loads(line)
+                for line in (Path(tmp) / "manifest.jsonl").read_text().splitlines()
+                if line.strip()
+            ]
+            assert entries, "no manifest written for the allowed stub run"
+            for entry in entries:
+                assert entry.get("proposer") == "deterministic-stub", entry
+                assert entry.get("context_sha256"), entry
+    finally:
+        harness_mod.default_real_tcm_runspec = original
+
+
+def _fake_real_runspec() -> dict:
+    """Synthetic runspec so the guard can be exercised without a dataset; the
+    CLI refuses on --data-manifest regardless of the runspec's data mode."""
+    from runtime.harness import default_tcm_runspec
+
+    runspec = default_tcm_runspec(rounds=1, timeout_s=120.0)
+    runspec["budget"]["max_candidates"] = 1
+    return runspec
+
+
+@check
 def e62_committed_docs_check_bites_and_does_not_false_positive():
     # The first cut of E60 scanned every "N 宽" in the doc, so the sentence
     # narrating the v4 defect ("called a 32-wide champion 64-wide") tripped
@@ -1004,6 +1124,15 @@ def check_committed_docs_numbers(
         return problems
     summary = json.loads(Path(summary_path).read_text())
     supported = _flatten_numbers(summary)
+    # a cross-run narrative legitimately cites earlier delivered runs; those
+    # numbers must still be checkable, so every sibling artifact summary counts
+    root = Path(__file__).resolve().parent.parent / "artifacts"
+    if root.exists():
+        for other in sorted(root.glob("*/summary.json")):
+            try:
+                supported.extend(_flatten_numbers(json.loads(other.read_text())))
+            except (OSError, json.JSONDecodeError):
+                continue
     text = docs.read_text()
     import re
 
@@ -1051,6 +1180,43 @@ def check_committed_docs_numbers(
     return problems
 
 
+def check_committed_doc_availability(
+    summary_path: str | None, docs_path: str | Path | None = None
+) -> list[str]:
+    """E69: the committed report's modality-availability fractions must match
+    summary.availability. The v5 audit found hand-edited numbers (179/191,
+    38/41, 39/42) that disagreed with the artifact (175/191, 40/41, 41/42);
+    E59 only guarded 0.x metrics, so nothing caught it."""
+    problems: list[str] = []
+    if not summary_path:
+        return problems
+    docs = Path(docs_path) if docs_path else (
+        Path(__file__).resolve().parent.parent / "docs/reports/tcm-50-real-training.md"
+    )
+    if not docs.exists():
+        return problems
+    avail = json.loads(Path(summary_path).read_text()).get("availability") or {}
+    known = {(int(v["n_available"]), int(v["n_rows"])) for v in avail.values()}
+    if not known:
+        return problems
+    import re
+
+    # only modality lines carry availability fractions; "191 / 41 / 42" split
+    # sizes and other a/b prose must not be read as availability
+    text = "\n".join(
+        line for line in docs.read_text().splitlines()
+        if "body_features" in line or "exam_features" in line
+    )
+    for n_available, n_rows in re.findall(r"(\d+)\s*/\s*(\d+)", text):
+        pair = (int(n_available), int(n_rows))
+        if pair not in known:
+            problems.append(
+                f"E69: committed report states availability {n_available}/{n_rows},"
+                " which matches no summary.availability entry (stale or invented)"
+            )
+    return problems
+
+
 def _flatten_strings(obj) -> list[str]:
     out: list[str] = []
     if isinstance(obj, str):
@@ -1062,6 +1228,42 @@ def _flatten_strings(obj) -> list[str]:
         for value in obj:
             out.extend(_flatten_strings(value))
     return out
+
+
+def check_delivered_run_bundle(summary_path: str | None) -> list[str]:
+    """E70: when a delivery ships `run-bundle/`, its champion weights must hash
+    to the champion artifact recorded in summary.json — otherwise the artifact
+    a third party can re-run is not the artifact that was scored. Absent bundle
+    is not an error (only v7+ ships one)."""
+    problems: list[str] = []
+    if not summary_path:
+        return problems
+    summary_dir = Path(summary_path).resolve().parent
+    bundle = summary_dir / "run-bundle"
+    if not bundle.exists():
+        return problems
+    summary = json.loads(Path(summary_path).read_text())
+    expected = (summary.get("autoresearch", {}).get("champion") or {}).get(
+        "artifact_sha256"
+    )
+    if not expected:
+        return problems
+    weights = bundle / "champion" / "weights.pt"
+    if not weights.exists():
+        problems.append("E70: run-bundle has no champion/weights.pt")
+        return problems
+    import hashlib
+
+    actual = hashlib.sha256(weights.read_bytes()).hexdigest()
+    if actual != expected:
+        problems.append(
+            f"E70: bundled champion weights hash to {actual[:16]}… but the "
+            f"scored champion is {expected[:16]}…"
+        )
+    manifest = bundle / "manifest.jsonl"
+    if not manifest.exists():
+        problems.append("E70: run-bundle has no manifest.jsonl")
+    return problems
 
 
 def check_summary_artifacts(summary_path: str | None, report_path: str | None) -> list[str]:
@@ -1092,6 +1294,8 @@ def check_summary_artifacts(summary_path: str | None, report_path: str | None) -
                     f"{missing} (who proposed it / what state it saw)"
                 )
         problems.extend(check_committed_docs_numbers(summary_path))
+        problems.extend(check_committed_doc_availability(summary_path))
+        problems.extend(check_delivered_run_bundle(summary_path))
     if report_path:
         text = Path(report_path).read_text()
         for token, label in (
@@ -1100,6 +1304,9 @@ def check_summary_artifacts(summary_path: str | None, report_path: str | None) -
             ("winner", "E25: winner's curse not disclosed"),
             ("单 seed", "E25: single-seed caveat not disclosed"),
             ("v2", "E25: holdout re-unlock disclosure missing"),
+            ("统计强度", "E66: small-sample significance caveat missing"),
+            ("自报归属", "E67: provenance strength (operator-reported) not disclosed"),
+            ("逐维失败维度", "E68: per-dimension total misses not named"),
         ):
             if token not in text:
                 problems.append(label)

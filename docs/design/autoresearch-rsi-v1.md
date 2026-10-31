@@ -42,7 +42,7 @@
 | `prepare.py`（数据/评估只读） | `SyntheticBatchProvider` / 真实数据契约（#37）、标签（#38）、`EvalManifest`、split | **否** | #45 硬规则 9；#27/#29；#40 冻结 manifest |
 | `train.py`（唯一可改） | 模型构建 kwargs + `TrainerConfig`（epochs/lr/grad_clip/…）+ `TCMConstitutionModel` 架构超参 | **是（白名单内）** | #45；patch 静态检查拒绝越界 |
 | `program.md`（人类迭代） | `docs/design/autoresearch-rsi-v1.md` + #45 的 harness 配置 | **否（本阶段）** | Agent 不改自己的指令 |
-| 上游 evaluator（evaluate_bpb/val_bpb） | `TCMTrustedEvaluator`（主指标 `category_probs/subject_mae`）+ `trusted_score()`，隔离运行 | **否** | #40；#47 |
+| 上游 evaluator（evaluate_bpb/val_bpb） | `TCMTrustedEvaluator`（主指标 `category_probs/subject_rmse`，proper scoring rule）+ `trusted_score()`，隔离运行 | **否** | #40；#47 |
 | 上游 git 分支 advance/reset | `KEEP`→保留 artifact+config；`REVERT`→丢弃，回到 best | 由 harness 执行 | RunManifest 记录 |
 | 上游 run.log / progress 表 | `RunManifest`（JSONL，见 §6） | **否**（append-only，harness 写） | 审计要求 |
 
@@ -63,7 +63,7 @@ frozen:
   split_hash: manifest:synthetic-manifest-v0   # EvalManifest.version + 内容 hash
   evaluator: runtime.tcm_eval.TCMTrustedEvaluator
   metric_version: tcm-eval-v0
-  primary_metric: category_probs/subject_mae
+  primary_metric: category_probs/subject_rmse
 seed: 0
 budget:
   max_candidates: 3            # V1 默认 3 candidates/profile
@@ -109,7 +109,7 @@ propose(intent)          # Agent 声明本轮假设（自然语言 + 目标键�
                          #    split/holdout/standard 等符号不得出现在 diff）；③ 可运行性 dry-run
   → train_candidate()    # #49 已预留的稳定入口；失败/超时 → REVERT-as-crash
   → trusted_score()      # 隔离进程/容器内对 artifact 打分；Agent 进程无写权限
-  → compare(best)        # 主指标 subject_mae 严格更小才 KEEP；平/差/崩溃 → REVERT
+  → compare(best)        # 主指标 subject_rmse 严格更小才 KEEP；平/差/崩溃 → REVERT
   → record(RunManifest)  # append-only 落盘
   → keep_or_revert()     # harness 移动 artifact 指针 / 丢弃
 ```
@@ -124,7 +124,7 @@ JSONL，每轮一行，append-only，harness 拥有写权限（Agent 目录只�
 {"run_id": "tcm-0001", "parent_run": null, "decision": "KEEP",
  "intent": "wider fusion dim", "patch_summary": {"model.fusion_dim": 128},
  "artifact_dir": "runs/autoresearch/tcm-0001", "artifact_sha256": "…",
- "primary_metric": {"name": "category_probs/subject_mae", "value": 0.4931},
+ "primary_metric": {"name": "category_probs/subject_rmse", "value": 0.4931},
  "best_so_far": 0.4931, "seed": 0, "budget_used_s": 41.2,
  "status": "completed", "smoke_only": true,
  "frozen_hashes": {"split_hash": "…", "evaluator": "runtime.tcm_eval.TCMTrustedEvaluator",

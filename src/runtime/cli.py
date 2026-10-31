@@ -126,6 +126,20 @@ def cmd_research(args: argparse.Namespace) -> int:
     runspec["seed"] = args.seed
     provider = None
     if args.data_manifest:
+        # A real-data batch run replayed from a fixed plan is NOT AutoResearch:
+        # the plan is written by a human and every round would look like an
+        # agent proposal. Refuse unless the caller says so explicitly, and
+        # record the stub as proposer when they do (audit A-03).
+        if not args.allow_deterministic_stub:
+            print(json.dumps({
+                "ok": False,
+                "error": "real-data autoResearch requires a real agent: drive "
+                         "rounds with `research-step --proposer <id>` and "
+                         "`--proposal-file`; pass --allow-deterministic-stub "
+                         "only for engineering smoke runs (entries are then "
+                         "labelled proposer=deterministic-stub)",
+            }))
+            return 2
         from runtime.agent import DeterministicStubProvider
 
         provider = DeterministicStubProvider(plan=REAL_TCM_PLAN)
@@ -303,6 +317,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="frozen real-data manifest (#50); enables real training mode")
     p.add_argument("--dataset", default=None,
                    help="audited dataset file path (with --data-manifest)")
+    p.add_argument("--allow-deterministic-stub", action="store_true",
+                   help="permit the offline fixed plan on real data (engineering "
+                        "smoke only; rounds are labelled proposer=deterministic-stub)")
     p.set_defaults(func=cmd_research)
 
     p = sub.add_parser("research-step",

@@ -60,11 +60,16 @@ class AgentProvider(Protocol):
 class DeterministicStubProvider:
     """Offline deterministic provider: replays a fixed candidate plan.
 
+    `proposer_id` is recorded on every manifest entry so a batch run can never
+    be mistaken for agent-driven research (audit A-03).
+
     Plan position derives from the round_index the harness passes (equal to
     the number of recorded manifest entries), so a resumed run continues the
     plan where it left off instead of replaying already-tried candidates
     (review R-02). Tests inject custom plans for REVERT/rejection cases.
     """
+
+    proposer_id = "deterministic-stub"
 
     def __init__(self, plan: list[tuple[str, dict]] | None = None) -> None:
         self.plan = plan if plan is not None else [
@@ -90,6 +95,7 @@ class FixedProposalProvider:
     validation, frozen seeds, subprocess isolation, append-only manifest).
     """
 
+    proposer_id = "fixed-proposal"
     proposal: Proposal | None
 
     def propose(self, round_index: int, context: dict) -> Proposal | None:
@@ -131,8 +137,9 @@ class LLMProposalProvider:
     checks before any training runs.
     """
 
-    def __init__(self, backend) -> None:
+    def __init__(self, backend, proposer_id: str = "llm-proposal") -> None:
         self.backend = backend
+        self.proposer_id = proposer_id
 
     def propose(self, round_index: int, context: dict) -> Proposal | None:
         raw = self.backend(build_research_prompt(context))

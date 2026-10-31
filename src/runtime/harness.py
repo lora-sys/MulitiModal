@@ -32,7 +32,7 @@ from .agent import (
 from .manifest import MANIFEST_FILE, RunManifestStore
 
 SRC_DIR = Path(__file__).resolve().parents[1]
-PRIMARY_METRIC = "primary_value"  # TCMTrustedEvaluator report: subject_mae
+PRIMARY_METRIC = "primary_value"  # TCMTrustedEvaluator report: macro_f1
 TCM_ONLY_MESSAGE = (
     "physio profile is interface-only in #45 milestone 1 (TCM_ONLY); "
     "physio data/labels are NOT_AVAILABLE until #37/#42"
@@ -64,7 +64,8 @@ def default_real_tcm_runspec(
             "split_hash": f"manifest:{manifest['manifest_sha256'][:16]}",
             "evaluator": "runtime.tcm_eval.TCMTrustedEvaluator",
             "metric_version": "tcm-eval-v0",
-            "primary_metric": "category_probs/subject_mae",
+            "primary_metric": "category_probs/macro_f1",
+            "primary_direction": "max",
         },
         "data": {
             "manifest_path": str(manifest_path),
@@ -130,7 +131,8 @@ def default_tcm_runspec(rounds: int = 3, timeout_s: float = 300.0) -> dict:
             "split_hash": "manifest:trusted-eval-v0",
             "evaluator": "runtime.tcm_eval.TCMTrustedEvaluator",
             "metric_version": "tcm-eval-v0",
-            "primary_metric": "category_probs/subject_mae",
+            "primary_metric": "category_probs/macro_f1",
+            "primary_direction": "max",
         },
         "seed": 0,
         "budget": {
@@ -388,7 +390,15 @@ class AutoResearchHarness:
 
         champion = self.store.champion()
         previous_best = champion.get("best_so_far") if champion else None
-        keep = previous_best is None or value < previous_best
+        # the frozen runspec declares whether the primary metric is minimised
+        # (a loss) or maximised (a score); KEEP requires a STRICT improvement
+        direction = self.runspec["frozen"].get("primary_direction", "min")
+        if previous_best is None:
+            keep = True
+        elif direction == "max":
+            keep = value > previous_best
+        else:
+            keep = value < previous_best
         entry.update(
             decision="KEEP" if keep else "REVERT",
             status="completed",
@@ -521,7 +531,17 @@ class AutoResearchHarness:
                 plan_exhausted = True
                 break
             decisions.append(self._run_candidate(
-                context["round_index"], proposal, timeout_s
+                context["round_index"], proposal, timeout_s,
+                provenance={
+                    # every round names its proposer, even the offline stub:
+                    # otherwise a batch run is indistinguishable from agent
+                    # research in the manifest (audit A-01/A-03)
+                    "proposer": getattr(
+                        self.provider, "proposer_id",
+                        f"provider:{type(self.provider).__name__}",
+                    ),
+                    "context_sha256": context_digest(context),
+                },
             ))
 
         final = self.store.champion()
