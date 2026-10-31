@@ -13,6 +13,7 @@ symbols are rejected before any training happens.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -78,6 +79,81 @@ class DeterministicStubProvider:
         intent, patch = self.plan[self.calls]
         self.calls += 1
         return Proposal(intent=intent, config_patch=patch)
+
+
+@dataclass
+class FixedProposalProvider:
+    """Yields one externally supplied proposal, then None.
+
+    The research-step CLI driver uses this: the proposal comes from a real
+    agent out-of-process, while the harness keeps every guarantee (scope
+    validation, frozen seeds, subprocess isolation, append-only manifest).
+    """
+
+    proposal: Proposal | None
+
+    def propose(self, round_index: int, context: dict) -> Proposal | None:
+        proposal, self.proposal = self.proposal, None
+        return proposal
+
+
+def build_research_prompt(context: dict) -> str:
+    """Render the research state for an LLM agent (#45 editable scope)."""
+    return (
+        "You are the AutoResearch agent optimizing a TCM constitution model. "
+        "The research state is given below as JSON. Propose ONE next "
+        "candidate by changing ONLY keys listed in editable_scope "
+        "(model/trainer hyperparameters). Target: lower dev subject MAE. "
+        "Respond with STRICT JSON of shape "
+        '{"intent": "<one line>", "config_patch": {"<scope key>": <value>}} '
+        '— or {"intent": "STOP", "config_patch": {}} if the budget should '
+        "stop early. Keep changes small and targeted; explain the change in "
+        "intent.\n\nRESEARCH STATE:\n" + json.dumps(context, ensure_ascii=False)
+    )
+
+
+def _extract_json(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:]
+    return text.strip()
+
+
+class LLMProposalProvider:
+    """AgentProvider backed by any LLM completion callable.
+
+    `backend` receives the research prompt and returns raw text; the reply
+    must be strict JSON with `intent` and `config_patch`. The provider only
+    emits bounded config patches — no source patches — so the untrusted
+    surface stays inside the scope-validated JSON the harness already
+    checks before any training runs.
+    """
+
+    def __init__(self, backend) -> None:
+        self.backend = backend
+
+    def propose(self, round_index: int, context: dict) -> Proposal | None:
+        raw = self.backend(build_research_prompt(context))
+        try:
+            data = json.loads(_extract_json(raw))
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"agent reply is not valid JSON: {raw.strip()[:200]!r}"
+            ) from exc
+        if not isinstance(data, dict) or "intent" not in data \
+                or "config_patch" not in data:
+            raise ValueError(
+                "agent proposal must be a JSON object with 'intent' and "
+                f"'config_patch', got: {raw.strip()[:200]!r}"
+            )
+        if str(data["intent"]).strip().upper() == "STOP":
+            return None
+        patch = data["config_patch"]
+        if not isinstance(patch, dict):
+            raise ValueError("'config_patch' must be a JSON object")
+        return Proposal(intent=str(data["intent"]), config_patch=dict(patch))
 
 
 class ExternalAgentProvider:

@@ -424,6 +424,22 @@ def _fmt(value: float | None, digits: int = 3) -> str:
     return f"{value:.{digits}f}" if value is not None else "N/A"
 
 
+def agent_status_line(ar: dict) -> str:
+    """Provenance line derived from the run entries, never hardcoded."""
+    statuses = {
+        e.get("agent_status") for e in ar.get("per_round", [])
+        if e.get("agent_status")
+    }
+    if "AGENT_ISOLATION_UNVERIFIED" in statuses:
+        provider = "外部 LLM agent（patch-only，白名单校验后由 harness 执行）"
+    else:
+        provider = "确定性计划"
+    return (
+        f"- 训练模式：REAL_DATA_TRAINING（agent provider={provider}；"
+        "agent 状态 AGENT_ISOLATION_UNVERIFIED：OS/container 级隔离仍未验证）。"
+    )
+
+
 def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) -> None:
     ar = summary["autoresearch"]
     neural = summary["neural_evaluation"]
@@ -540,8 +556,7 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "",
         "## 证据状态与限制",
         "",
-        "- 训练模式：REAL_DATA_TRAINING（agent provider=确定性计划，AGENT_NOT_VERIFIED；"
-        "OS/container 隔离仍未验证，AGENT_ISOLATION_UNVERIFIED）。",
+        agent_status_line(ar),
         "- 标签为 RULE 派生类别（规则阈值 ≥40=YES；TENDENCY/NO=0；平和维 ABSTAIN）——"
         "不是作者发布的分类标签，也不是临床诊断真值。注意 CCMQ 分数粒度使有效切点"
         "随各维题数漂移（6 题维 ≈41.7、7 题维 ≈42.9、8 题维 ≈40.6）。",
@@ -627,7 +642,7 @@ def main(argv=None) -> int:
 
     per_round = [
         {**{k: e.get(k) for k in ("run_id", "intent", "decision", "status",
-                                  "artifact_sha256")},
+                                  "artifact_sha256", "agent_status")},
          "primary_value": (e.get("metrics") or {}).get("primary_value")}
         for e in entries
     ]

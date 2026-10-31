@@ -7,7 +7,11 @@ import pytest
 from runtime.agent import (
     DeterministicStubProvider,
     ExternalAgentProvider,
+    FixedProposalProvider,
+    LLMProposalProvider,
+    Proposal,
     apply_config_patch,
+    build_research_prompt,
     validate_config_patch,
     validate_source_patch,
 )
@@ -126,6 +130,95 @@ def test_external_agent_provider_refuses_unverified_isolation(tmp_path):
     assert h.agent_status == "AGENT_ISOLATION_UNVERIFIED"
 
 
+def test_run_context_carries_metrics_and_patches(tmp_path):
+    seen: list[dict] = []
+
+    class Recording:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def propose(self, round_index, context):
+            seen.append(context)
+            return self.inner.propose(round_index, context)
+
+    provider = DeterministicStubProvider(plan=[
+        ("baseline", {}),
+        ("wider model", {"model.hidden_dim": 64}),
+    ])
+    harness(tmp_path, Recording(provider), rounds=2).run()
+    second = seen[1]  # the context of round 1 must describe round 0 fully
+    assert second["round_index"] == 1
+    assert second["best_metric"] is not None
+    assert second["editable_scope"] and second["base_config"]
+    first = second["history"][0]
+    assert first["decision"] == "KEEP"
+    assert first["status"] == "completed"
+    assert first["primary_value"] == pytest.approx(second["best_metric"])
+    assert first["patch"] == {}
+
+
+def test_step_runs_exactly_one_round(tmp_path):
+    h = harness(tmp_path, rounds=2)
+    entry = h.step(Proposal(intent="baseline", config_patch={}))
+    assert entry["run_id"] == "tcm-0000"
+    assert entry["decision"] == "KEEP"
+    assert len(RunManifestStore(tmp_path / "ar" / "manifest.jsonl").load()) == 1
+    entry2 = h.step(Proposal(intent="wider", config_patch={"model.hidden_dim": 64}))
+    assert entry2["run_id"] == "tcm-0001"
+    # the step driver reports the integrated-agent mode honestly
+    assert h.mode == "AGENT_INTEGRATED"
+    assert h.agent_status == "AGENT_ISOLATION_UNVERIFIED"
+
+
+def test_step_refuses_when_budget_exhausted(tmp_path):
+    h = harness(tmp_path, rounds=1)
+    h.step(Proposal(intent="baseline", config_patch={}))
+    with pytest.raises(RuntimeError, match="budget exhausted"):
+        h.step(Proposal(intent="one more", config_patch={}))
+
+
+def test_fixed_proposal_provider_yields_once():
+    provider = FixedProposalProvider(Proposal(intent="only", config_patch={}))
+    assert provider.propose(0, {}) is not None
+    assert provider.propose(1, {}) is None
+
+
+def test_llm_proposal_provider_parses_strict_json():
+    def backend(_prompt):
+        return '```json\n{"intent": "wider", "config_patch": {"model.hidden_dim": 64}}\n```'
+
+    proposal = LLMProposalProvider(backend).propose(0, {"editable_scope": []})
+    assert proposal == Proposal(intent="wider",
+                                config_patch={"model.hidden_dim": 64})
+
+    def stop(_prompt):
+        return '{"intent": "STOP", "config_patch": {}}'
+
+    assert LLMProposalProvider(stop).propose(0, {}) is None
+
+    def garbage(_prompt):
+        return "I suggest widening the model."
+
+    with pytest.raises(ValueError, match="not valid JSON"):
+        LLMProposalProvider(garbage).propose(0, {})
+
+    def missing(_prompt):
+        return '{"intent": "no patch here"}'
+
+    with pytest.raises(ValueError, match="config_patch"):
+        LLMProposalProvider(missing).propose(0, {})
+
+
+def test_research_prompt_contains_scope_and_history():
+    prompt = build_research_prompt({
+        "editable_scope": ["model.hidden_dim"],
+        "history": [{"run_id": "tcm-0000", "primary_value": 0.4}],
+        "best_metric": 0.4,
+    })
+    assert "model.hidden_dim" in prompt
+    assert "tcm-0000" in prompt and "0.4" in prompt
+
+
 def test_source_patch_static_check_rejects_frozen_symbols():
     with pytest.raises(ValueError, match="frozen research machinery"):
         validate_source_patch("import runtime.tcm_eval\nuse holdout labels")
@@ -181,3 +274,26 @@ def test_cli_research_smoke(tmp_path, capsys):
                  "--out", str(tmp_path / "runs2")]) == 2
     refusal = json.loads(capsys.readouterr().out)
     assert refusal["ok"] is False and "TCM_ONLY" in refusal["error"]
+
+
+def test_cli_research_step_smoke(tmp_path, capsys):
+    from runtime.cli import main
+
+    out = str(tmp_path / "runs")
+    assert main(["research-step", "--profile", "tcm", "--rounds", "1",
+                 "--out", out, "--print-context"]) == 0
+    context = json.loads(capsys.readouterr().out)
+    assert context["round_index"] == 0 and context["history"] == []
+
+    proposal = tmp_path / "proposal.json"
+    proposal.write_text(json.dumps(
+        {"intent": "baseline", "config_patch": {}}))
+    assert main(["research-step", "--profile", "tcm", "--rounds", "1",
+                 "--out", out, "--proposal-file", str(proposal)]) == 0
+    entry = json.loads(capsys.readouterr().out)
+    assert entry["run_id"] == "tcm-0000"
+    assert entry["mode"] == "AGENT_INTEGRATED"
+
+    assert main(["research-step", "--profile", "tcm", "--rounds", "1",
+                 "--out", out, "--proposal-file", str(proposal)]) == 1
+    assert "budget exhausted" in json.loads(capsys.readouterr().out)["error"]

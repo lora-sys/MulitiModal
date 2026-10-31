@@ -218,15 +218,23 @@ class AutoResearchHarness:
             from data.real_split import load_real_manifest
 
             load_real_manifest(self.runspec["data"]["manifest_path"])
-        self.mode = (
-            "REAL_DATA_TRAINING" if self.real_data else "ENGINEERING_SMOKE"
-        ) if isinstance(self.provider, DeterministicStubProvider) else "AGENT_INTEGRATED"
-        self.agent_status = (
-            "AGENT_NOT_VERIFIED"
-            if isinstance(self.provider, DeterministicStubProvider)
-            else "AGENT_ISOLATION_UNVERIFIED"
+        self._external_provider = not isinstance(
+            self.provider, DeterministicStubProvider
         )
         self.smoke_only = not self.real_data
+
+    @property
+    def mode(self) -> str:
+        if self.real_data:
+            return "REAL_DATA_TRAINING"
+        return "AGENT_INTEGRATED" if self._external_provider else "ENGINEERING_SMOKE"
+
+    @property
+    def agent_status(self) -> str:
+        return (
+            "AGENT_ISOLATION_UNVERIFIED" if self._external_provider
+            else "AGENT_NOT_VERIFIED"
+        )
 
     # -- frozen-continuity ------------------------------------------------
 
@@ -253,6 +261,7 @@ class AutoResearchHarness:
             "intent": proposal.intent,
             "patch": proposal.config_patch,
             "mode": self.mode,
+            "agent_status": self.agent_status,
             "smoke_only": self.smoke_only,
             "source_commit": _git_sha(),
             "frozen_hashes": self._frozen_hashes(),
@@ -343,35 +352,78 @@ class AutoResearchHarness:
         path.write_text(json.dumps(config, indent=2))
         return str(path)
 
+    # -- agent-facing research state ---------------------------------------
+
+    def research_context(self) -> dict:
+        """Full research state for an agent proposal: best metric, editable
+        scope, base config and per-round history WITH metrics/patches (a
+        real agent must see what was tried and what it scored, #45)."""
+        entries = self.store.load()
+        self._check_continuity(entries)
+        champion = self.store.champion()
+        return {
+            "round_index": len(entries),
+            "rounds_remaining": max(
+                0, self.runspec["budget"]["max_candidates"] - len(entries)
+            ),
+            "best_metric": champion.get("best_so_far") if champion else None,
+            "editable_scope": self.runspec["editable_scope"],
+            "base_config": self.runspec["base_config"],
+            "primary_metric": self.runspec["frozen"]["primary_metric"],
+            "history": [
+                {
+                    "run_id": e["run_id"],
+                    "intent": e.get("intent"),
+                    "patch": e.get("patch"),
+                    "decision": e["decision"],
+                    "status": e.get("status"),
+                    "reason": e.get("reason"),
+                    "primary_value": (e.get("metrics") or {}).get("primary_value"),
+                }
+                for e in entries
+            ],
+        }
+
+    def step(self, proposal: Proposal) -> dict:
+        """Run exactly ONE candidate round with an externally supplied
+        proposal (research-step driver). Budget and continuity checks apply."""
+        entries = self.store.load()
+        self._check_continuity(entries)
+        index = len(entries)
+        if index >= self.runspec["budget"]["max_candidates"]:
+            raise RuntimeError(
+                f"candidate budget exhausted ({index} rounds already recorded)"
+            )
+        # proposals arriving through step() come from an external agent
+        self._external_provider = True
+        return self._run_candidate(
+            index, proposal, self.runspec["budget"]["per_run_timeout_s"]
+        )
+
     # -- full loop ----------------------------------------------------------
 
     def run(self) -> dict:
-        entries = self.store.load()
-        self._check_continuity(entries)
-        done = len(entries)
         max_candidates = self.runspec["budget"]["max_candidates"]
         timeout_s = self.runspec["budget"]["per_run_timeout_s"]
         deadline = time.monotonic() + self.runspec["budget"]["max_wall_clock_s"]
 
         decisions: list[dict] = []
         plan_exhausted = False
-        for index in range(done, max_candidates):
+        for _ in range(max_candidates):
             if time.monotonic() > deadline:
                 break
-            champion = self.store.champion()
-            context = {
-                "round_index": index,
-                "best_metric": champion.get("best_so_far") if champion else None,
-                "history": [
-                    {"run_id": e["run_id"], "decision": e["decision"]}
-                    for e in entries
-                ],
-            }
-            proposal = self.provider.propose(index, context)
+            context = self.research_context()
+            if context["round_index"] >= max_candidates:
+                break  # budget already consumed by a previous run (resume)
+            proposal = self.provider.propose(
+                context["round_index"], context
+            )
             if proposal is None:
                 plan_exhausted = True
                 break
-            decisions.append(self._run_candidate(index, proposal, timeout_s))
+            decisions.append(self._run_candidate(
+                context["round_index"], proposal, timeout_s
+            ))
 
         final = self.store.champion()
         return {

@@ -133,6 +133,62 @@ def cmd_research(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research_step(args: argparse.Namespace) -> int:
+    """Single-round AutoResearch driver for a REAL external agent: prints the
+    research state (--print-context) or applies one proposal (--proposal-file)
+    through the full harness (scope validation, frozen seed, subprocess
+    isolation, append-only manifest)."""
+    from runtime.agent import FixedProposalProvider, Proposal
+    from runtime.harness import (
+        TCM_ONLY_MESSAGE,
+        AutoResearchHarness,
+        default_real_tcm_runspec,
+        default_tcm_runspec,
+    )
+
+    if args.profile != "tcm":
+        print(json.dumps({"ok": False, "error": TCM_ONLY_MESSAGE}))
+        return 2
+    if args.data_manifest:
+        if not args.dataset:
+            print(json.dumps({"ok": False, "error": "--dataset is required with --data-manifest"}))
+            return 2
+        runspec = default_real_tcm_runspec(
+            args.data_manifest, args.dataset, rounds=args.rounds, timeout_s=args.timeout
+        )
+    else:
+        runspec = default_tcm_runspec(rounds=args.rounds, timeout_s=args.timeout)
+    runspec["seed"] = args.seed
+    if not args.print_context and not args.proposal_file:
+        print(json.dumps({"ok": False,
+                          "error": "one of --print-context / --proposal-file is required"}))
+        return 2
+    if args.print_context and args.proposal_file:
+        print(json.dumps({"ok": False,
+                          "error": "--print-context and --proposal-file are exclusive"}))
+        return 2
+    harness = AutoResearchHarness(
+        runspec, provider=FixedProposalProvider(None), out_dir=args.out
+    )
+    if args.print_context:
+        print(json.dumps(harness.research_context(), indent=2, ensure_ascii=False))
+        return 0
+    data = json.loads(Path(args.proposal_file).read_text())
+    if not isinstance(data, dict) or "intent" not in data:
+        print(json.dumps({"ok": False, "error": "proposal needs an 'intent'"}))
+        return 2
+    proposal = Proposal(
+        intent=str(data["intent"]), config_patch=dict(data.get("config_patch", {}))
+    )
+    try:
+        entry = harness.step(proposal)
+    except RuntimeError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 1
+    print(json.dumps(entry, indent=2, ensure_ascii=False))
+    return 0
+
+
 def cmd_research_status(args: argparse.Namespace) -> int:
     from runtime.manifest import MANIFEST_FILE, RunManifestStore
 
@@ -224,6 +280,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dataset", default=None,
                    help="audited dataset file path (with --data-manifest)")
     p.set_defaults(func=cmd_research)
+
+    p = sub.add_parser("research-step",
+                       help="single-round driver for a real external agent")
+    p.add_argument("--profile", choices=["tcm", "physio"], required=True)
+    p.add_argument("--rounds", type=int, default=6,
+                   help="total candidate budget for the experiment")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--timeout", type=float, default=1800.0)
+    p.add_argument("--out", default="runs/autoresearch")
+    p.add_argument("--data-manifest", default=None)
+    p.add_argument("--dataset", default=None)
+    p.add_argument("--print-context", action="store_true",
+                   help="print the research state JSON and exit")
+    p.add_argument("--proposal-file", default=None,
+                   help="JSON file with {'intent': ..., 'config_patch': {...}}")
+    p.set_defaults(func=cmd_research_step)
 
     p = sub.add_parser("research-status")
     p.add_argument("--out", default="runs/autoresearch")
