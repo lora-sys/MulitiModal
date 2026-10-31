@@ -1,6 +1,6 @@
 # TCM 真实训练报告（#50，AutoResearch V1，v8）
 
-生成时间：2026-10-31T09:54:37.489419+00:00  
+生成时间：2026-10-31T10:43:34.086783+00:00  
 数据：`mendeley-cxtph3tjsg-v1`（SHA-256 `6206f432b683f8a7…`，274 名受试者，其中 274 名入冻结 manifest；QC 异常行 [273] 四维计分指纹不符）  
 标准：ZYYXH/T157-2009；标签契约：`derived-multilabel-v1:RULE(ZYYXH/T157-2009):YES>=40 -> 1, TENDENCY/NO -> 0, balanced abstain`  
 冻结 manifest：`775ba73bfe8f4da6…`；划分：train 191 / dev 41 / holdout 42（行级互斥划分；受试者级不重叠未经验证——数据集无 ID 列）
@@ -81,5 +81,5 @@
 - 受试者身份 = 数据行序（row_order (UNVERIFIED: dataset has no subject ID column; identity assumed from row position)）——数据集无受试者 ID 列，无法独立核验每行确为不同受试者。
 - 冠军由 24 轮候选按交叉验证选出（每轮都在上一轮冠军基础上改动，属爬山；winner's curse 仍然存在，只是从 41 人单划分换成 k 折均值加余量门槛）；消融为单 seed 固定配置；holdout 仅 42 人，小数位差异属噪声，未做置信区间重采样。
 - holdout 解锁记录（逐项）：split seed 20261030 在 v1、v2 解锁；20261101 在 v3 前置报告解锁；20261102 在 v3 报告解锁（另有一次中止运行未产出报告）；20261103 在 v4 报告解锁；20261104 在 v5 报告解锁；20261105 在 v6 报告解锁（该轮的选择指标后来被否决，但其 holdout 已消耗）。本报告使用全新冻结划分（manifest `775ba73bfe8f…`，seed 20261107），其 holdout 仅本次解锁一次；同一报告的 8-score 回归、部署消融、row-QC 敏感性都在同一 holdout 上评估，属同一次解锁事件，不额外增加信息。如再次重评估须再换划分。
-- 溯源强度：`proposer` / `context_sha256` / `proposal_sha256` 由驱动方（操作者）写入，属于**自报归属**——它证明「提交的提案与它声称依据的研究状态」一致」，不证明「该 agent 真的读取了上下文」或「该 agent 真的生成了它」。要升级为可证明的 agent 驱动，需要 provider 端 request/response id 或签名。
+- 溯源强度：`proposer` / `context_sha256` / `proposal_sha256` 由驱动方（操作者）写入，属于**自报归属**——它证明「提交的提案与它声称依据的研究状态」一致」，不证明「该 agent 真的读取了上下文」或「该 agent 真的生成了它」。 **提案/上下文文件时间戳自检：22/24 轮的提案文件早于其所配的上下文文件**（tcm-0002、tcm-0003、tcm-0004、tcm-0005、tcm-0006、tcm-0007、tcm-0008、tcm-0009、tcm-0010、tcm-0011、tcm-0012、tcm-0013、tcm-0014、tcm-0015、tcm-0016、tcm-0017、tcm-0018、tcm-0019、tcm-0020、tcm-0021、tcm-0022、tcm-0023）——这些轮的 digest 只证明「应用时刻的研究状态与所声称的一致」，不证明提案者事先读过该状态（批量预写提案的必然结果）。后续轮次须逐轮读取上下文后再提案。要升级为可证明的 agent 驱动，需要 provider 端 request/response id 或签名。
 - 类别支持不均衡（见 chart-support.png）；结果仅代表研究口径，不可临床使用。
