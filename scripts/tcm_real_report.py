@@ -372,13 +372,23 @@ def chart_rounds(entries: list[dict], out: Path) -> None:
     errs = [e.get("primary_std") for e in rounds]
     has_err = any(v is not None for v in errs)
     folded = any((e.get("selection") or {}).get("folds", 1) > 1 for e in rounds)
-    fig, ax = plt.subplots(figsize=(7.5, 4))
+    fig, ax = plt.subplots(figsize=(10, 4.5))
     ax.bar(xs, ys, color=colors,
            yerr=[v or 0.0 for v in errs] if has_err else None,
            ecolor="#264653", capsize=3)
-    best = max(ys)  # the primary metric is maximised (macro-F1)
-    ax.axhline(best, color="#264653", linestyle="--", linewidth=1,
-               label=f"best {best:.4f}")
+    # Two different numbers matter and confusing them misreports the run:
+    # the champion is the best ACCEPTED score (what the deliverable uses),
+    # while the tallest bar is merely the best score ever observed — a
+    # candidate that did not clear the noise margin and was rolled back.
+    accepted = [e["best_so_far"] for e in rounds if e.get("best_so_far") is not None]
+    champion = max(accepted) if accepted else None
+    observed = max(ys)  # the primary metric is maximised (macro-F1)
+    if champion is not None:
+        ax.axhline(champion, color="#264653", linestyle="--", linewidth=1,
+                   label=f"champion, accepted {champion:.4f}")
+    if champion is None or observed > champion + 1e-9:
+        ax.axhline(observed, color="#e76f51", linestyle=":", linewidth=1,
+                   label=f"max observed, not accepted {observed:.4f}")
     # the two fill colours carry the decision; without a key the reader cannot
     # tell a kept round from a rolled-back one
     from matplotlib.patches import Patch
@@ -387,17 +397,24 @@ def chart_rounds(entries: list[dict], out: Path) -> None:
     handles += [Patch(color=KEEP_COLOR), Patch(color=REVERT_COLOR)]
     labels += ["KEEP (new champion)", "REVERT (rolled back)"]
     ax.set_xticks(xs)
-    ax.set_xticklabels([e["run_id"] for e in rounds], fontsize=8)
+    ax.set_xticklabels([e["run_id"] for e in rounds], fontsize=7, rotation=90)
     ax.set_xlabel("AutoResearch round")
     metric_label = (
-        "selection macro-F1, k-fold over train+dev (mean, bars = fold std)"
+        "selection macro-F1, k-fold over train+dev (mean ± fold std)"
         if folded else "dev macro-F1 (selection metric)"
     )
-    ax.set_ylabel(f"{metric_label}\n(higher is better)")
+    ax.set_ylabel(metric_label, fontsize=9)
     ax.set_title("AutoResearch rounds — selection metric")
     ax.legend(handles, labels, fontsize=8)
-    for x, y in zip(xs, ys, strict=True):
-        ax.text(x, y, f"{y:.4f}", ha="center", va="bottom", fontsize=8)
+    # label only the rounds that matter: 24 labels at 4 decimals collide into
+    # an unreadable band, and the y-axis already carries the values
+    for e, x, y in zip(rounds, xs, ys, strict=True):
+        keep = e["decision"] == "KEEP"
+        top = abs(y - observed) < 1e-12
+        if not (keep or top):
+            continue
+        ax.annotate(f"{y:.4f}", (x, y), textcoords="offset points",
+                    xytext=(0, 8), ha="center", fontsize=8)
     fig.tight_layout()
     fig.savefig(out / "chart-rounds.png", dpi=150)
     plt.close(fig)

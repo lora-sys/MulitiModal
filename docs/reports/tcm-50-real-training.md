@@ -1,6 +1,6 @@
 # TCM 真实训练报告（#50，AutoResearch V1，v8）
 
-生成时间：2026-10-31T09:48:16.414425+00:00  
+生成时间：2026-10-31T09:54:37.489419+00:00  
 数据：`mendeley-cxtph3tjsg-v1`（SHA-256 `6206f432b683f8a7…`，274 名受试者，其中 274 名入冻结 manifest；QC 异常行 [273] 四维计分指纹不符）  
 标准：ZYYXH/T157-2009；标签契约：`derived-multilabel-v1:RULE(ZYYXH/T157-2009):YES>=40 -> 1, TENDENCY/NO -> 0, balanced abstain`  
 冻结 manifest：`775ba73bfe8f4da6…`；划分：train 191 / dev 41 / holdout 42（行级互斥划分；受试者级不重叠未经验证——数据集无 ID 列）
