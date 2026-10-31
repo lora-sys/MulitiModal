@@ -160,3 +160,55 @@ CPU 为最小可用环境（#49/#40 全部 CPU smoke 已验证）；MPS/CUDA 通
 - 真实数据的 `dataset_hash`/`label_manifest_hash` 语义由 #37/#38 落地后回填 TCM Profile。
 - Trusted Evaluator 的 OS 级隔离具体形态（容器 vs 独立用户进程）在 #45 实现时定，按硬规则 9 执行。
 - 上游 #38（维护者引用的另一 issue）内容未核查；仅记录 #523 证据即可满足本报告许可要求。
+
+---
+
+## 11. 冻结修订 2026-10-31：选择指标与选择分区（v8 落地）
+
+本节修正 §3/§5 中已被实测否决的两处设计，**不改动 §1 的权限矩阵与不可变集合**。修订依据全部来自 v5–v8 的真实运行记录（`docs/reports/tcm-50-real-training.md`、`runs/real-tcm-v5..v8`）。
+
+### 11.1 主指标：`subject_rmse` → `category_probs/macro_f1`
+
+| 候选指标 | 实测问题 | 结论 |
+| --- | --- | --- |
+| `category_probs/subject_mae` | L1 损失下二值标签的最优常数预测是中位数；本数据正类率 < 0.5 → 最优常数 = 0，按它爬山永远赢不过全零预测器（v5 实测：Dummy 0.2292 在 holdout 领先全部候选） | 否决 |
+| `category_probs/subject_rmse` | Brier 的单调根变换，proper scoring rule，**数学上没错**，但对没有可用信号的模型其最优解是预测基率常数；v6 实测该轮冠军 dev macro-F1 仅 0.021，而普通逻辑回归 holdout 0.308 | 否决 |
+| **`category_probs/macro_f1`** | 就是交付物的指标（0.5 阈值、固定观测维分母，未定义 F1 计 0），爬山落点与交付指标一致 | **采用（v7 起）** |
+
+MAE/RMSE 保留为诊断口径，但不得作为 KEEP/REVERT 判据。
+
+### 11.2 选择分区：41 人 dev 单划分 → subject 级 4 折（池 = train + dev）
+
+v7 实测：**同一套权重** dev macro-F1 0.1451、holdout 0.3445。划分间波动远大于候选间差异，单划分无法给候选排序，v7 的 6 轮排序是噪声（v8 复验：v7 的"冠军" lr 1e-3 在 k 折下只有 0.2691，低于基线 0.3117）。
+
+现行规则：
+
+1. 选择分区 = `manifest["split"]["train"] + ["dev"]`（232 人），**holdout 永不进入**（`cross_val_candidate` 只读池）。
+2. 折内训练不得接收 eval provider（`early_stop_patience`/`restore_best` 在真实数据路径被拒）——验证折 steering 拟合是同一种双重使用缺陷。
+3. KEEP 需 `value > best + selection_margin_std × fold_std`（默认 0.5）。余量把"折间噪声"从"改进"里扣掉，避免爬山随机游走。
+4. 每轮训练 k 个折模型并**丢弃**：k 折选择不产生可交付工件。
+
+### 11.3 交付模型：池上全量重训（`research-finalize`）
+
+`AutoResearchHarness.finalize()` 按冠军配置在池（train+dev）上重训一次，写入 `champion/`，并在检查点里记录 `selection_parent_manifest_sha256` 与 `refit_partition="train+dev"`——报告端据此验证交付模型确实源自该冻结划分，而不是相信目录名。
+
+`RunManifestStore.champion()` 因此不再要求 `artifact_dir`：k 折轮次没有工件，若仍要求，冠军永远返回 None，爬山会退化成"永远保留第一个候选"。
+
+### 11.4 评分口径：交付模型只在 holdout 上评分
+
+池重训后 dev 已并入训练集，受信评估器的 train/dev 不重叠约束（`EvalManifest.__post_init__`）禁止给交付模型一个 dev 分数。因此报告里：
+
+- 交付模型、Dummy、BMI-only、全特征逻辑回归、Deployable 消融**全部在同一池上拟合、同一 holdout 上评分**；少给基线 41 行再报差距会制造结论。
+- row-QC 敏感性两侧同 holdout、同分母。
+- 8-score 回归头仍在冻结 train 折上训练（它回答"回归头是否有效"，不是交付模型的一部分），报告里单独标注口径。
+
+### 11.5 v8 实测（24 轮）
+
+| 项 | 值 |
+| --- | --- |
+| 轮数 | 24（KEEP 1 = 基线，REVERT 23） |
+| 覆盖 | lr 5 档 × epochs 5 档 × hidden 4 档 × fusion 4 档 × batch 5 档 × grad_clip 3 档 + 6 组组合 |
+| 冠军 | `tcm-0000`（32/32、40 epochs、lr 3e-3、batch 32），选择值 0.3117 ± 0.0352 |
+| 最好被否决 | `tcm-0011`（epochs 80 + batch 16）0.3270 ± 0.0439，未过 0.0220 余量 |
+
+结论：**可编辑空间内没有配置能在超过折间噪声的程度上击败基线。** 停止判据 = 每个 scope 维度都被扫过且无 KEEP（本轮在 24 轮达到），不是轮次预算耗尽。
