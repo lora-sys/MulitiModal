@@ -11,6 +11,7 @@
 | mendeley-dataset-files | data.mendeley.com/cxtph3tjsg/1（SHA 6206f432…，274 人 × 71 列，8 维评分零缺失） |  文件已下载并逐列审计；8/9 维 PUBLISHED 评分 + 独立特征 + CC BY 4.0；train_candidate（ZYYXH/T157-2009 条目数指纹验证） | VERIFIED | 映射已 FINGERPRINT_CROSS_CHECKED（#38）；论文定义表核验与 #38 规则一致性仍开放；第 9 维按规则 mask，永不伪造 |
 | tcm-label-rules-historical-verified | PMC10164641（ZYYXH/T157-2009 阈值）+ Zenodo SAS 字节交叉校验 + Mendeley 指纹 | 规则引擎与 SAS 源逐项一致；14 行参考样本双缺失策略可评分；30/40/60 阈值有据；列映射 FINGERPRINT_CROSS_CHECKED（论文定义表付费墙） | **VERIFIED**（2026-10-30） | 解除 GO_REAL_DATA_TRAINING(tcm) 阻塞；row 273 指纹异常 QC 挂起 |
 | tcm-label-rules-verified | openstd GB/T 46939—2025 | —（官方全文未取得，逐题比对未做） | **NOT_VERIFIED** | 不再阻塞当前数据路径；仅约束未来换版工作（ZYYXH→GB/T 转换仍禁止） |
+| tcm-real-training-v8 | runs/real-tcm-v8 + artifacts/tcm-50-v8（manifest/权重/summary 三处 SHA-256 已登记，2026-10-31） | 真实数据端到端训练跑通：冻结划分 191/41/42、4 折池选择 24 轮、交付模型池重训 232 行；holdout macro-F1 0.383（seed 0/1/2 = 0.383/0.439/0.426）对全特征逻辑回归 0.215 | **VERIFIED** | 工程/研究口径；RULE 派生标签、行序身份 UNVERIFIED、holdout 42 人无区间估计；不支撑任何临床结论 |
 | independent-reference-data | — | —（不存在） | **NOT_AVAILABLE** | 阻塞双模型 GO_RESEARCH_CLAIMS |
 | physio-real-data | — | —（未采集） | **NOT_AVAILABLE** | 阻塞 #26/#42 与 GO_REAL_DATA_TRAINING(physio) |
 | autoresearch-upstream-license | karpathy/autoresearch @228791fb（README SHA 3958fd41…） | MIT 可用（README 声明 + 维护者 issue #523 确认；API license=null、无 LICENSE 文件已记录） | VERIFIED | 复制片段须记录出处；本项目独立实现循环 |

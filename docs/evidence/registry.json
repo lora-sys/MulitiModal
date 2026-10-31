@@ -1,6 +1,6 @@
 {
   "version": "evidence-registry-v0",
-  "updated": "2026-10-30",
+  "updated": "2026-10-31",
   "claims": [
     {
       "claim_id": "pdf-spec",
@@ -214,6 +214,32 @@
       "verification_state": "UNVERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED"
+    },
+    {
+      "claim_id": "tcm-real-training-v8",
+      "primary_url": "local run bundle: runs/real-tcm-v8 (dev host acam-lab)",
+      "edition_version": "v8 (split seed 20261107, metric tcm-eval-v0)",
+      "access_date": "2026-10-31",
+      "exact_supported_claim": "中医体质模型在 Mendeley 274 行真实数据上完成端到端训练：冻结划分 train/dev/holdout = 191/41/42，选择用 subject 级 4 折交叉验证（池 232 行），24 轮 AutoResearch 无可编辑配置超过折间噪声击败基线，交付模型按基线配置在池上重训（232 行）；holdout macro-F1 = 0.383（seed 0/1/2 = 0.383/0.439/0.426）对全特征逻辑回归 0.215、Dummy 0.000。仅代表工程与研究口径。",
+      "verification_state": "VERIFIED",
+      "retrieved_files": [
+        {
+          "path": "runs/real-tcm-v8/manifest.jsonl",
+          "sha256": "b21ffe0f8ee9673574f16854bc8821b793f45332a1375fcbf2c548d3b5b1358f"
+        },
+        {
+          "path": "runs/real-tcm-v8/champion/weights.pt",
+          "sha256": "9d642282767df088a115a60d81b8102f29fca9a4931e2894df0ca48f35a25ad2"
+        },
+        {
+          "path": "artifacts/tcm-50-v8/summary.json",
+          "sha256": "73a51b060946f561bc418392d266a2db5fad189891858a4069152d4ad0780675"
+        }
+      ],
+      "limitations": "标签为 RULE 派生类别（≥40=YES），非作者发布的分类标签，非临床真值；受试者身份=数据行序（数据集无 ID 列，UNVERIFIED），划分仅行级互斥；holdout 42 人、无重采样置信区间；选择余量由折间 std 派生，winner's curse 仍存在；proposer 归属为自报（AGENT_ISOLATION_UNVERIFIED）；无独立参考数据，故 GO_RESEARCH_CLAIMS 仍 NOT_GRANTED。",
+      "owner": "lora-sys",
+      "reviewer": "AGENT_NOT_VERIFIED",
+      "blocks": []
     }
   ]
 }
