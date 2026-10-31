@@ -121,7 +121,9 @@ class RunManifestStore:
     def champion(self) -> dict | None:
         """Artifact dir + best metric of the last KEEP entry, or None."""
         for entry in reversed(self.load()):
-            if entry["decision"] == "KEEP" and entry.get("artifact_dir"):
+            # .get: leading legacy entries pass unverified and need not
+            # carry any particular keys (review round-7 R-04)
+            if entry.get("decision") == "KEEP" and entry.get("artifact_dir"):
                 return entry
         return None
 

@@ -356,6 +356,20 @@ def test_manifest_chain_accepts_legacy_entries_and_extends_them(tmp_path):
     assert len(entries[1]["entry_sha256"]) == 64
 
 
+def test_champion_tolerates_minimal_legacy_entries(tmp_path):
+    # round-7 R-04: legacy entries pass unverified and need not carry any
+    # keys — champion() must skip them, not KeyError on decision/artifact_dir
+    path = tmp_path / "m.jsonl"
+    path.write_text(json.dumps({"run_id": "legacy"}) + "\n")
+    store = RunManifestStore(path)
+    store.append({"run_id": "tcm-0001", "decision": "KEEP", "status": "done",
+                  "artifact_dir": "runs/ar/tcm-0001"})
+    champion = store.champion()
+    assert champion is not None and champion["run_id"] == "tcm-0001"
+    path.write_text(json.dumps({"run_id": "legacy"}) + "\n")
+    assert RunManifestStore(path).champion() is None
+
+
 def test_manifest_chain_rejects_unchained_line_after_chained_entries(tmp_path):
     # round-5 R-01: the legacy skip must apply to LEADING entries only —
     # an unchained line after any chained entry is a forged insertion

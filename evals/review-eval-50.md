@@ -107,3 +107,6 @@ Round-6 结论：三条均为 manifest 健壮性加固（fail-closed 语义下�
 | E55 | round-7 R-03 | 撕裂写若截断 JSON 至对象中途，`load()` 的 JSONDecodeError 先于补换行执行 → append 永久卡死（fail-closed 但需手工修） | 撕裂尾行处理提前到 load 之前：可解析只补换行；截断行从未成为完整记录、直接丢弃 | pytest `test_append_heals_truncated_torn_line` |
 
 Round-7 结论：1 条 medium（E53）+ 2 条 low，均为记录健壮性，不触及训练数值路径；审查报告在 R-04 处被 turn-limit 截断，已请原线程补发 R-04 与 VERDICT。round-4 起的全部 impactful findings（R-01 链伪造、R-03 fail-open、R-01(round-5) 等）至此全部关闭并冻结进 eval。
+| E56 | round-7 R-04 | `champion()` 对 legacy 行直接下标 `entry["decision"]`——pre-chain 行可不带该键，KeyError 崩掉 run()/research_context() | 改 `entry.get("decision")`（artifact_dir 本已 .get） | pytest `test_champion_tolerates_minimal_legacy_entries` |
+
+Round-7 补发 VERDICT：**NO**——R-01/R-03/R-04 均为 fail-closed 崩溃路径（不产生错误数字），已写入条目全部经哈希链验证，R-02 仅为无消费者的可选键缺失。**审查循环收口**：round-4–7 的全部发现（E38–E56）已关闭并冻结，无剩余 impactful findings。
