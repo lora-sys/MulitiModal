@@ -4,7 +4,9 @@
 
 ## 当前状态
 
-Phase 1 工程闭环（#51/#48/#39/#49/#40/#44/#45）+ 证据注册表与 GO 门（#47）+ 公开数据集审计（#37）+ 标签体系（#38：CCMQ-60 规则引擎 + PUBLISHED/LLM_SILVER 分层导出）完成。真实数据状态：Mendeley 274 人 8 维体质评分已下载并审计（train_candidate，ZYYXH/T157-2009 指纹验证）；Zenodo CCMQ 计分参考已取回（rules_test_only）并完成 SAS 字节级规则交叉校验。TCM 的 GO_REAL_DATA_TRAINING 已 GRANTED（2026-10-30）；全部模型/训练结果仍为合成数据 SMOKE_ONLY，真实训练见 #50。
+Phase 1 工程闭环（#51/#48/#39/#49/#40/#44/#45）+ 证据注册表与 GO 门（#47）+ 公开数据集审计（#37）+ 标签体系（#38：CCMQ-60 规则引擎 + PUBLISHED/LLM_SILVER 分层导出）+ 中医模型真实训练（#50，v8）完成。真实数据状态：Mendeley 274 人 8 维体质评分已下载并审计（train_candidate，ZYYXH/T157-2009 指纹验证）；Zenodo CCMQ 计分参考已取回（rules_test_only）并完成 SAS 字节级规则交叉校验。TCM 的 GO_REAL_DATA_TRAINING 已 GRANTED（2026-10-30）。
+
+**#50 交付结论（2026-10-31，v8）**：真实数据端到端跑通（274 行 → 冻结划分 191/41/42 → 4 折交叉验证选择 → 池重训 → holdout 一次评分）。24 轮 AutoResearch 在可编辑空间（lr / epochs / hidden / fusion / batch / grad_clip）内**没有任何配置能超过折间噪声击败基线**；交付模型即基线配置，holdout macro-F1 0.383（另两个种子 0.439 / 0.426）对全特征逻辑回归 0.215、Dummy 0.000。详见 [docs/reports/tcm-50-real-training.md](docs/reports/tcm-50-real-training.md)。仍是 RULE 派生标签、行序受试者身份（UNVERIFIED）、holdout 42 人，**GO_RESEARCH_CLAIMS 未放行**。数据集扩充：无公开可下载的配对数据集，唯一值得申请的 PHDA 脉诊库需人工账号申请（`docs/data/dataset-audit-report.md` §6）。
 
 - 分支：`feature/clean-slate`（空起点；旧历史仅见 GitHub commit `9fc5087d`，已删除，不作依赖）
 - 主 Epic：#22（双模型 + AutoResearch/RSI V1）
@@ -36,8 +38,11 @@ ruff check .
 
 ```
 docs/source/            原始需求 PDF 与一手资料
-docs/design/            #44 AutoResearch RSI V1 设计规范
+docs/design/            #44 AutoResearch RSI V1 设计规范（§11 为 v8 冻结修订）
 docs/evidence/          #47 证据注册表（registry.json）与审计矩阵（audit-matrix.md）
+docs/reports/           #50 真实训练报告（由 scripts/tcm_real_report.py 从 artifact 生成）
+docs/data/              #37 数据集审计报告（Mendeley 274 人 8 维评分 / Zenodo CCMQ 计分参考 / §6 扩充搜索）
+scripts/                tcm_real_report.py（报告生成）、review_eval.py（自审 47 项检查）
 src/core/               #48 神经核心：specs / batch / encoders / losses / models / registry
 src/data/               #37 公开数据集注册表与 Mendeley 适配器（原始文件在开发机 data/local/，不入 Git）
 src/labels/             #38 标签体系：CCMQ-60 规则引擎 / PUBLISHED 导出 / LLM_SILVER 拒判接口 / 标准注册表
@@ -52,6 +57,40 @@ tests/                  pytest（fast 默认；slow / synthetic 用 marker）
 
 `src/core` 要点：输入契约由 `InputSpecSet` 驱动（TCM `tcm-input-v0`、生理 `physio-input-pre-only-v0`）；缺模态 = features 缺键、行不可用 = availability mask，零填充嵌入、永不插补；非契约模态（如生理模型的 During/Post 特征）validate 阶段直接拒绝。TCM V1（#39）分类头优先：九维独立 sigmoid 多标签（逐类 observed mask），互斥来源才用 softmax-CE；0–100 回归头独立且默认关闭，仅真实问卷评分可用时启用。`registry` 保存/加载带 SHA-256 校验与 input_spec 严格重建。
 
-`src/runtime` 要点（#49/#40/#45）：`SyntheticBatchProvider`（模拟 subject manifest + #27 分区断言）、`Trainer.fit`（固定种子、CPU 默认设备、AMP 可选、梯度裁剪、早停、断点续训一致性）、`Evaluator`（versioned masked 指标）、训练 checkpoint（weights + optimizer/epoch/RNG 状态 + SMOKE_ONLY 标记）。TCM 可信评估（#40）：冻结 `EvalManifest`（train/dev/holdout 不可交叉）、`TCMTrustedEvaluator` 主指标 `category_probs/subject_mae`、受试者级 MAE/RMSE + 逐维统计、SMOKE_ONLY 报告；`TCMPredictor` 单条/批量 Pre-only 推理（工件版本检查、未知字段报错、ABSTAIN 拒判）。AutoResearch（#45，TCM_ONLY）：`AutoResearchHarness` 按 #44 设计运行 propose → 受限 patch 静态检查 → 隔离子进程训练（`runtime.worker`）→ 可信评分 → KEEP/REVERT → append-only `RunManifestStore`，支持断点恢复不重复执行、冻结哈希连续性校验；确定性 stub 为 ENGINEERING_SMOKE + AGENT_NOT_VERIFIED，`ExternalAgentProvider` 接口保留但拒绝在隔离未验证（AGENT_ISOLATION_UNVERIFIED）时运行。CLI（`PYTHONPATH=src python -m runtime.cli`）：`list-models` / `validate-architecture` / `smoke --task tcm|physio` / `checkpoint-reload` / `research --profile tcm --rounds N`。
+`src/runtime` 要点（#49/#40/#45）：`SyntheticBatchProvider`（模拟 subject manifest + #27 分区断言）、`Trainer.fit`（固定种子、CPU 默认设备、AMP 可选、梯度裁剪、早停、断点续训一致性）、`Evaluator`（versioned masked 指标）、训练 checkpoint（weights + optimizer/epoch/RNG 状态 + SMOKE_ONLY 标记）。TCM 可信评估（#40）：冻结 `EvalManifest`（train/dev/holdout 不可交叉）、`TCMTrustedEvaluator` 主指标 `category_probs/macro_f1`（v7 起；MAE/RMSE 仅作诊断，理由见设计文档 §11.1）、受试者级 MAE/RMSE + 逐维统计、SMOKE_ONLY 报告；`TCMPredictor` 单条/批量 Pre-only 推理（工件版本检查、未知字段报错、ABSTAIN 拒判）。AutoResearch（#45，TCM_ONLY）：`AutoResearchHarness` 按 #44 设计运行 propose → 受限 patch 静态检查 → 隔离子进程训练（`runtime.worker`）→ 可信评分 → KEEP/REVERT → append-only `RunManifestStore`，支持断点恢复不重复执行、冻结哈希连续性校验；真实数据轮次用 **subject 级 4 折交叉验证**（池 = train+dev）选择、KEEP 需过 `0.5 × fold_std` 余量，交付模型由 `research-finalize` 在池上重训（设计文档 §11.2–11.4）。确定性 stub 为 ENGINEERING_SMOKE + AGENT_NOT_VERIFIED，`ExternalAgentProvider` 接口保留但拒绝在隔离未验证（AGENT_ISOLATION_UNVERIFIED）时运行。CLI（`PYTHONPATH=src python -m runtime.cli`）：`list-models` / `validate-architecture` / `smoke --task tcm|physio` / `checkpoint-reload` / `research --profile tcm --rounds N` / `research-step`（外部 agent 逐轮驱动）/ `research-finalize`（池重训出交付模型）/ `research-status` / `research-report`。
+
+## 复现 v8 真实训练（开发机，真实文件不入 Git）
+
+```bash
+# 1. 冻结划分（seed 20261107）
+PYTHONPATH=src .venv/bin/python -c "
+from data.mendeley import EXPECTED_SHA256, load_mendeley_scores
+from data.real_split import build_real_manifest
+recs = load_mendeley_scores('data/local/mendeley-cxtph3tjsg-v1/Share data.xls')
+build_real_manifest(recs, dataset_sha256=EXPECTED_SHA256, split_seed=20261107).save(
+    'runs/manifests/tcm-20261107-classification.json')
+"
+
+# 2. 逐轮 RSI：打印研究状态 → 交 agent 提案 → 应用（每轮都记 proposer + context 摘要）
+PYTHONPATH=src .venv/bin/python -m runtime.cli research-step --profile tcm \
+  --rounds 1000 --data-manifest runs/manifests/tcm-20261107-classification.json \
+  --dataset 'data/local/mendeley-cxtph3tjsg-v1/Share data.xls' \
+  --out runs/real-tcm-v8 --print-context --context-out runs/real-tcm-v8/ctx-N.json
+PYTHONPATH=src .venv/bin/python -m runtime.cli research-step --profile tcm \
+  --rounds 1000 --data-manifest runs/manifests/tcm-20261107-classification.json \
+  --dataset 'data/local/mendeley-cxtph3tjsg-v1/Share data.xls' \
+  --out runs/real-tcm-v8 --proposal-file runs/real-tcm-v8/p-N.json \
+  --proposer '<agent-id>' --context-file runs/real-tcm-v8/ctx-N.json \
+  --proposal-raw runs/real-tcm-v8/p-N.json
+
+# 3. 交付模型（池重训）+ 报告
+PYTHONPATH=src .venv/bin/python -m runtime.cli research-finalize \
+  --out runs/real-tcm-v8 --data-manifest runs/manifests/tcm-20261107-classification.json \
+  --dataset 'data/local/mendeley-cxtph3tjsg-v1/Share data.xls'
+PYTHONPATH=src .venv/bin/python scripts/tcm_real_report.py \
+  --runs-dir runs/real-tcm-v8 --manifest runs/manifests/tcm-20261107-classification.json \
+  --dataset 'data/local/mendeley-cxtph3tjsg-v1/Share data.xls' \
+  --out artifacts/tcm-50-v8 --label v8 --champion-dir runs/real-tcm-v8/champion
+```
 
 后续模块目录由对应 issue 落位：#37/#38（数据与标注）、#47（证据准入）、#50（真实训练，必须使用 #45 Harness）。不要凭空恢复旧目录名（representation/、massage_decision/、legacy_research/）。
