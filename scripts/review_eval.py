@@ -613,6 +613,114 @@ def e37_champion_evaluated_under_own_scaler():
     assert list(provider.subject_ids) == list(subset)
 
 
+@check
+def e38_manifest_chain_tamper_evidence():
+    # Pi round-4 R-01: the append-only manifest must detect edits, deletions
+    # and reordering of recorded rounds instead of trusting entry 0 only.
+    from runtime.manifest import RunManifestStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        store = RunManifestStore(Path(tmp) / "m.jsonl")
+        store.append({"run_id": "tcm-0000", "decision": "KEEP", "status": "done"})
+        store.append({"run_id": "tcm-0001", "decision": "REVERT", "status": "done"})
+        store.append({"run_id": "tcm-0002", "decision": "KEEP", "status": "done"})
+        assert len(store.load()) == 3
+
+        path = Path(tmp) / "m.jsonl"
+        lines = path.read_text().splitlines()
+        tampered = json.loads(lines[0])
+        tampered["best_so_far"] = 0.0
+        path.write_text(
+            json.dumps(tampered, ensure_ascii=False) + "\n"
+            + lines[1] + "\n" + lines[2] + "\n"
+        )
+        try:
+            RunManifestStore(path).load()
+        except RuntimeError as exc:
+            assert "integrity check failed" in str(exc)
+        else:
+            raise AssertionError("edited manifest entry loaded without error")
+
+        # deleting a middle entry breaks the next entry's link (deleting the
+        # LAST entry is undetectable by any in-file chain — known limitation,
+        # real isolation is the #45 AGENT_ISOLATION verification)
+        path.write_text(lines[0] + "\n" + lines[2] + "\n")
+        try:
+            RunManifestStore(path).load()
+        except RuntimeError as exc:
+            assert "integrity check failed" in str(exc)
+        else:
+            raise AssertionError("deleted manifest entry loaded without error")
+
+
+@check
+def e39_resume_plan_alignment():
+    # Pi round-4 R-02: the stub plan must be indexed by round_index so a
+    # resumed run continues the plan instead of replaying tried candidates.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    from runtime.agent import DeterministicStubProvider
+
+    source = inspect.getsource(DeterministicStubProvider.propose)
+    assert "self.calls" not in source
+    provider = DeterministicStubProvider(plan=[
+        ("baseline", {}), ("wider", {"model.hidden_dim": 64}),
+    ])
+    fresh = DeterministicStubProvider(plan=[
+        ("baseline", {}), ("wider", {"model.hidden_dim": 64}),
+    ])
+    assert fresh.propose(1, {}).intent == "wider"  # resume: no plan replay
+    assert provider.propose(0, {}).intent == "baseline"
+    assert provider.propose(2, {}) is None  # exhausted past the plan
+
+
+@check
+def e40_fail_to_revert_round_paths():
+    # Pi round-4 R-03: every in-loop failure records a REVERT entry instead
+    # of crashing the loop without a manifest record.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    from runtime.harness import AutoResearchHarness
+
+    candidate_src = inspect.getsource(AutoResearchHarness._run_candidate)
+    apply_pos = candidate_src.index("apply_config_patch(")
+    except_pos = candidate_src.index('except ValueError as exc:')
+    assert apply_pos < except_pos, "apply_config_patch outside the static-check guard"
+    assert "json.JSONDecodeError" in candidate_src  # train _worker decode errors
+
+    run_src = inspect.getsource(AutoResearchHarness.run)
+    assert "agent_error" in run_src  # provider.propose failures are recorded
+
+
+@check
+def e41_worker_env_drops_inherited_pythonpath():
+    # Pi round-4 R-04: workers must not inherit the host PYTHONPATH.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    from runtime.harness import _worker_env
+
+    source = inspect.getsource(_worker_env)
+    assert 'env["PYTHONPATH"] = str(SRC_DIR)' in source
+    assert "os.pathsep + existing" not in source
+
+
+@check
+def e42_real_training_forbids_dev_steering():
+    # Pi round-4 R-05: dev is the Trainer's eval provider in real mode for
+    # reporting only; early stop / best-epoch restore must fail closed.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    from runtime.protocols import _train_real
+
+    source = inspect.getsource(_train_real)
+    assert "early_stop_patience" in source and "restore_best" in source
+    assert source.index("for forbidden in") < source.index("_load_records")
+
+
 def check_summary_artifacts(summary_path: str | None, report_path: str | None) -> list[str]:
     problems: list[str] = []
     if summary_path:

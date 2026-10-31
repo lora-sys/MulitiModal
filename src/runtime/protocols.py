@@ -42,9 +42,19 @@ def _train_real(config: dict) -> dict:
             "config task_type "
             f"{data_cfg['task_type']!r} != manifest {manifest['task_type']!r}"
         )
-    records = _load_records(data_cfg["dataset_path"])
     model_cfg = dict(config.get("model", {}))
-    trainer_cfg = TrainerConfig(**config.get("trainer", {}))
+    # the dev partition is wired in as the eval provider below for reporting
+    # only; it must never steer fitting (early stop / best-epoch restore
+    # would double-use dev while the loop also selects on dev, review R-05)
+    trainer_kwargs = dict(config.get("trainer", {}))
+    for forbidden in ("early_stop_patience", "restore_best"):
+        if trainer_kwargs.get(forbidden) is not None:
+            raise ValueError(
+                f"real-data training forbids trainer.{forbidden}: dev would "
+                "influence fitting while selection also uses dev"
+            )
+    trainer_cfg = TrainerConfig(**trainer_kwargs)
+    records = _load_records(data_cfg["dataset_path"])
     torch.manual_seed(trainer_cfg.seed)
     model = build_real_model(manifest, model_cfg)
     trainer = Trainer(model, trainer_cfg)

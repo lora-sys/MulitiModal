@@ -59,3 +59,15 @@ Pi），经主流程逐条核验后确认为真实问题的条目。此清单是
 | E35 | Pi R-12 | rounds 图 x 轴用 1..n 位置序，REVERT 轮压缩坐标 | x 用 run_id 解析的真实轮次号（tcm-0003→3），刻度标 run_id | review_eval `e35_chart_rounds_real_axis` |
 | E36 | Pi R-07/R-12 | 受试者身份=行序属未验证假设；holdout 解锁未成枚举记录 | summary/report 声明 subject_identity=UNVERIFIED；报告枚举 holdout 解锁记录（v1/v2/本次）并要求下次换划分；QC 判定与 holdout 无关的声明补入 | review_eval `e36_subject_identity_declared` + `--summary` 检查 |
 | E37 | GLM round-3 | QC 对照把冠军喂给 QC manifest 重拟合的 scaler（输入契约错配）；QC 派生 manifest 的 `scaler_fit_rows` 过期 | 冠军在缩减 dev 上用**自己的** manifest（训练时 scaler/spec）评估（`RealBatchProvider(subject_ids=…)` 限定分区子集，跨分区拒绝）；`exclude_subjects_from_manifest` 重拟合后同步更新 `scaler_fit_rows` | review_eval `e37_champion_evaluated_under_own_scaler` + pytest |
+
+## 第四轮审查追加条目（Pi round-4，R-01–R-05 → E38–E42）
+
+| 编号 | 来源 | 发现 | 冻结修复 | 验证 |
+| --- | --- | --- | --- | --- |
+| E38 | Pi R-01 | run manifest 无完整性保护：连续性检查只读 entry 0，条目编辑/删除/重排静默改变冠军与预算 | 每条 append 携带 `prev_entry_sha256`+`entry_sha256` 链，`load()` 验链；编辑/中间删除/重排 → RuntimeError。已知局限（尾部截断、整文件无链重写）不可检测——真隔离是 #45 AGENT_ISOLATION 验证，已在 docstring 声明 | review_eval `e38_manifest_chain_tamper_evidence` + pytest |
+| E39 | Pi R-02 | `DeterministicStubProvider` 用内部计数器，resume 时 canned plan 从头重放已试候选 | plan 位置改由 harness 传入的 `round_index`（=已记录轮数）索引，resume 续接不重放 | review_eval `e39_resume_plan_alignment` + pytest |
+| E40 | Pi R-03 | `apply_config_patch` 在静态检查 try 之外；train `_worker` JSON 解码错误未捕获；`provider.propose` 异常直接杀死循环——三者都绕过 fail-to-REVERT | apply_config_patch 移入 static-check try；train 调用点补 `json.JSONDecodeError`；`run()` 捕获 provider ValueError 并记录 `agent_error` REVERT 条目 | review_eval `e40_fail_to_revert_round_paths` + pytest |
+| E41 | Pi R-04 | `_worker_env` 保留宿主 `PYTHONPATH`，污染路径可在"隔离"子进程内遮蔽第三方导入 | worker `PYTHONPATH` 一律设为仓库 `src/`，不继承宿主值 | review_eval `e41_worker_env_drops_inherited_pythonpath` + pytest |
+| E42 | Pi R-05 | real 训练把 dev 接成 Trainer eval provider；若未来设置 `early_stop_patience`/`restore_best` 会让 dev 参与拟合（与选择双重使用） | `_train_real` fail-closed：这两个 trainer 键非 None 即拒绝（当前行为不变，latent 泄漏关闭） | review_eval `e42_real_training_forbids_dev_steering` + pytest |
+
+Round-4 裁决：Antigravity opus-4-6-thinking 因配额耗尽未产出；Pi GLM-5.3-Flash 确认循环核心不变量成立（dev-only 选择、作用域校验、强制种子、holdout 不可达、无 patch 逃逸），R-01 为唯一高严重度缺陷，已随 E38–E42 冻结修复。

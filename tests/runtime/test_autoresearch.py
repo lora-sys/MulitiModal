@@ -297,3 +297,113 @@ def test_cli_research_step_smoke(tmp_path, capsys):
     assert main(["research-step", "--profile", "tcm", "--rounds", "1",
                  "--out", out, "--proposal-file", str(proposal)]) == 1
     assert "budget exhausted" in json.loads(capsys.readouterr().out)["error"]
+
+
+# -- round-4 review fixes (R-01..R-04) -------------------------------------
+
+def test_manifest_chain_detects_edit_deletion_and_reorder(tmp_path):
+    store = RunManifestStore(tmp_path / "m.jsonl")
+    store.append({"run_id": "tcm-0000", "decision": "KEEP", "status": "done"})
+    store.append({"run_id": "tcm-0001", "decision": "REVERT", "status": "done"})
+    store.append({"run_id": "tcm-0002", "decision": "KEEP", "status": "done"})
+    assert len(store.load()) == 3  # intact chain loads
+
+    lines = (tmp_path / "m.jsonl").read_text().splitlines()
+
+    def rewrite(ls):
+        (tmp_path / "m.jsonl").write_text("\n".join(ls) + "\n")
+
+    # a hand-edit of one KEEP entry flips its best_so_far -> detected
+    tampered = json.loads(lines[0])
+    tampered["best_so_far"] = 0.0
+    edited = [*lines]
+    edited[0] = json.dumps(tampered, ensure_ascii=False)
+    rewrite(edited)
+    with pytest.raises(RuntimeError, match="integrity check failed"):
+        RunManifestStore(tmp_path / "m.jsonl").load()
+
+    # deleting a middle line breaks the link of the next one -> detected
+    rewrite([lines[0], lines[2]])
+    with pytest.raises(RuntimeError, match="integrity check failed"):
+        RunManifestStore(tmp_path / "m.jsonl").load()
+
+    # reordering two entries breaks their links -> detected
+    rewrite([lines[1], lines[0], lines[2]])
+    with pytest.raises(RuntimeError, match="integrity check failed"):
+        RunManifestStore(tmp_path / "m.jsonl").load()
+
+    (tmp_path / "m.jsonl").write_text("\n".join(lines) + "\n")
+    assert len(store.load()) == 3
+
+
+def test_manifest_chain_accepts_legacy_entries_and_extends_them(tmp_path):
+    path = tmp_path / "m.jsonl"
+    legacy = {"run_id": "tcm-0000", "decision": "KEEP", "status": "done"}
+    path.write_text(json.dumps(legacy) + "\n")
+    store = RunManifestStore(path)
+    store.append({"run_id": "tcm-0001", "decision": "KEEP", "status": "done"})
+    entries = store.load()
+    assert len(entries) == 2
+    assert "entry_sha256" not in entries[0]  # legacy line untouched
+    assert entries[1]["prev_entry_sha256"] == ""
+    assert len(entries[1]["entry_sha256"]) == 64
+
+
+def test_resume_continues_plan_without_replay(tmp_path):
+    plan = [
+        ("baseline", {}),
+        ("wider model", {"model.hidden_dim": 64, "model.fusion_dim": 64}),
+        ("third candidate", {"trainer.epochs": 3}),
+    ]
+    first = harness(tmp_path, DeterministicStubProvider(plan=plan), rounds=1).run()
+    assert first["rounds_completed"] == 1
+    # a fresh provider on resume must propose plan[1], not replay plan[0]
+    second = harness(
+        tmp_path, DeterministicStubProvider(plan=plan), rounds=3
+    ).run()
+    assert second["rounds_completed"] == 3
+    entries = RunManifestStore(tmp_path / "ar" / "manifest.jsonl").load()
+    assert entries[1]["intent"] == "wider model"
+    assert entries[2]["intent"] == "third candidate"
+
+
+def test_agent_error_is_recorded_as_reverted_round(tmp_path):
+    class Broken:
+        def propose(self, round_index, context):
+            raise ValueError("agent reply is not valid JSON: 'oops'")
+
+    # each failed proposal consumes one round of the budget and is recorded
+    summary = harness(tmp_path, Broken(), rounds=2).run()
+    assert summary["rounds_completed"] == 2
+    entries = RunManifestStore(tmp_path / "ar" / "manifest.jsonl").load()
+    for entry in entries:
+        assert entry["decision"] == "REVERT"
+        assert entry["status"] == "agent_error"
+        assert "not valid JSON" in entry["reason"]
+    assert [e["run_id"] for e in entries] == ["tcm-0000", "tcm-0001"]
+
+
+def test_scope_key_outside_known_sections_recorded_as_rejected(tmp_path):
+    # editable_scope is runspec data; a custom scope can pass static
+    # validation yet name a section apply_config_patch refuses — the round
+    # must still be recorded as rejected, never crash the loop (R-03)
+    provider = DeterministicStubProvider(plan=[
+        ("baseline", {}),
+        ("illegal section", {"eval_provider.n": 3}),
+    ])
+    summary = harness(
+        tmp_path, provider,
+        editable_scope=["model.hidden_dim", "eval_provider.n"],
+    ).run()
+    rejected = summary["decisions"][1]
+    assert rejected["decision"] == "REVERT"
+    assert rejected["status"] == "rejected"
+    assert "not editable" in rejected["reason"]
+
+
+def test_worker_env_drops_inherited_pythonpath(monkeypatch):
+    from runtime.harness import SRC_DIR, _worker_env
+
+    monkeypatch.setenv("PYTHONPATH", "/host/junk:/more/junk")
+    env = _worker_env()
+    assert env["PYTHONPATH"] == str(SRC_DIR)

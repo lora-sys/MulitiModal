@@ -60,8 +60,10 @@ class AgentProvider(Protocol):
 class DeterministicStubProvider:
     """Offline deterministic provider: replays a fixed candidate plan.
 
-    Default plan mirrors the #44 design: baseline -> wider model -> LR
-    schedule tweak. Tests inject custom plans for REVERT/rejection cases.
+    Plan position derives from the round_index the harness passes (equal to
+    the number of recorded manifest entries), so a resumed run continues the
+    plan where it left off instead of replaying already-tried candidates
+    (review R-02). Tests inject custom plans for REVERT/rejection cases.
     """
 
     def __init__(self, plan: list[tuple[str, dict]] | None = None) -> None:
@@ -71,13 +73,11 @@ class DeterministicStubProvider:
             ("higher LR, one more epoch",
              {"trainer.learning_rate": 0.01, "trainer.epochs": 4}),
         ]
-        self.calls = 0
 
     def propose(self, round_index: int, context: dict) -> Proposal | None:
-        if self.calls >= len(self.plan):
+        if round_index >= len(self.plan):
             return None
-        intent, patch = self.plan[self.calls]
-        self.calls += 1
+        intent, patch = self.plan[round_index]
         return Proposal(intent=intent, config_patch=patch)
 
 

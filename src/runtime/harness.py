@@ -159,12 +159,13 @@ def default_tcm_runspec(rounds: int = 3, timeout_s: float = 300.0) -> dict:
 
 def _worker_env() -> dict:
     # sanitized whitelist: workers never inherit host credentials/proxy/auth
-    # material from the harness environment (#45 audit finding)
+    # material from the harness environment (#45 audit finding); PYTHONPATH
+    # is dropped, not preserved — an inherited host path could shadow
+    # third-party imports inside the "isolated" worker (review R-04)
     from .worker import ALLOWED_ENV, sanitize_env
 
     env = sanitize_env(dict(os.environ))
-    existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = str(SRC_DIR) + (os.pathsep + existing if existing else "")
+    env["PYTHONPATH"] = str(SRC_DIR)
     assert "PATH" in ALLOWED_ENV
     return env
 
@@ -280,11 +281,15 @@ class AutoResearchHarness:
             validate_config_patch(proposal.config_patch, self.runspec["editable_scope"])
             if proposal.source_patch is not None:
                 validate_source_patch(proposal.source_patch)
+            # inside the same static-check guard: a scope key outside the
+            # known sections raises here, not as an uncaught loop crash
+            config = apply_config_patch(
+                self.runspec["base_config"], proposal.config_patch
+            )
         except ValueError as exc:
             return finish("REVERT", "rejected", f"static check: {exc}")
 
         candidate_dir = self.out_dir / run_id
-        config = apply_config_patch(self.runspec["base_config"], proposal.config_patch)
         config.update({"task": "tcm", "out_dir": str(candidate_dir)})
         # Controlled comparison: every candidate uses the frozen runspec seed
         # and the same train/eval pools; only the editable patch differs.
@@ -306,7 +311,7 @@ class AutoResearchHarness:
             )
         except subprocess.TimeoutExpired:
             return finish("REVERT", "timeout", f"exceeded {timeout_s}s budget")
-        except (RuntimeError, OSError) as exc:
+        except (RuntimeError, OSError, json.JSONDecodeError) as exc:
             return finish("REVERT", "crash", f"training failed: {exc}")
 
         score_cmd = ["score", "--artifact", str(candidate_dir)]
@@ -415,9 +420,25 @@ class AutoResearchHarness:
             context = self.research_context()
             if context["round_index"] >= max_candidates:
                 break  # budget already consumed by a previous run (resume)
-            proposal = self.provider.propose(
-                context["round_index"], context
-            )
+            try:
+                proposal = self.provider.propose(
+                    context["round_index"], context
+                )
+            except ValueError as exc:
+                # an agent failure is a recorded round, not a crashed loop
+                index = context["round_index"]
+                self.store.append({
+                    "run_id": f"tcm-{index:04d}", "round_index": index,
+                    "intent": None, "patch": None,
+                    "mode": self.mode, "agent_status": self.agent_status,
+                    "smoke_only": self.smoke_only,
+                    "source_commit": _git_sha(),
+                    "frozen_hashes": self._frozen_hashes(),
+                    "decision": "REVERT", "status": "agent_error",
+                    "reason": f"agent proposal failed: {exc}",
+                    "best_so_far": None,
+                })
+                continue
             if proposal is None:
                 plan_exhausted = True
                 break

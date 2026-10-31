@@ -187,3 +187,21 @@ def test_score_real_refuses_foreign_manifest(tmp_path):
                                         smoke_only=False)
     with pytest.raises(ValueError, match="different real-data manifest"):
         _score_real(str(artifact), str(path), "unused.xls")
+
+
+def test_real_training_refuses_dev_steering_trainer_keys(tmp_path):
+    # review R-05: dev is the Trainer's eval provider in real mode for
+    # reporting only; early stop / best-epoch restore would let it steer
+    # fitting while selection also uses dev — fail closed instead
+    from runtime.protocols import train_candidate
+
+    m, path = manifest_file(tmp_path)
+    base = {
+        "task": "tcm", "data_mode": "real",
+        "data": {"manifest_path": str(path), "dataset_path": "unused.xls"},
+        "out_dir": str(tmp_path / "runs"),
+    }
+    for key, value in (("early_stop_patience", 2), ("restore_best", True)):
+        config = {**base, "trainer": {"epochs": 1, key: value}}
+        with pytest.raises(ValueError, match=f"trainer.{key}"):
+            train_candidate(config)
