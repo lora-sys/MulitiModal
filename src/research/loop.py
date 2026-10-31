@@ -31,9 +31,6 @@ import subprocess
 import time
 from pathlib import Path
 
-from runtime.manifest import MANIFEST_FILE, RunManifestStore
-from runtime.tcm_eval import PRIMARY_METRIC
-
 from research.guard import (
     PatchRejected,
     apply_patch,
@@ -41,6 +38,8 @@ from research.guard import (
     validate_frozen_imports,
     validate_source_patch,
 )
+from runtime.manifest import MANIFEST_FILE, RunManifestStore
+from runtime.tcm_eval import PRIMARY_METRIC
 
 #: Minimum score gain per net line added to the editable file.
 #:

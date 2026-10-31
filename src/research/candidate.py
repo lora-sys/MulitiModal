@@ -31,9 +31,9 @@ import time
 import torch
 import torch.nn as nn
 
-from research.frozen import TIME_BUDGET_SECONDS, FoldData
 from core.batch import ModelOutput
 from core.losses import masked_multilabel_bce_loss
+from research.frozen import TIME_BUDGET_SECONDS, FoldData
 
 
 class FusionMLP(nn.Module):

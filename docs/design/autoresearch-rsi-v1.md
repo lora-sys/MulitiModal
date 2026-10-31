@@ -272,3 +272,28 @@ v7 实测：**同一套权重** dev macro-F1 0.1451、holdout 0.3445。划分间
 | 5 | 逐轮**先读上下文再提案**，并把 §11.5 的时间戳自检作为硬约束（当前 22/24 轮为批量预写） | 无（收紧溯源） | 已有 `proposal_predates_context` 字段，只需把它从"记录"升级为"拒绝" |
 
 **在这 5 条落地之前，本项目的 `AutoResearchHarness` 应被如实称为"带溯源的受限超参搜索"，而不是 RSI/autoresearch。** 文档、README 与 issue 措辞需要同步改，否则就是把一个空搜索空间的结论包装成研究结论。
+
+---
+
+## 13. 源码级循环已落地（2026-10-31，v9）
+
+§12.5 列的 5 条边界改动**已实施**，因此本项目现在有两个循环，用途不同、不得混称：
+
+| 循环 | 可改面 | 用途 | 状态 |
+| --- | --- | --- | --- |
+| `runtime/harness.py`（v1–v8） | 6 个超参**取值** | 带溯源的受限超参搜索；保留作为回归与冒烟路径 | 23/23 REVERT，冠军未动 |
+| `research/loop.py`（v9） | **源码**（`candidate.py` 一个文件） | 真正的 autoresearch：改架构/损失/优化器/循环，分支随结果前进 | 第 0 轮基线 0.3491 已 KEEP，见 `docs/reports/research-src-v9.md` |
+
+§12.5 对照与实施情况：
+
+| §12.5 动作 | 实施 | 位置 |
+| --- | --- | --- |
+| 1 允许源码 patch（限定文件） | `research/guard.py`：只接受可改文件、只审查**新增行**、禁用表只列**评分侧**符号 | `guard.validate_source_patch` |
+| 2 固定墙钟预算、移除 `trainer.epochs` | `research/frozen.py` `TIME_BUDGET_SECONDS`（每折），超预算 `overran → REVERT`；v9 的可改面里没有 epochs | `frozen.py` / `loop.py` |
+| 3 simplicity 判据 | `loop.decide`：增益 > 1×SEM **且** ≥ 0.001×净增行数；删代码不更差直接 KEEP | `loop.decide` |
+| 4 记录每轮源码 diff 与 commit | 每轮存 `patch`、`git_commit_sha`、`git_parent_sha`、`complexity`；KEEP 才前进分支 | `loop.run_round` |
+| 5 逐轮读上下文再提案 | v9 逐轮驱动（非批量预写）；`proposal_mtime` 与轮次开始时间可比对 | `loop.run_round` |
+
+**仍未解决、不得宣称已解决**：候选进程能读工作树内文件（含原始工作簿），理论上可自行关联标签；当前防线是静态检查 + 评估器进程外运行，证据等级仍是 `AGENT_ISOLATION_UNVERIFIED`（§12.3 与上游同源风险）。
+
+**度量口径同时冻结**（`docs/reports/tcm-50-real-training.md` 的 v8 结论因此被修正）：选择指标从 `macro_f1@0.5` 改为阈值无关的 `macro_ap`。理由是实测的：同一逻辑回归在 0.5 阈值下 0.215、按训练先验阈值 0.3844，而神经冠军 0.3827——v8 headline 的"0.383 vs 0.215"是阈值产物，不是模型优势。F1 仍按两种阈值上报。

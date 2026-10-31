@@ -324,7 +324,7 @@ def _add_src_args(p: argparse.ArgumentParser) -> None:
 
 def cmd_research_src_state(args: argparse.Namespace) -> int:
     """Print the state a source-level proposer needs (no holdout, no evaluator)."""
-    from research.loop import GitWorktree, SourceResearchLoop
+    from research.loop import GitWorktree
 
     loop = _src_loop(args, GitWorktree(Path(args.worktree), args.branch))
     print(json.dumps(loop.state(), indent=2, ensure_ascii=False))
@@ -333,7 +333,7 @@ def cmd_research_src_state(args: argparse.Namespace) -> int:
 
 def cmd_research_src_round(args: argparse.Namespace) -> int:
     """Apply ONE source patch through the full loop and report the decision."""
-    from research.loop import GitWorktree, SourceResearchLoop
+    from research.loop import GitWorktree
 
     worktree = GitWorktree(Path(args.worktree), args.branch)
     loop = _src_loop(args, worktree)
@@ -348,7 +348,7 @@ def cmd_research_src_round(args: argparse.Namespace) -> int:
 
 def cmd_research_src_run(args: argparse.Namespace) -> int:
     """Run a list of pre-supplied patches (JSON: [{"patch","intent"}, ...])."""
-    from research.loop import GitWorktree, SourceResearchLoop
+    from research.loop import GitWorktree
 
     loop = _src_loop(args, GitWorktree(Path(args.worktree), args.branch))
     proposals = json.loads(Path(args.proposals).read_text())
