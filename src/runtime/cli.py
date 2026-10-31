@@ -8,6 +8,7 @@ Usage: PYTHONPATH=src python -m runtime.cli <command> ...
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import UTC, datetime
@@ -142,6 +143,7 @@ def cmd_research_step(args: argparse.Namespace) -> int:
     from runtime.harness import (
         TCM_ONLY_MESSAGE,
         AutoResearchHarness,
+        context_digest,
         default_real_tcm_runspec,
         default_tcm_runspec,
     )
@@ -171,7 +173,11 @@ def cmd_research_step(args: argparse.Namespace) -> int:
         runspec, provider=FixedProposalProvider(None), out_dir=args.out
     )
     if args.print_context:
-        print(json.dumps(harness.research_context(), indent=2, ensure_ascii=False))
+        context = harness.research_context()
+        rendered = json.dumps(context, indent=2, ensure_ascii=False)
+        if args.context_out:
+            Path(args.context_out).write_text(rendered)
+        print(rendered)
         return 0
     data = json.loads(Path(args.proposal_file).read_text())
     if not isinstance(data, dict) or "intent" not in data:
@@ -180,8 +186,26 @@ def cmd_research_step(args: argparse.Namespace) -> int:
     proposal = Proposal(
         intent=str(data["intent"]), config_patch=dict(data.get("config_patch", {}))
     )
+    # agent provenance (#45): WHO proposed, WHEN-stated context it saw, and
+    # the exact bytes it returned, so the round is auditable out-of-band
+    provenance: dict = {}
+    if args.proposer:
+        provenance["proposer"] = args.proposer
+        provenance["proposal_sha256"] = hashlib.sha256(
+            Path(args.proposal_file).read_bytes()
+        ).hexdigest()
+        if args.context_file:
+            seen = json.loads(Path(args.context_file).read_text())
+            provenance["context_sha256"] = context_digest(seen)
+        if args.proposal_raw:
+            raw = Path(args.proposal_raw).read_bytes()
+            provenance["proposal_raw_sha256"] = hashlib.sha256(raw).hexdigest()
+    elif args.context_file or args.proposal_raw:
+        print(json.dumps({"ok": False,
+                          "error": "--context-file/--proposal-raw require --proposer"}))
+        return 2
     try:
-        entry = harness.step(proposal)
+        entry = harness.step(proposal, provenance=provenance or None)
     except RuntimeError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}))
         return 1
@@ -293,8 +317,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dataset", default=None)
     p.add_argument("--print-context", action="store_true",
                    help="print the research state JSON and exit")
+    p.add_argument("--context-out", default=None,
+                   help="also write the printed research state to this file "
+                        "(hand it to the agent; pass it back with --context-file)")
     p.add_argument("--proposal-file", default=None,
                    help="JSON file with {'intent': ..., 'config_patch': {...}}")
+    p.add_argument("--proposer", default=None,
+                   help="agent identity for the round, e.g. "
+                        "'antigravity:gemini-3.8-flash-high' (recorded in the "
+                        "manifest; required for verifiable agent provenance)")
+    p.add_argument("--context-file", default=None,
+                   help="the context file the agent was shown; its digest is "
+                        "recorded and must match the current research state")
+    p.add_argument("--proposal-raw", default=None,
+                   help="raw agent reply file; its digest is recorded")
     p.set_defaults(func=cmd_research_step)
 
     p = sub.add_parser("research-status")

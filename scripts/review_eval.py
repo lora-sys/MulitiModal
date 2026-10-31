@@ -614,6 +614,132 @@ def e37_champion_evaluated_under_own_scaler():
 
 
 @check
+def e57_agent_provenance_recorded():
+    # 2026-10-31 audit: the manifest recorded an intent string but NOT who
+    # proposed it or what state it saw — "the model really did AutoResearch"
+    # was unverifiable from the artifacts. step() now requires a proposer
+    # and binds the proposal to the exact research state it was based on.
+    from runtime.agent import Proposal
+    from runtime.harness import AutoResearchHarness, context_digest, default_tcm_runspec
+
+    with tempfile.TemporaryDirectory() as tmp:
+        harness = AutoResearchHarness(
+            default_tcm_runspec(rounds=2, timeout_s=120.0),
+            out_dir=Path(tmp) / "ar",
+        )
+        context = harness.research_context()
+        stale = {"proposer": "test:agent", "context_sha256": "0" * 64}
+        try:
+            harness.step(Proposal(intent="x", config_patch={}), provenance=stale)
+        except RuntimeError as exc:
+            assert "stale" in str(exc), exc
+        else:
+            raise AssertionError("stale agent context accepted")
+
+        try:
+            harness.step(Proposal(intent="x", config_patch={}),
+                         provenance={"proposer": ""})
+        except RuntimeError as exc:
+            assert "proposer" in str(exc), exc
+        else:
+            raise AssertionError("empty proposer accepted")
+
+        entry = harness.step(
+            Proposal(intent="baseline", config_patch={}),
+            provenance={"proposer": "test:agent",
+                        "context_sha256": context_digest(context),
+                        "proposal_sha256": "a" * 64},
+        )
+        assert entry["proposer"] == "test:agent"
+        assert entry["context_sha256"] == context_digest(context)
+        assert entry["proposal_sha256"] == "a" * 64
+
+        # round 2's digest must describe the state AFTER round 1's result,
+        # i.e. the agent is shown the history it is asked to improve on
+        second = harness.research_context()
+        assert second["history"] and second["round_index"] == 1
+        assert context_digest(second) != context_digest(context)
+
+
+@check
+def e58_cli_requires_proposer_for_attribution_args():
+    # --context-file/--proposal-raw are attribution evidence; using them
+    # without --proposer would record hashes with no claimed author
+    from runtime.cli import main
+
+    with tempfile.TemporaryDirectory() as tmp:
+        ctx = Path(tmp) / "ctx.json"
+        assert main(["research-step", "--profile", "tcm", "--rounds", "1",
+                     "--out", str(Path(tmp) / "runs"), "--print-context",
+                     "--context-out", str(ctx)]) == 0
+        assert json.loads(ctx.read_text())["round_index"] == 0
+
+        proposal = Path(tmp) / "p.json"
+        proposal.write_text(json.dumps({"intent": "x", "config_patch": {}}))
+        # no --proposer, but an attribution file is supplied -> refused
+        import contextlib
+        import io
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            rc = main(["research-step", "--profile", "tcm", "--rounds", "1",
+                       "--out", str(Path(tmp) / "runs2"),
+                       "--proposal-file", str(proposal),
+                       "--context-file", str(ctx)])
+        assert rc == 2, buffer.getvalue()
+        assert "--proposer" in buffer.getvalue()
+
+
+@check
+def e60_patches_accumulate_over_champion():
+    # 2026-10-31 audit: every candidate was trained from base_config, so a
+    # KEEP never became the starting point and the report described a
+    # 32-wide champion as 64-wide. KEEPs must now accumulate (hill climbing).
+    from runtime.agent import DeterministicStubProvider
+    from runtime.harness import AutoResearchHarness, default_tcm_runspec
+    from runtime.manifest import RunManifestStore
+
+    with tempfile.TemporaryDirectory() as tmp:
+        provider = DeterministicStubProvider(plan=[
+            ("widen", {"model.hidden_dim": 64, "model.fusion_dim": 64}),
+            ("raise lr only", {"trainer.learning_rate": 0.01}),
+        ])
+        harness = AutoResearchHarness(
+            default_tcm_runspec(rounds=2, timeout_s=120.0),
+            provider=provider, out_dir=Path(tmp) / "ar",
+        )
+        summary = harness.run()
+        entries = RunManifestStore(Path(tmp) / "ar" / "manifest.jsonl").load()
+        assert summary["rounds_completed"] == 2
+        first = entries[0]["effective_config"]
+        assert first["model"]["hidden_dim"] == 64
+        # the second candidate changes only lr, but must still run at 64-wide
+        second = entries[1]["effective_config"]
+        assert second["model"]["hidden_dim"] == 64, second
+        assert second["trainer"]["learning_rate"] == 0.01, second
+        # the round-2 config the agent is shown reflects the champion
+        context = harness.research_context()
+        assert context["current_config"]["model"]["hidden_dim"] == 64
+
+
+@check
+def e61_report_champion_config_matches_checkpoint():
+    # the delivered report must describe the champion's ACTUAL config: the
+    # audit found "64-wide" written for a 32-wide champion
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import inspect
+
+    import tcm_real_report
+
+    source = inspect.getsource(tcm_real_report.main)
+    assert "champion_cfg" in source and "state" in source
+    # champion_provenance must carry the checkpoint's own trainer config
+    write_src = inspect.getsource(tcm_real_report)
+    assert '"trainer_config": champion_trainer' in write_src
+    assert '"model_config": champion_cfg' in write_src
+
+
+@check
 def e38_manifest_chain_tamper_evidence():
     # Pi round-4 R-01 + round-5 R-01: the append-only manifest must detect
     # edits, deletions, reordering AND unchained forged lines (after any
@@ -808,6 +934,136 @@ def e42_real_training_forbids_dev_steering():
                 )
 
 
+def _flatten_numbers(obj) -> list[float]:
+    out: list[float] = []
+    if isinstance(obj, bool):
+        return out
+    if isinstance(obj, (int, float)):
+        out.append(float(obj))
+    elif isinstance(obj, dict):
+        for value in obj.values():
+            out.extend(_flatten_numbers(value))
+    elif isinstance(obj, list):
+        for value in obj:
+            out.extend(_flatten_numbers(value))
+    return out
+
+
+@check
+def e62_committed_docs_check_bites_and_does_not_false_positive():
+    # The first cut of E60 scanned every "N 宽" in the doc, so the sentence
+    # narrating the v4 defect ("called a 32-wide champion 64-wide") tripped
+    # it. Narrowing it to the champion's own config line must keep both
+    # properties: stale/changed attribution fails, narrative prose passes.
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        summary = tmp / "summary.json"
+        summary.write_text(json.dumps({
+            "manifest_sha256": "a" * 64,
+            "dataset_sha256": "b" * 64,
+            "primary_value": 0.25,
+            "champion_provenance": {"model_config": {"hidden_dim": 32}},
+        }))
+        base = (
+            "## 重跑修复\n\n旧实现把 32 宽的冠军写成了 64 宽。\n\n"
+            "## 冠军\n\n冠军 **tcm-0003**：{width} 宽 trunk、60 epochs。\n"
+        )
+        doc = tmp / "doc.md"
+
+        doc.write_text(base.format(width=32))
+        assert check_committed_docs_numbers(str(summary), doc) == [], \
+            "historical narrative about the old defect false-positived"
+
+        doc.write_text(base.format(width=64))
+        problems = check_committed_docs_numbers(str(summary), doc)
+        assert any("64-wide" in p and "32-wide" in p for p in problems), problems
+
+        doc.write_text("## 冠军\n\n冠军 **tcm-0003** 跑了 60 epochs。\n")
+        problems = check_committed_docs_numbers(str(summary), doc)
+        assert any("never states the champion's width" in p for p in problems), problems
+
+        doc.write_text(base.format(width=32) + "\n部署 macro-F1 0.349。\n")
+        problems = check_committed_docs_numbers(str(summary), doc)
+        assert any("0.349" in p for p in problems), problems
+
+
+def check_committed_docs_numbers(
+    summary_path: str | None, docs_path: str | Path | None = None
+) -> list[str]:
+    """E59: every metric-looking number in the committed report must be
+    backed by summary.json. The 2026-10-31 audit found a stale deployable
+    macro-F1 (0.349 vs artifact 0.2191), a wrong holdout positive rate
+    (0.32 vs 0.1994) and a mismatched regression manifest hash."""
+    problems: list[str] = []
+    if not summary_path:
+        return problems
+    docs = Path(docs_path) if docs_path else (
+        Path(__file__).resolve().parent.parent / "docs/reports/tcm-50-real-training.md"
+    )
+    if not docs.exists():
+        return problems
+    summary = json.loads(Path(summary_path).read_text())
+    supported = _flatten_numbers(summary)
+    text = docs.read_text()
+    import re
+
+    for token in re.findall(r"(?<![\d.])0\.\d{3,4}(?![\d])", text):
+        value = float(token)
+        decimals = len(token.split(".")[1])
+        tol = max(0.5 * 10 ** -decimals, 2e-4)  # rounding + prose approximations
+        if not any(abs(value - s) <= tol for s in supported):
+            problems.append(
+                f"E59: committed report states {token}, which no summary.json "
+                "value supports (stale or fabricated metric)"
+            )
+    for match in re.findall(r"manifest `([0-9a-f]{16})…`", text):
+        known = [summary.get(k, "") for k in ("manifest_sha256", "dataset_sha256")]
+        known += _flatten_strings(summary)
+        if not any(str(v).startswith(match) for v in known):
+            problems.append(
+                f"E59: committed report cites manifest {match}…, which does "
+                "not match any hash in summary.json"
+            )
+    # E60: the width the report ATTRIBUTES to the champion must equal the
+    # checkpoint's real width. Only the champion's own config sentence counts —
+    # narrative about a past defect ("v4 called a 32-wide champion 64-wide")
+    # is not an attribution and must not trip the check.
+    hidden = (
+        summary.get("champion_provenance", {}).get("model_config", {}) or {}
+    ).get("hidden_dim")
+    if hidden is not None:
+        claims = [
+            int(w)
+            for line in re.findall(r"冠军\s*\*\*tcm-\d+\*\*：([^\n]*)", text)
+            for w in re.findall(r"(\d+)\s*宽", line)
+        ]
+        if not claims:
+            problems.append(
+                "E60: committed report never states the champion's width on "
+                "the champion config line (cannot verify against checkpoint)"
+            )
+        for width in claims:
+            if width != int(hidden):
+                problems.append(
+                    f"E60: committed report calls the champion {width}-wide, "
+                    f"but the checkpoint is {hidden}-wide"
+                )
+    return problems
+
+
+def _flatten_strings(obj) -> list[str]:
+    out: list[str] = []
+    if isinstance(obj, str):
+        out.append(obj)
+    elif isinstance(obj, dict):
+        for value in obj.values():
+            out.extend(_flatten_strings(value))
+    elif isinstance(obj, list):
+        for value in obj:
+            out.extend(_flatten_strings(value))
+    return out
+
+
 def check_summary_artifacts(summary_path: str | None, report_path: str | None) -> list[str]:
     problems: list[str] = []
     if summary_path:
@@ -824,6 +1080,18 @@ def check_summary_artifacts(summary_path: str | None, report_path: str | None) -
                 problems.append(f"E31/E36: summary.json missing {field}")
         if "manifest_sha256" not in summary.get("champion_provenance", {}):
             problems.append("E28: champion_provenance lacks manifest binding")
+        # E57 audit follow-up: every round must be attributable to an agent
+        for entry in summary.get("autoresearch", {}).get("per_round", []):
+            missing = [
+                k for k in ("proposer", "context_sha256", "proposal_sha256")
+                if not entry.get(k)
+            ]
+            if missing:
+                problems.append(
+                    f"E57: round {entry.get('run_id')} lacks agent provenance "
+                    f"{missing} (who proposed it / what state it saw)"
+                )
+        problems.extend(check_committed_docs_numbers(summary_path))
     if report_path:
         text = Path(report_path).read_text()
         for token, label in (

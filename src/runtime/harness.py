@@ -191,6 +191,13 @@ def _artifact_sha256(artifact_dir: str | Path) -> str:
     return hashlib.sha256(weights.read_bytes()).hexdigest()
 
 
+def context_digest(context: dict) -> str:
+    """Canonical digest of a research state: lets the manifest prove which
+    state an agent's proposal was based on (#45 agent provenance)."""
+    canonical = json.dumps(context, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def _primary_value(score: dict) -> float | None:
     value = score.get("primary_value")
     if value is None or isinstance(value, str) \
@@ -259,7 +266,33 @@ class AutoResearchHarness:
 
     # -- one candidate ----------------------------------------------------
 
-    def _run_candidate(self, index: int, proposal: Proposal, timeout_s: float) -> dict:
+    def _champion_config(self) -> dict:
+        """Effective config the next candidate starts from: the current
+        champion's, so KEEPs accumulate (hill climbing). Starting every
+        candidate from base_config instead would make rounds independent
+        probes, not research (2026-10-31 audit finding: the v4 champion was
+        32-wide while the report described it as 64-wide)."""
+        for entry in reversed(self.store.load()):
+            cfg = entry.get("effective_config")
+            if entry.get("decision") == "KEEP" and cfg:
+                return {
+                    "model": dict(cfg["model"]),
+                    "trainer": dict(cfg["trainer"]),
+                    "train_provider": dict(cfg.get("train_provider", {})),
+                }
+        base = self.runspec["base_config"]
+        return {
+            "model": dict(base.get("model", {})),
+            "trainer": {
+                k: v for k, v in base.get("trainer", {}).items() if k != "seed"
+            },
+            "train_provider": dict(base.get("train_provider", {})),
+        }
+
+    def _run_candidate(
+        self, index: int, proposal: Proposal, timeout_s: float,
+        provenance: dict | None = None,
+    ) -> dict:
         run_id = f"tcm-{index:04d}"
         started = time.monotonic()
         entry: dict = {
@@ -273,6 +306,8 @@ class AutoResearchHarness:
             "source_commit": _git_sha(),
             "frozen_hashes": self._frozen_hashes(),
         }
+        if provenance:
+            entry.update(provenance)
 
         def finish(decision: str, status: str, reason: str, **extra) -> dict:
             entry.update(
@@ -289,11 +324,18 @@ class AutoResearchHarness:
                 validate_source_patch(proposal.source_patch)
             # inside the same static-check guard: a scope key outside the
             # known sections raises here, not as an uncaught loop crash
-            config = apply_config_patch(
-                self.runspec["base_config"], proposal.config_patch
-            )
+            start = {**self.runspec["base_config"], **self._champion_config()}
+            config = apply_config_patch(start, proposal.config_patch)
         except ValueError as exc:
             return finish("REVERT", "rejected", f"static check: {exc}")
+
+        entry["effective_config"] = {
+            "model": dict(config["model"]),
+            "trainer": {
+                k: v for k, v in config["trainer"].items() if k != "seed"
+            },
+            "train_provider": {"batch_size": config["train_provider"].get("batch_size")},
+        }
 
         candidate_dir = self.out_dir / run_id
         config.update({"task": "tcm", "out_dir": str(candidate_dir)})
@@ -386,6 +428,7 @@ class AutoResearchHarness:
             ),
             "best_metric": champion.get("best_so_far") if champion else None,
             "editable_scope": self.runspec["editable_scope"],
+            "current_config": self._champion_config(),
             "base_config": self.runspec["base_config"],
             "primary_metric": self.runspec["frozen"]["primary_metric"],
             "history": [
@@ -402,9 +445,13 @@ class AutoResearchHarness:
             ],
         }
 
-    def step(self, proposal: Proposal) -> dict:
+    def step(self, proposal: Proposal, provenance: dict | None = None) -> dict:
         """Run exactly ONE candidate round with an externally supplied
-        proposal (research-step driver). Budget and continuity checks apply."""
+        proposal (research-step driver). Budget and continuity checks apply.
+
+        `provenance` records WHO proposed the round and WHAT it was shown
+        (proposer id, context digest, proposal digest) so a third party can
+        verify agent-driven research from the manifest alone (#45)."""
         entries = self.store.load()
         self._check_continuity(entries)
         index = len(entries)
@@ -412,10 +459,22 @@ class AutoResearchHarness:
             raise RuntimeError(
                 f"candidate budget exhausted ({index} rounds already recorded)"
             )
+        if provenance:
+            expected = context_digest(self.research_context())
+            seen = provenance.get("context_sha256")
+            if seen and seen != expected:
+                raise RuntimeError(
+                    "the agent's research context is stale: it was printed "
+                    "before the manifest changed, so its proposal was not "
+                    "based on the current research state"
+                )
+            if not provenance.get("proposer"):
+                raise RuntimeError("provenance requires a non-empty proposer id")
         # proposals arriving through step() come from an external agent
         self._external_provider = True
         return self._run_candidate(
-            index, proposal, self.runspec["budget"]["per_run_timeout_s"]
+            index, proposal, self.runspec["budget"]["per_run_timeout_s"],
+            provenance=provenance,
         )
 
     # -- full loop ----------------------------------------------------------
