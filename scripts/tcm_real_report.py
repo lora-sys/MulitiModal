@@ -320,7 +320,7 @@ def chart_rounds(entries: list[dict], out: Path) -> None:
     colors = [KEEP_COLOR if e["decision"] == "KEEP" else REVERT_COLOR for e in rounds]
     fig, ax = plt.subplots(figsize=(7.5, 4))
     ax.bar(xs, ys, color=colors)
-    best = min(ys)
+    best = max(ys)  # the primary metric is maximised (macro-F1)
     ax.axhline(best, color="#264653", linestyle="--", linewidth=1,
                label=f"best {best:.4f}")
     # the two fill colours carry the decision; without a key the reader cannot
@@ -333,8 +333,8 @@ def chart_rounds(entries: list[dict], out: Path) -> None:
     ax.set_xticks(xs)
     ax.set_xticklabels([e["run_id"] for e in rounds], fontsize=8)
     ax.set_xlabel("AutoResearch round")
-    ax.set_ylabel("dev subject MAE\n(lower is better)")
-    ax.set_title("AutoResearch rounds — primary metric")
+    ax.set_ylabel("dev macro-F1 (selection metric)\n(higher is better)")
+    ax.set_title("AutoResearch rounds — selection metric (dev macro-F1)")
     ax.legend(handles, labels, fontsize=8)
     for x, y in zip(xs, ys, strict=True):
         ax.text(x, y, f"{y:.4f}", ha="center", va="bottom", fontsize=8)
@@ -461,6 +461,20 @@ def _regression_verdict(regression: dict) -> str:
     )
 
 
+def _zero_dims_line(neural: dict) -> str:
+    """Name the dimensions whose holdout F1 is exactly 0 — a macro average
+    hides a total miss on a supported dimension."""
+    per_dim = neural["holdout"]["per_dim"]
+    zeros = [
+        dim for dim, v in per_dim.items()
+        if v.get("f1") == 0.0 and (v.get("support_positive") or 0) > 0
+    ]
+    if not zeros:
+        return "- 逐维失败维度：holdout 上没有被完全漏判的维度"
+    detail = ", ".join(f"{d}（{per_dim[d]['support_positive']} 个正例）" for d in zeros)
+    return f"- 逐维失败维度：holdout 上 F1 恰为 0 的维度——{detail}；macro 平均会掩盖它们"
+
+
 def _fmt(value: float | None, digits: int = 3) -> str:
     return f"{value:.{digits}f}" if value is not None else "N/A"
 
@@ -526,17 +540,19 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"标准：{summary['standard_version']}；标签契约：`{summary['label_version']}`  ",
         f"冻结 manifest：`{summary['manifest_sha256'][:16]}…`；划分："
         f"train {split_sizes['train']} / dev {split_sizes['dev']} / "
-        f"holdout {split_sizes['holdout']}（subject-level，#27）",
+        f"holdout {split_sizes['holdout']}"
+        "（行级互斥划分；受试者级不重叠未经验证——数据集无 ID 列）",
         "",
         "## AutoResearch 轮次",
         "",
         f"共 {ar['rounds_completed']} 轮：KEEP {keep}，REVERT {revert}。",
-        "冠军：`" + ar["champion"]["run_id"] + "`（dev subject MAE "
+        "冠军：`" + ar["champion"]["run_id"] + "`（dev macro-F1（选择指标）"
         f"{_fmt(ar['champion']['best_so_far'], 4)}，权重 SHA-256 "
         f"`{(ar['champion']['artifact_sha256'] or '')[:16]}…`）。",
-        "所有候选使用相同冻结种子与批次顺序（epoch 级确定性 shuffle），仅可编辑超参不同。",
+        "所有候选使用相同冻结种子与 epoch 级确定性 shuffle；batch_size 被改动时"
+        "批次组成随之变化，其余超参独立比较。",
         "",
-        "| 轮 | 意图 | 提案者 | 决定 | dev MAE |",
+        "| 轮 | 意图 | 提案者 | 决定 | dev macro-F1 |",
         "| --- | --- | --- | --- | --- |",
     ]
     for e in ar["per_round"]:
@@ -558,7 +574,12 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"{neural['holdout']['n_undefined_f1']} 个）",
         f"- 神经冠军 subject MAE：dev {_fmt(neural['dev']['subject_mae'], 4)}，"
         f"holdout {_fmt(neural['holdout']['subject_mae'], 4)}"
-        f"（选择指标即此口径，可与基线直接对比）",
+        f"（诊断口径；选择指标是 macro-F1，即上方口径）",
+        f"- 神经冠军 subject RMSE（Brier 诊断，非选择指标）：dev "
+        f"{_fmt(neural['dev']['subject_rmse'], 4)}，holdout "
+        f"{_fmt(neural['holdout']['subject_rmse'], 4)}；Dummy（多数类）holdout "
+        f"subject RMSE {_fmt(base['dummy_majority']['holdout']['subject_rmse'], 4)}",
+        _zero_dims_line(neural),
         f"- Dummy（多数类）：holdout macro-F1 {holdout_macro_f1(base['dummy_majority'])}，"
         f"holdout subject MAE {_fmt(base['dummy_majority']['holdout']['subject_mae'], 4)}",
         f"- BMI-only 逻辑回归：holdout macro-F1 {holdout_macro_f1(base['bmi_only_logistic'])}，"
@@ -566,15 +587,22 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"- 全特征逻辑回归（含可用性指示位）：holdout macro-F1 "
         f"{holdout_macro_f1(base['feature_logistic'])}，"
         f"holdout subject MAE {_fmt(base['feature_logistic']['holdout']['subject_mae'], 4)}",
-        "- **口径说明（必读）**：subject MAE 度量概率输出到 0/1 标签的 L1 距离，"
-        f"常数近零预测器（Dummy）天然占优——holdout 平均正类率 ≈{_fmt(pos_rate, 2)} "
-        f"意味着全零预测的 MAE 就约等于 {_fmt(pos_rate, 2)}。因此在 MAE 口径下 "
-        "Dummy 优于所有真实模型是**指标性质**，不是模型失效；"
-        "神经冠军的价值在阈值化判别（F1）：holdout macro-F1 "
+        "- **口径说明（必读）**：AutoResearch 的选择指标就是这里报告的 "
+        "macro-F1（0.5 阈值、固定观测维分母），保证爬山的落点和交付指标一致。"
+        "两个概率损失代理都被实测否决：subject MAE 是 L1，二值标签下的最优常数是"
+        f"中位数 0（本数据正类率 ≈{_fmt(pos_rate, 2)} < 0.5），按它爬山永远赢不过"
+        "全零预测器；subject RMSE（Brier）虽是 proper scoring rule，但对没有可用信号的"
+        "模型，最优解是预测基率常数——实测那一轮冠军 dev macro-F1 只有 0.021，"
+        "而普通逻辑回归 holdout 是 "
+        f"{_fmt(base['feature_logistic']['holdout']['macro_f1'])}。"
+        "因此 MAE/RMSE 仅作诊断，选择看 F1：holdout macro-F1 "
         f"{_fmt(neural['holdout']['macro_f1'])} 对 Dummy "
         f"{_fmt(dummy_holdout['macro_f1'])}、全特征逻辑回归 "
         f"{_fmt(base['feature_logistic']['holdout']['macro_f1'])}。"
-        "两个口径都给出，读者可自行权衡。",
+        "三个口径都给出，读者可自行权衡。"
+        f"**统计强度**：holdout 仅 {split_sizes['holdout']} 人，macro-F1 的差异在"
+        "数十个正例量级上属噪声范围，未做重采样置信区间；跨划分的重复性才是判据，"
+        "单一划分上的领先不构成「该模型更好」的证据。",
         "",
         "图表：`chart-rounds.png`、`chart-per-dim-f1.png`、`chart-support.png`、"
         "`chart-regression-dev.png`、`chart-regression-holdout.png`"
@@ -597,14 +625,14 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "该任务包含 QC 异常行、未做敏感性对照，属已知限制。"
         + _regression_verdict(regression),
         f"- **row-QC 敏感性**（同一冻结划分剔除 {qc['excluded_subject_rows']} 后重训练，"
-        f"冠军同配置）：剔除后模型的 dev subject MAE "
-        f"{_fmt(qc.get('dev_subject_mae_without'), 4)} vs 含 QC 行训练的冠军在同一"
-        f"缩减 dev 上 {_fmt(qc.get('dev_subject_mae_champion_on_reduced'), 4)}"
-        f"（同分母对照；冠军在完整 {split_sizes['dev']} 人 dev 上为 "
-        f"{_fmt(ar['champion']['best_so_far'], 4)}）。",
+        f"冠军同配置）：剔除后模型的 dev 指标 "
+        f"{_fmt(qc.get('dev_subject_mae_without'), 4)} vs 含 QC 行训练的冠军 "
+        f"{_fmt(qc.get('dev_subject_mae_champion_on_reduced'), 4)}。"
+        "该行位于 train 折，dev 分区不变（若两值完全相同，说明差异只落在训练侧）。",
         f"- **Deployable（Body/Vitals-only）消融**（冠军同超参，仅换特征集）："
         f"dev subject MAE {_fmt(dep['dev_subject_mae'], 4)}，"
-        f"dev macro-F1 {_fmt((dep.get('f1') or {}).get('dev', {}).get('macro_f1'))}。",
+        f"dev macro-F1 {_fmt((dep.get('f1') or {}).get('dev', {}).get('macro_f1'))}。"
+        "单 seed、dev 41 人、无区间估计——只作方向参考，不构成特征贡献的显著证据。",
         "",
         "## 证据状态与限制",
         "",
@@ -613,18 +641,26 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "不是作者发布的分类标签，也不是临床诊断真值。注意 CCMQ 分数粒度使有效切点"
         "随各维题数漂移（6 题维 ≈41.7、7 题维 ≈42.9、8 题维 ≈40.6）。",
         "- 列映射为 FINGERPRINT_CROSS_CHECKED（论文定义表付费墙内）；"
-        f"QC 异常行 {qc['excluded_subject_rows']} 未混入敏感性对照以外的任何对照；"
-        "QC 判定仅基于计分规则指纹，与标签、模型表现和 holdout 均无关，"
-        "不构成 holdout 信息泄漏。",
+        f"QC 异常行 {qc['excluded_subject_rows']} **包含在**主分析与全部基线中，"
+        "只在 row-QC 敏感性分析里被剔除；QC 判定仅基于计分规则指纹，与标签、"
+        "模型表现和 holdout 均无关，不构成 holdout 信息泄漏。",
         f"- 受试者身份 = 数据行序（{summary.get('subject_identity', 'UNVERIFIED')}）——"
         "数据集无受试者 ID 列，无法独立核验每行确为不同受试者。",
         f"- 冠军由 {ar['rounds_completed']} 个候选在 dev 上选出（winner's curse）；"
         f"消融为单 seed 固定配置；dev {split_sizes['dev']} 人 / holdout "
         f"{split_sizes['holdout']} 人，小数位差异属噪声，未做置信区间重采样。",
-        "- holdout 解锁记录：旧冻结划分在 v1、v2 两次报告中解锁（均已披露）；"
+        "- holdout 解锁记录（逐项）：split seed 20261030 在 v1、v2 解锁；"
+        "20261101 在 v3 前置报告解锁；20261102 在 v3 报告解锁（另有一次中止运行"
+        "未产出报告）；20261103 在 v4 报告解锁；20261104 在 v5 报告解锁；"
+        "20261105 在 v6 报告解锁（该轮的选择指标后来被否决，但其 holdout 已消耗）。"
         f"本报告使用全新冻结划分（manifest `{summary['manifest_sha256'][:12]}…`，"
         f"seed {manifest['split']['seed']}），其 holdout 仅本次解锁一次；"
-        "如再次重评估须再换划分。",
+        "同一报告的 8-score 回归、部署消融、row-QC 敏感性都在同一 holdout 上评估，"
+        "属同一次解锁事件，不额外增加信息。如再次重评估须再换划分。",
+        "- 溯源强度：`proposer` / `context_sha256` / `proposal_sha256` 由驱动方"
+        "（操作者）写入，属于**自报归属**——它证明「提交的提案与它声称依据的研究状态」"
+        "一致」，不证明「该 agent 真的读取了上下文」或「该 agent 真的生成了它」。"
+        "要升级为可证明的 agent 驱动，需要 provider 端 request/response id 或签名。",
         "- 类别支持不均衡（见 chart-support.png）；结果仅代表研究口径，不可临床使用。",
     ]
     (out / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -639,7 +675,9 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         + ", ".join(f"{k}({v['dim']})" for k, v in manifest["modalities"].items())
         + "；train-fold 标准化，退化列置零，缺失模态行 availability-masked）",
         "- 输出：9 维独立 sigmoid（`category_probs`）；平和维永远 ABSTAIN",
-        f"- 训练数据：{records_count} 名受试者（Mendeley cxtph3tjsg/1，CC BY 4.0），"
+        f"- 训练数据：Mendeley cxtph3tjsg/1（CC BY 4.0）共 {records_count} 名受试者，"
+        f"按 70/15/15 行级划分后只用 train {split_sizes['train']} 人训练"
+        f"（dev {split_sizes['dev']} / holdout {split_sizes['holdout']} 从不参与拟合），"
         f"RULE 派生二值标签（`{summary['label_version']}`）",
         "- 适用人群：与研究样本同源的成年体检人群；不适用于临床诊断、无按摩场景外的任何干预决策",
         "- 已知偏差：类别支持不均衡；体型代理变量（BMI）基线较强；"
@@ -697,6 +735,10 @@ def main(argv=None) -> int:
                                   "artifact_sha256", "agent_status",
                                   "proposer", "context_sha256",
                                   "proposal_sha256", "proposal_raw_sha256")},
+         # the exact patch the agent asked for: without it a reader can see that
+         # something was proposed but not what (audit A-01)
+         "config_patch": e.get("config_patch"),
+         "effective_config": e.get("effective_config"),
          "primary_value": (e.get("metrics") or {}).get("primary_value")}
         for e in entries
     ]
@@ -709,17 +751,31 @@ def main(argv=None) -> int:
         "label_version": manifest["label_version"],
         "standard_version": manifest["standard_version"],
         "split_sizes": split_sizes,
+        "split_seed": manifest["split"]["seed"],
+        "split_fractions": manifest["split"]["fractions"],
         "records_total": len(records),
         "subjects_in_manifest": sum(split_sizes.values()),
         "subject_identity": (
             "row_order (UNVERIFIED: dataset has no subject ID column; "
             "identity assumed from row position)"
         ),
+        "primary_metric": {
+            "name": "category_probs/macro_f1",
+            "direction": "max",
+            "why": "the deliverable metric (nine-dim classification at 0.5, "
+                   "macro over the fixed observed-dimension denominator). "
+                   "subject_mae is minimised by the median (=0 for a binary "
+                   "label under 50% prevalence) and subject_rmse by the "
+                   "base-rate constant, so neither can select a classifier",
+        },
         "metric_params": {
             "classification_threshold": 0.5,
             "label_rule": manifest["label_version"],
             "macro_f1": "mean per-dim F1 over observed dims; undefined F1 counts as 0",
-            "subject_mae": "mean over subjects of per-subject mean |p - label| over observed dims",
+            "subject_mae": "mean over subjects of per-subject mean |p - label| "
+                           "over observed dims (diagnostic, NOT the selection metric)",
+            "subject_rmse": "sqrt(mean over subjects of per-subject MSE); Brier "
+                            "score up to a monotone root — the selection metric",
             "partitions": split_sizes,
         },
         "champion_provenance": {
@@ -755,7 +811,7 @@ def main(argv=None) -> int:
     print(json.dumps({
         "out": str(out),
         "champion_run": champion["run_id"],
-        "dev_subject_mae": champion.get("best_so_far"),
+        "champion_dev_primary_value": champion.get("best_so_far"),
         "dev_macro_f1": neural_eval["dev"]["macro_f1"],
         "holdout_macro_f1": neural_eval["holdout"]["macro_f1"],
         "holdout_subject_mae": neural_eval["holdout"]["subject_mae"],
