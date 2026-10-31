@@ -26,11 +26,17 @@ from dataclasses import dataclass
 #: Fixed training wall clock per fold, in seconds. Not editable, and not a
 #: scope key: every candidate gets the same budget, so a better score can only
 #: come from a better use of it.
-TIME_BUDGET_SECONDS = 60.0
+#:
+#: 20s, not upstream's 300s: this model has ~6k parameters and 174 training rows
+#: per fold, and the whole loop must stay runnable interactively. The choice is
+#: declared here rather than tuned — raising it changes what "better use of the
+#: budget" means for every archived round at once, so it is part of the frozen
+#: contract, not a knob.
+TIME_BUDGET_SECONDS = 20.0
 #: Hard-kill margin over TIME_BUDGET_SECONDS. A candidate that overruns is a
 #: crash (upstream: "if a run exceeds 10 minutes, kill it and treat it as a
 #: failure"), never a slow winner.
-TIME_BUDGET_GRACE_SECONDS = 30.0
+TIME_BUDGET_GRACE_SECONDS = 20.0
 
 #: What a candidate may import from this module.
 FROZEN_PUBLIC_API = (
@@ -55,10 +61,17 @@ FORBIDDEN_SYMBOLS = (
     "split_seed",
     "fold_manifest",
     "derive_classification_targets",
-    "score_mask",
-    "category_labels",
     "_fit_scaler",
+    "input_spec_version",
 )
+
+#: Deliberately NOT forbidden: `category_labels`, `target_mask`, `score_mask`.
+#: Those are the keys the frozen provider HANDS a candidate — it cannot train
+#: without reading them. Listing them made the guard reject a legitimate patch
+#: whose diff merely quoted the baseline's own training line as context (round
+#: 2 of the first run), which is a false positive that teaches nothing. What is
+#: forbidden is the SCORING side: the evaluator, the split, the scaler, the
+#: holdout and the label-derivation function.
 
 
 @dataclass(frozen=True)

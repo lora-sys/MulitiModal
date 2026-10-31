@@ -42,12 +42,21 @@ from research.guard import (
     validate_source_patch,
 )
 
-#: Score units charged per net line of code added to the editable file.
+#: Minimum score gain per net line added to the editable file.
+#:
 #: Upstream's rule is qualitative ("a 0.001 improvement that adds 20 lines of
-#: hacky code? Probably not worth it"); a search needs a number, so this is
-#: declared as a frozen design choice rather than fitted to a result. At the
-#: measured selection noise (sem ~0.01) it means ~5 net lines must buy 0.01.
-COMPLEXITY_PRICE_PER_LINE = 0.002
+#: hacky code? Probably not worth it; a 0.001 improvement from deleting code?
+#: Definitely keep"). A search needs a number, and 0.001-per-line is that rule
+#: read literally — so it is declared here rather than fitted to a result.
+#:
+#: It is a FLOOR on the gain, not a price added to the margin. Pricing lines at
+#: a fixed absolute rate instead (the first cut used 0.002/line) makes any real
+#: change unaffordable: a 15-line architecture edit would have needed +0.03 on
+#: a selection whose standard error is 0.016, i.e. the rule would have vetoed
+#: everything except micro-edits while looking like a complexity criterion.
+#: As a floor it does what upstream means: a big sloppy patch must show a big
+#: gain, while a targeted small one only has to clear the noise margin.
+MIN_GAIN_PER_ADDED_LINE = 0.001
 
 DEFAULT_EDITABLE = "src/research/candidate.py"
 
@@ -108,6 +117,24 @@ class GitWorktree:
 
     def sha_of(self, ref: str) -> str:
         return self._git("rev-parse", ref)
+
+    def assert_clean(self) -> None:
+        """Refuse to run with a dirty tree.
+
+        A dirty worktree means the files being trained are not the commit the
+        manifest will record as the round's parent, and a patch produced with
+        `git diff` then carries someone else's uncommitted work into the round —
+        which is exactly how the first attempt at this loop's round 0 was
+        rejected for touching `frozen.py`. Failing here names the offending
+        files instead of leaving a reader to reverse-engineer it from a guard
+        error.
+        """
+        dirty = self._git("status", "--porcelain")
+        if dirty:
+            raise RuntimeError(
+                "worktree is dirty; commit or discard before running a round:\n"
+                + "\n".join(dirty.splitlines()[:10])
+            )
 
 
 class SourceResearchLoop:
@@ -170,7 +197,7 @@ class SourceResearchLoop:
             "folds": self.folds,
             "repeats": self.repeats,
             "margin_sem": self.margin_sem,
-            "complexity_price_per_line": COMPLEXITY_PRICE_PER_LINE,
+            "min_gain_per_added_line": MIN_GAIN_PER_ADDED_LINE,
             "primary_metric": PRIMARY_METRIC,
             "primary_direction": "max",
             "champion_commit": champion.get("git_commit_sha") if champion else None,
@@ -210,22 +237,29 @@ class SourceResearchLoop:
           a great outcome".
         """
         margin = margin_sem * sem
-        penalty = COMPLEXITY_PRICE_PER_LINE * max(0, growth)
         if best is None:
             return True, f"baseline {value:.6f}"
-        if value > best + margin + penalty:
+        gain = value - best
+        if grow_floor := MIN_GAIN_PER_ADDED_LINE * max(0, growth):
+            pass
+        if gain > margin and gain >= grow_floor:
             return True, (
-                f"{value:.6f} beats {best:.6f} by more than margin {margin:.4f} "
-                f"+ complexity {penalty:.4f}"
+                f"{value:.6f} beats {best:.6f}: +{gain:.4f} over a {margin:.4f} "
+                f"margin, and >= {grow_floor:.4f} for {max(0, growth)} added lines"
             )
         if growth < 0 and value >= best - margin:
             return True, (
                 f"simpler ({growth:+d} net lines) at {value:.6f} vs {best:.6f}, "
                 f"inside the {margin:.4f} margin"
             )
+        if gain <= margin:
+            return False, (
+                f"{value:.6f} vs best {best:.6f}: +{gain:.4f} does not clear the "
+                f"{margin:.4f} noise margin"
+            )
         return False, (
-            f"{value:.6f} vs best {best:.6f}: needs > {best + margin + penalty:.6f} "
-            f"(margin {margin:.4f} + complexity {penalty:.4f})"
+            f"{value:.6f} vs best {best:.6f}: +{gain:.4f} clears the {margin:.4f} "
+            f"margin but not {grow_floor:.4f} for {max(0, growth)} added lines"
         )
 
     # -- one round ----------------------------------------------------------
@@ -237,6 +271,7 @@ class SourceResearchLoop:
         proposer: str | None = None,
         proposal_mtime: float | None = None,
     ) -> dict:
+        self.worktree.assert_clean()
         started = time.monotonic()
         entries = self.store.load()
         index = len(entries)
@@ -283,8 +318,7 @@ class SourceResearchLoop:
         growth = loc_after - loc_before
         entry["complexity"] = {
             "lines_before": loc_before, "lines_after": loc_after, "growth": growth,
-            "price_per_line": COMPLEXITY_PRICE_PER_LINE,
-            "penalty": COMPLEXITY_PRICE_PER_LINE * max(0, growth),
+            "min_gain_required": MIN_GAIN_PER_ADDED_LINE * max(0, growth),
         }
         entry["patch"] = patch
 
@@ -340,14 +374,25 @@ class SourceResearchLoop:
         )
 
     def _run_runner(self, config_path: Path) -> dict:
+        import os
+        import sys
+
         command = [
-            "python", "-m", "research.runner", "--config", str(config_path),
+            sys.executable, "-m", "research.runner", "--config", str(config_path),
             "--folds", str(self.folds), "--repeats", str(self.repeats),
         ]
+        # the same interpreter that runs the loop, and only this worktree's src
+        # on the import path: a candidate must not be able to reach the loop's
+        # environment or another checkout's modules
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": os.environ.get("HOME", ""),
+            "PYTHONPATH": str(self.worktree.path / "src"),
+        }
         try:
             result = subprocess.run(
                 command, cwd=self.worktree.path, text=True, capture_output=True,
-                timeout=self.timeout_s,
+                timeout=self.timeout_s, env=env,
             )
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(

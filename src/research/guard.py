@@ -59,7 +59,15 @@ def validate_source_patch(patch: str, editable: str | Path) -> None:
         raise PatchRejected(
             f"patch touches {foreign}, outside the editable file {editable!r}"
         )
-    hits = sorted(s for s in FORBIDDEN_SYMBOLS if s in patch)
+    # only ADDED lines are judged: a patch is what it introduces, not what it
+    # quotes as context or deletes. Scanning the whole diff rejected a
+    # legitimate ensemble patch because its context lines contained the
+    # baseline's own `batch.targets["category_labels"]` line.
+    introduced = "\n".join(
+        line for line in patch.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+    hits = sorted(s for s in FORBIDDEN_SYMBOLS if s in introduced)
     if hits:
         raise PatchRejected(
             f"patch references frozen research machinery: {hits}"

@@ -18,7 +18,7 @@ from research.guard import (
     validate_frozen_imports,
     validate_source_patch,
 )
-from research.loop import COMPLEXITY_PRICE_PER_LINE, GitWorktree, SourceResearchLoop
+from research.loop import MIN_GAIN_PER_ADDED_LINE, GitWorktree, SourceResearchLoop
 
 pytestmark = pytest.mark.synthetic
 
@@ -48,11 +48,28 @@ def test_only_the_editable_file_may_change():
             validate_source_patch(patch, EDITABLE)
 
 
-def test_frozen_symbols_are_refused():
-    for symbol in ("TCMTrustedEvaluator", "holdout", "category_labels", "score_mask"):
+def test_frozen_symbols_are_refused_when_added():
+    for symbol in ("TCMTrustedEvaluator", "holdout", "fold_manifest", "_fit_scaler"):
         patch = GOOD_PATCH + f"+x = {symbol}\n"
         with pytest.raises(PatchRejected, match="frozen research machinery"):
             validate_source_patch(patch, EDITABLE)
+
+
+def test_only_added_lines_are_judged():
+    # a patch that merely QUOTES frozen-machinery text as context, or deletes a
+    # reference to it, is not reaching for the evaluator — the ensemble patch of
+    # the first real run was rejected for exactly this
+    context = """diff --git a/src/research/candidate.py b/src/research/candidate.py
+--- a/src/research/candidate.py
++++ b/src/research/candidate.py
+@@ -1,3 +1,4 @@
+ WIDTH = 32
+ batch.targets["category_labels"]  # quoting the baseline's own line
++TARGETS = "category_labels"
+"""
+    validate_source_patch(context, EDITABLE)  # does not raise
+    deletion = GOOD_PATCH + "-old = TCMTrustedEvaluator\n"
+    validate_source_patch(deletion, EDITABLE)  # does not raise
 
 
 def test_a_patch_that_only_deletes_code_is_not_a_simplification():
@@ -92,15 +109,21 @@ def test_simplicity_criterion_matches_upstream_intent():
     # "removing something and getting equal or better results" is a win
     keep, reason = SourceResearchLoop.decide(0.2995, 0.01, -8, 0.30)
     assert keep and "simpler" in reason, reason
-    # the same gain WITH 8 added lines is not kept: it must pay for complexity
-    keep, reason = SourceResearchLoop.decide(0.2995, 0.01, 8, 0.30)
-    assert not keep, reason
-    # a large gain clears margin + complexity price
+    # a large gain clears margin and the per-line floor
     assert SourceResearchLoop.decide(0.36, 0.01, 8, 0.30)[0]
-    # complexity is priced linearly, so the bar moves with the diff size
-    price_8 = COMPLEXITY_PRICE_PER_LINE * 8
-    assert not SourceResearchLoop.decide(0.30 + price_8 - 1e-9, 0.0, 8, 0.30)[0]
-    assert SourceResearchLoop.decide(0.30 + price_8 + 1e-9, 0.0, 8, 0.30)[0]
+    # The per-line floor is a FLOOR ON THE GAIN, not a price added to the
+    # margin. With 20 lines the floor (0.02) exceeds the margin (0.01), so a
+    # gain of +0.015 clears the noise margin and is still refused: 20 lines of
+    # hack must buy more than 0.015.
+    keep, reason = SourceResearchLoop.decide(0.315, 0.01, 20, 0.30)
+    assert not keep and "added lines" in reason, reason
+    assert SourceResearchLoop.decide(0.325, 0.01, 20, 0.30)[0]
+    # a small targeted edit only has to clear the noise margin
+    assert SourceResearchLoop.decide(0.32, 0.01, 2, 0.30)[0]
+    # a big sloppy patch must show a big gain
+    assert not SourceResearchLoop.decide(0.35, 0.01, 400, 0.30)[0]
+    assert SourceResearchLoop.decide(0.75, 0.01, 400, 0.30)[0]
+    assert MIN_GAIN_PER_ADDED_LINE == 0.001
 
 
 def _git_repo(tmp_path: Path) -> Path:
