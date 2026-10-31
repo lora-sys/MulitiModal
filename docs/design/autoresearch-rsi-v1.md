@@ -292,7 +292,7 @@ v7 实测：**同一套权重** dev macro-F1 0.1451、holdout 0.3445。划分间
 | 2 固定墙钟预算、移除 `trainer.epochs` | `research/frozen.py` `TIME_BUDGET_SECONDS`（每折），超预算 `overran → REVERT`；v9 的可改面里没有 epochs | `frozen.py` / `loop.py` |
 | 3 simplicity 判据 | `loop.decide`：增益 > 1×SEM **且** ≥ 0.001×净增行数；删代码不更差直接 KEEP | `loop.decide` |
 | 4 记录每轮源码 diff 与 commit | 每轮存 `patch`、`git_commit_sha`、`git_parent_sha`、`complexity`；KEEP 才前进分支 | `loop.run_round` |
-| 5 逐轮读上下文再提案 | v9 逐轮驱动（非批量预写）；`proposal_mtime` 与轮次开始时间可比对 | `loop.run_round` |
+| 5 逐轮读上下文再提案 | v9 逐轮驱动；批量运行（`research-src-run`）在每轮显式记 `batch_supplied: true` 与 `proposal_mtime`，读者可比对「提案写作时间 vs 该轮开始时间」，不需要相信任何自述 | `loop.run_round` |
 
 **仍未解决、不得宣称已解决**：候选进程能读工作树内文件（含原始工作簿），理论上可自行关联标签；当前防线是静态检查 + 评估器进程外运行，证据等级仍是 `AGENT_ISOLATION_UNVERIFIED`（§12.3 与上游同源风险）。
 

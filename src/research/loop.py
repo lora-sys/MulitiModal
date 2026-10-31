@@ -269,6 +269,7 @@ class SourceResearchLoop:
         intent: str,
         proposer: str | None = None,
         proposal_mtime: float | None = None,
+        batch_supplied: bool = False,
     ) -> dict:
         self.worktree.assert_clean()
         started = time.monotonic()
@@ -283,6 +284,13 @@ class SourceResearchLoop:
             "round_index": index,
             "intent": intent,
             "proposer": proposer,
+            # a batch-supplied list was written before this round's state
+            # existed, so `proposal_mtime` predating the round start is a FACT
+            # a reader can check rather than a claim this loop makes about the
+            # proposer. The v8 run had 22/24 rounds in this position and the
+            # manifest could not show it at the time.
+            "proposal_mtime": proposal_mtime,
+            "batch_supplied": batch_supplied,
             "editable_file": self.editable,
             "complexity": {"lines_before": loc_before},
             "started_at": _iso(),
@@ -427,6 +435,7 @@ class SourceResearchLoop:
                 proposal["patch"], proposal.get("intent", ""),
                 proposal.get("proposer"),
                 proposal.get("proposal_mtime"),
+                batch_supplied=True,
             ))
         champion = self.champion()
         return {
