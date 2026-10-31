@@ -85,3 +85,15 @@ Round-4 裁决：Antigravity opus-4-6-thinking 因配额耗尽未产出；Pi GLM
 | E49 | Pi round-5 R-04 | e39–e42 以源码 grep 钉住修复，语义回归可通过 | e39/e40/e41/e42 全部改写为行为断言（真调用 provider/harness/_worker_env/train_candidate） | review_eval 本身 |
 
 Round-5 裁决：**NO**——#50 数字不被推翻（实际运行的冠军选择由进程内可信评分驱动，报告端有 `assert_champion_matches_manifest` 三重哈希绑定）；但 E38 的防篡改声明须按 E44 限定后方可作为 #50 provenance 引用。
+
+## 第六轮审查追加条目（Pi round-6，manifest 健壮性 → E50–E52）
+
+Round-6 delegate 在产出最终报告前再次被 turn-limit 截断；以下发现从其 activity 时间线的完整分析中收割并经本地核实。
+
+| 编号 | 来源 | 发现 | 冻结修复 | 验证 |
+| --- | --- | --- | --- | --- |
+| E50 | round-6 分析 | `append()` 接受已带 `entry_sha256` 的条目并原样落盘（不接链）→ 下一次 `load()` 验链必败，store 永久毒化 | `append()` 显式拒绝预哈希条目（ValueError） | pytest `test_manifest_chain_round6_hardening` |
+| E51 | round-6 分析 | 撕裂写（进程在 append 中途被杀，行尾缺 `\n`）后，下一次 append 把两个 JSON 对象拼成一行 → store 永久不可解析 | `append()` 落盘前检查文件尾字节，缺 `\n` 先补写再接链 | pytest 同上（torn-write 用例） |
+| E52 | round-6 分析 | 只有 `entry_sha256` 没有 `prev_entry_sha256` 的行抛 KeyError，与"完整性失败 = RuntimeError"的契约不一致 | `_verify_chain` 改用 `entry.get(...)`，统一 RuntimeError（"prev_entry_sha256 mismatch"） | pytest 同上 |
+
+Round-6 结论：三条均为 manifest 健壮性加固（fail-closed 语义下的一致性与可恢复性），不涉及训练数值路径，#50 数字与 provenance 不受影响；审查循环至此连续一轮无高严重度缺陷，round-4/5 的 impactful findings 均已关闭并冻结进 eval。

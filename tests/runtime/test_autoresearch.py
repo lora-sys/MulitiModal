@@ -375,6 +375,34 @@ def test_manifest_chain_rejects_unchained_line_after_chained_entries(tmp_path):
         store.load()
 
 
+def test_manifest_chain_round6_hardening(tmp_path):
+    store = RunManifestStore(tmp_path / "m.jsonl")
+    store.append({"run_id": "tcm-0000", "decision": "KEEP", "status": "done"})
+
+    # append() refuses pre-hashed entries instead of poisoning the chain
+    poisoned = {"run_id": "tcm-9999", "decision": "KEEP",
+                "prev_entry_sha256": "0" * 64, "entry_sha256": "1" * 64}
+    with pytest.raises(ValueError, match="already carries entry_sha256"):
+        store.append(dict(poisoned))
+    assert len(store.load()) == 1  # store untouched
+
+    # a torn write (trailing newline lost) is healed by the next append
+    path = tmp_path / "m.jsonl"
+    path.write_text(path.read_text().rstrip("\n"))
+    store.append({"run_id": "tcm-0001", "decision": "REVERT", "status": "done"})
+    entries = store.load()
+    assert [e["run_id"] for e in entries] == ["tcm-0000", "tcm-0001"]
+
+    # a chained entry missing prev_entry_sha256 raises RuntimeError, not
+    # KeyError (uniform integrity error type)
+    lines = path.read_text().splitlines()
+    broken = json.loads(lines[1])
+    del broken["prev_entry_sha256"]
+    path.write_text("\n".join([lines[0], json.dumps(broken)]) + "\n")
+    with pytest.raises(RuntimeError, match="prev_entry_sha256 mismatch"):
+        store.load()
+
+
 def test_resume_continues_plan_without_replay(tmp_path):
     plan = [
         ("baseline", {}),
