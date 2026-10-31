@@ -50,9 +50,9 @@ def _train(config_path: str) -> dict:
     return train_candidate(config)
 
 
-def _cv(config_path: str, folds: int, seed: int) -> dict:
+def _cv(config_path: str, folds: int, seed: int, repeats: int = 1) -> dict:
     config = json.loads(Path(config_path).read_text())
-    return cross_val_candidate(config, folds=folds, split_seed=seed)
+    return cross_val_candidate(config, folds=folds, split_seed=seed, repeats=repeats)
 
 
 def _refit(config_path: str) -> dict:
@@ -129,11 +129,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--config", required=True)
     p.set_defaults(func=lambda a: _train(a.config))
 
-    p = sub.add_parser("cv", help="subject-level k-fold score over the selection pool")
+    p = sub.add_parser("cv", help="subject-level repeated k-fold over the selection pool")
     p.add_argument("--config", required=True)
     p.add_argument("--folds", type=int, default=4)
     p.add_argument("--seed", type=int, default=0)
-    p.set_defaults(func=lambda a: _cv(a.config, a.folds, a.seed))
+    p.add_argument("--repeats", type=int, default=1,
+                   help="independent re-partitions of the same pool, averaged")
+    p.set_defaults(func=lambda a: _cv(a.config, a.folds, a.seed, a.repeats))
 
     p = sub.add_parser("refit", help="fit the selected config on train+dev (the deliverable)")
     p.add_argument("--config", required=True)

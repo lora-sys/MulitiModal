@@ -73,7 +73,17 @@ def default_real_tcm_runspec(
             # holdout 0.345). KEEP additionally needs to clear a margin
             # derived from the fold spread.
             "selection_folds": 4,
-            "selection_margin_std": 0.5,
+            # repeated CV: the KEEP hurdle is derived from the spread of the
+            # MEAN, which falls as 1/sqrt(repeats x folds). One partition of 4
+            # folds leaves the mean so noisy that a real 0.02 improvement is
+            # indistinguishable from the champion (v8: 23/23 candidates
+            # REVERTed, so the loop never moved).
+            "selection_repeats": 4,
+            # margin = selection_margin_sem x SEM. Expressing it in standard
+            # errors keeps the hurdle meaningful when the resolution changes;
+            # a factor of the raw fold spread does not shrink when more folds
+            # are added, which was the v8 defect.
+            "selection_margin_sem": 1.0,
         },
         "data": {
             "manifest_path": str(manifest_path),
@@ -148,7 +158,8 @@ def default_tcm_runspec(rounds: int = 3, timeout_s: float = 300.0) -> dict:
             # holdout 0.345). KEEP additionally needs to clear a margin
             # derived from the fold spread.
             "selection_folds": 4,
-            "selection_margin_std": 0.5,
+            "selection_repeats": 4,
+            "selection_margin_sem": 1.0,
         },
         "seed": 0,
         "budget": {
@@ -372,12 +383,14 @@ class AutoResearchHarness:
             config["eval_provider"]["subject_prefix"] = f"eval-{run_id}"
 
         folds = int(self.runspec["frozen"].get("selection_folds", 1) or 1)
+        repeats = int(self.runspec["frozen"].get("selection_repeats", 1) or 1)
         config_path = self._dump_config(config, run_id)
         if self.real_data and folds > 1:
             try:
                 score = _worker(
                     ["cv", "--config", config_path, "--folds", str(folds),
-                     "--seed", str(self.runspec["seed"])], timeout_s
+                     "--seed", str(self.runspec["seed"]),
+                     "--repeats", str(repeats)], timeout_s
                 )
             except subprocess.TimeoutExpired:
                 return finish("REVERT", "timeout", f"exceeded {timeout_s}s budget")
@@ -387,9 +400,10 @@ class AutoResearchHarness:
             if value is None:
                 return finish("REVERT", "score_failed", "primary metric missing or NaN")
             std = float(score.get("primary_std") or 0.0)
+            sem = float(score.get("primary_sem") or 0.0)
             return self._decide(
-                entry, value, std, folds=folds, folds_raw=score.get("folds"),
-                finish=finish,
+                entry, value, std, sem=sem, folds=folds,
+                folds_raw=score.get("folds"), finish=finish,
             )
 
         try:
@@ -433,26 +447,35 @@ class AutoResearchHarness:
 
     def _decide(
         self, entry: dict, value: float, std: float, *, folds: int,
-        folds_raw, finish, artifact_dir: str | None = None,
+        folds_raw, finish, sem: float = 0.0, artifact_dir: str | None = None,
         artifact_sha: str | None = None, model_type: str | None = None,
         report: dict | None = None,
     ) -> dict:
         """KEEP/REVERT against the champion.
 
         The runspec declares the metric direction. A candidate must beat the
-        champion by STRICTLY more than a noise margin: on fold-averaged
-        selection the margin is `selection_margin_std` times the candidate's
-        own fold standard deviation. Without it, a candidate that is merely
-        noise-different from the champion gets promoted and the hill climb
-        random-walks (measured in v7: dev 0.145 vs holdout 0.345 for the same
-        weights). Single-split (synthetic smoke) rounds have std 0 and behave
-        exactly as before.
+        champion by STRICTLY more than a noise margin, and that margin is
+        `selection_margin_sem` times the **standard error of the mean** of the
+        candidate's fold scores — not a factor of the raw fold spread.
+
+        The distinction is the whole point of the margin. A factor of the fold
+        spread does not shrink when the selection resolution improves, so
+        adding folds or repeats makes the mean more precise while the hurdle
+        stays exactly as high (v8: margin 0.5 x std, 23/23 candidates
+        REVERTed and the champion never moved, so no candidate could build on
+        another). In units of the standard error the rule reads "beat the
+        champion by more than one standard error of the measured difference",
+        which is a claim about the quantity being compared.
+
+        Without a margin at all, a candidate that is merely noise-different
+        from the champion gets promoted and the hill climb random-walks
+        (measured in v7: the same weights scored dev 0.145, holdout 0.345).
         """
         champion = self.store.champion()
         previous_best = champion.get("best_so_far") if champion else None
         direction = self.runspec["frozen"].get("primary_direction", "min")
-        factor = float(self.runspec["frozen"].get("selection_margin_std", 0.0))
-        margin = factor * std if folds > 1 else 0.0
+        factor = float(self.runspec["frozen"].get("selection_margin_sem", 0.0))
+        margin = factor * sem if folds > 1 else 0.0
         if previous_best is None:
             keep = True
         elif direction == "max":
@@ -463,8 +486,9 @@ class AutoResearchHarness:
             reason = f"baseline {value:.6f}"
         elif folds > 1:
             reason = (
-                f"{value:.6f} (fold std {std:.4f}, margin {margin:.4f}) vs "
-                f"best {previous_best:.6f}: {'beats' if keep else 'does not clear the margin'}"
+                f"{value:.6f} (fold std {std:.4f}, sem {sem:.4f}, margin "
+                f"{margin:.4f}) vs best {previous_best:.6f}: "
+                f"{'beats' if keep else 'does not clear the margin'}"
             )
         else:
             reason = f"{value:.6f} vs best {previous_best:.6f}"
@@ -476,11 +500,14 @@ class AutoResearchHarness:
             artifact_sha256=artifact_sha,
             model_type=model_type,
             primary_std=std if folds > 1 else None,
+            primary_sem=sem if folds > 1 else None,
             selection={
                 "folds": folds,
                 "per_fold": folds_raw,
                 "margin": margin,
                 "margin_factor": factor,
+                "margin_basis": "sem",
+                "sem": sem,
             } if folds > 1 else None,
             metrics={"primary_metric": self.runspec["frozen"]["primary_metric"],
                      "primary_value": value, "report": report},
@@ -513,6 +540,12 @@ class AutoResearchHarness:
             "current_config": self._champion_config(),
             "base_config": self.runspec["base_config"],
             "primary_metric": self.runspec["frozen"]["primary_metric"],
+            "primary_direction": self.runspec["frozen"].get("primary_direction", "min"),
+            "selection": {
+                "folds": self.runspec["frozen"].get("selection_folds", 1),
+                "repeats": self.runspec["frozen"].get("selection_repeats", 1),
+                "margin_sem": self.runspec["frozen"].get("selection_margin_sem"),
+            },
             "history": [
                 {
                     "run_id": e["run_id"],

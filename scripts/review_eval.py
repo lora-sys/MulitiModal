@@ -1145,10 +1145,11 @@ def e71_keep_requires_the_noise_margin():
     from runtime.agent import Proposal
     from runtime.harness import AutoResearchHarness, default_tcm_runspec
 
+    # fold std 0.10 over 16 folds -> sem 0.025; margin = 1.0 x sem = 0.025
     canned = iter([
-        {"primary_value": 0.50, "primary_std": 0.10},
-        {"primary_value": 0.52, "primary_std": 0.10},
-        {"primary_value": 0.65, "primary_std": 0.10},
+        {"primary_value": 0.50, "primary_std": 0.10, "primary_sem": 0.025},
+        {"primary_value": 0.52, "primary_std": 0.10, "primary_sem": 0.025},
+        {"primary_value": 0.65, "primary_std": 0.10, "primary_sem": 0.025},
     ])
     original = harness_mod._worker
 
@@ -1176,6 +1177,7 @@ def e71_keep_requires_the_noise_margin():
         finally:
             harness_mod._worker = original
         assert first["decision"] == "KEEP" and first["primary_std"] == 0.10, first
+        assert first["selection"]["margin_basis"] == "sem", first["selection"]
         assert second["decision"] == "REVERT", second
         assert second["best_so_far"] == 0.50, second
         assert "margin" in second["reason"], second["reason"]
@@ -1224,11 +1226,27 @@ def e72_cross_validation_never_reads_the_holdout():
             seen.append((partition, list(subjects)))
             assert not set(subjects) & set(holdout), "holdout leaked into a fold"
 
+    import data.real_split as real_split
+
+    seen_folds: list[tuple[list, list, list]] = []
+
+    def stub_fold_manifest(_manifest, _records, train_ids, dev_ids, notes=""):
+        # the real fold_manifest refits a scaler from SubjectRecords, which a
+        # stub manifest cannot supply; the property under test here is which
+        # subjects each fold sees and that the holdout is unreachable, so the
+        # fold manifest is built directly (its scaler behaviour is e77)
+        seen_folds.append((list(train_ids), list(dev_ids), []))
+        return type("M", (), {"data": {
+            "manifest_sha256": "e" * 64,
+            "split": {"train": list(train_ids), "dev": list(dev_ids),
+                      "holdout": []},
+        }})()
+
     originals = (
         real_data.manifest_from_path, real_data.build_real_model,
         real_data.RealBatchProvider, real_data.real_eval_manifest,
         tcm_eval.TCMTrustedEvaluator, protocols.Trainer,
-        protocols._load_records,
+        protocols._load_records, real_split.fold_manifest,
     )
     real_data.manifest_from_path = lambda _p: manifest
     real_data.build_real_model = lambda _m, _c: object()
@@ -1237,6 +1255,7 @@ def e72_cross_validation_never_reads_the_holdout():
     tcm_eval.TCMTrustedEvaluator = StubEvaluator
     protocols.Trainer = StubTrainer
     protocols._load_records = lambda _p: []
+    real_split.fold_manifest = stub_fold_manifest
     try:
         out = protocols.cross_val_candidate(
             {"data": {"manifest_path": "m", "dataset_path": "d"},
@@ -1247,11 +1266,17 @@ def e72_cross_validation_never_reads_the_holdout():
         (real_data.manifest_from_path, real_data.build_real_model,
          real_data.RealBatchProvider, real_data.real_eval_manifest,
          tcm_eval.TCMTrustedEvaluator, protocols.Trainer,
-         protocols._load_records) = originals
+         protocols._load_records, real_split.fold_manifest) = originals
     assert len(out["folds"]) == 4 and out["primary_value"] == 0.5, out
     held = [s for partition, subjects in seen if partition == "dev" for s in subjects]
     assert sorted(held) == sorted(pool), "folds must partition the pool exactly once"
     assert out["fold_sizes"] == [10, 10, 10, 10], out["fold_sizes"]
+    # no fold manifest may carry a holdout partition to score against
+    assert all(holdout_part == [] for _, _, holdout_part in seen_folds), seen_folds
+    # train and dev of a fold must be disjoint and cover the pool
+    for train_ids, dev_ids, _ in seen_folds:
+        assert not set(train_ids) & set(dev_ids), "fold train/dev overlap"
+        assert sorted(train_ids + dev_ids) == sorted(pool)
 
 
 @check
@@ -1614,8 +1639,13 @@ def e76_every_defined_check_actually_runs():
 
     source = Path(__file__).read_text()
     defined = len(re.findall(r"^@check\n", source, flags=re.MULTILINE))
-    guard_at = source.index('if __name__ == "__main__":')
-    after_guard = len(re.findall(r"^@check\n", source[guard_at:], flags=re.MULTILINE))
+    # ^-anchored: this check's own source contains the guard text inside a
+    # string, and an unanchored search matches that copy first
+    guard = re.search(r"^if __name__ == \"__main__\":", source, flags=re.MULTILINE)
+    assert guard, "no __main__ guard in the source"
+    after_guard = len(
+        re.findall(r"^@check\n", source[guard.start():], flags=re.MULTILINE)
+    )
     assert after_guard == 0, (
         f"{after_guard} @check blocks sit after the __main__ guard; "
         "they never run when the file is executed"
@@ -1626,6 +1656,44 @@ def e76_every_defined_check_actually_runs():
     # and the runner must report the registry size, not a hand-maintained count
     main_source = inspect.getsource(main)
     assert "len(CHECKS)" in main_source, main_source
+
+
+@check
+def e77_fold_manifest_refits_the_scaler_and_hides_the_holdout():
+    # v8 defect (found by an independent review and confirmed by re-running
+    # cross_val_candidate): every fold reused the parent manifest's scaler.
+    # The parent scaler is fitted on the frozen train rows, and ~80% of each
+    # fold's validation subjects are among those rows — so validation-fold
+    # feature values entered the mean/std used to train the model that then
+    # scored them. The fold manifest must refit on its own train rows and must
+    # carry an EMPTY holdout, so selection cannot reach it at all.
+    from data.real_split import build_real_manifest, fold_manifest, pool_manifest
+
+    records = fake_records(n=60)
+    base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
+    pool = pool_manifest(base, records).data
+    ids = list(pool["split"]["train"])
+    assert len(ids) > 45, len(ids)  # the slices below must leave rows out
+    train_ids, dev_ids = ids[:40], ids[40:]
+
+    fold = fold_manifest(pool, records, train_ids, dev_ids).data
+    assert fold["split"]["train"] == train_ids
+    assert fold["split"]["dev"] == dev_ids
+    assert fold["split"]["holdout"] == [], fold["split"]["holdout"]
+    assert fold["scaler_fit_rows"] == len(train_ids) != pool["scaler_fit_rows"]
+    # the statistics really are the fold's own, not the parent's
+    assert fold["scaler"] != pool["scaler"], "fold scaler identical to the pool's"
+    # a different fold's train set produces different statistics
+    other = fold_manifest(pool, records, ids[10:60], ids[:10]).data
+    assert other["scaler"] != fold["scaler"], "scaler does not depend on the fold"
+    assert fold["selection_parent_manifest_sha256"] == pool["manifest_sha256"]
+    assert fold["manifest_sha256"] != pool["manifest_sha256"]
+    # the trusted-evaluator contract must accept it (train/dev/holdout disjoint)
+    from runtime.real_data import real_eval_manifest
+
+    ev = real_eval_manifest(fold)
+    assert len(ev.dev_subjects) == len(dev_ids)
+    assert ev.holdout_subjects == ()
 
 
 if __name__ == "__main__":

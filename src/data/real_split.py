@@ -24,6 +24,7 @@ import hashlib
 import json
 import math
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -293,6 +294,50 @@ def pool_manifest(manifest: dict, records: list[SubjectRecord], notes: str = "")
         groups,
     )
     data["scaler_fit_rows"] = len(data["split"]["train"])
+    data["selection_parent_manifest_sha256"] = manifest["manifest_sha256"]
+    if notes:
+        data["notes"] = notes
+    digest = _manifest_digest(data)
+    data["manifest_sha256"] = digest
+    return RealManifest(data=data, sha256=digest)
+
+
+def fold_manifest(
+    manifest: dict,
+    records: list[SubjectRecord],
+    train_ids: Sequence[str],
+    dev_ids: Sequence[str],
+    notes: str = "",
+) -> RealManifest:
+    """Derive the manifest for ONE cross-validation fold.
+
+    Two things must not survive from the parent manifest:
+
+    1. **The scaler.** Keeping the parent's statistics means every validation
+       subject that also sits in the parent's train partition contributes to
+       the mean/std used to train the fold model — a leak into the very
+       number the fold exists to produce. The scaler is refit on the fold's
+       train rows only.
+    2. **The holdout partition.** Emptied here, so "selection never reads the
+       holdout" becomes a structural property of the fold manifest instead of
+       a convention the calling code is trusted to follow.
+    """
+    data = json.loads(json.dumps(manifest))
+    data.pop("manifest_sha256", None)
+    data["split"] = {
+        "train": list(train_ids),
+        "dev": list(dev_ids),
+        "holdout": [],
+    }
+    by_row = {r.subject_index: r for r in records}
+    groups = {
+        modality: tuple(params["feature_groups"])
+        for modality, params in data["modalities"].items()
+    }
+    data["scaler"] = _fit_scaler(
+        [data["subject_row_by_id"][s] for s in train_ids], by_row, groups
+    )
+    data["scaler_fit_rows"] = len(train_ids)
     data["selection_parent_manifest_sha256"] = manifest["manifest_sha256"]
     if notes:
         data["notes"] = notes

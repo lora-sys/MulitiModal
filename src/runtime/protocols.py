@@ -87,23 +87,32 @@ def _train_real(config: dict) -> dict:
     }
 
 
-def cross_val_candidate(config: dict, folds: int = 4, split_seed: int = 0) -> dict:
-    """Subject-level k-fold score over the SELECTION POOL (train + dev).
+def cross_val_candidate(
+    config: dict, folds: int = 4, split_seed: int = 0, repeats: int = 1
+) -> dict:
+    """Subject-level repeated k-fold score over the SELECTION POOL (train+dev).
 
     Why: a single 41-subject dev split cannot rank candidates — the spread
     between different splits of the same config (dev macro-F1 0.145 vs holdout
     0.345 in v7) dwarfs the spread between candidates. Each fold trains on the
     pool minus the fold and scores the held-out fold with the same trusted
-    evaluator; the harness then requires the mean to beat the champion by a
-    margin derived from the fold spread before accepting a KEEP.
+    evaluator, and the harness compares the MEAN against a noise margin.
 
-    The holdout partition is never read here: folds are drawn from
-    manifest["split"]["train"] + ["dev"] only.
+    `repeats` re-partitions the same pool with a different shuffle and averages
+    over R x K folds: the per-fold spread stays what it is, but the spread of
+    the mean falls as 1/sqrt(n), which is the quantity a KEEP decision actually
+    rests on. One repeat (the default) is the single-partition behaviour.
+
+    Two properties are structural, not conventions:
+    - folds are drawn from train + dev only, so the holdout cannot be selected on;
+    - each fold's manifest has its scaler refit on that fold's train rows and an
+      EMPTY holdout partition (see data.real_split.fold_manifest).
     """
-    import copy
     import random
 
     import torch
+
+    from data.real_split import fold_manifest
 
     from .real_data import (
         RealBatchProvider,
@@ -113,14 +122,13 @@ def cross_val_candidate(config: dict, folds: int = 4, split_seed: int = 0) -> di
     )
     from .tcm_eval import TCMTrustedEvaluator
 
+    if repeats < 1 or folds < 2:
+        raise ValueError(f"repeats={repeats} and folds={folds} must be >= 1 and >= 2")
     manifest = manifest_from_path(config["data"]["manifest_path"])
     records = _load_records(config["data"]["dataset_path"])
     pool = list(manifest["split"]["train"]) + list(manifest["split"]["dev"])
     if len(pool) < folds * 4:
         raise ValueError(f"selection pool of {len(pool)} subjects is too small for {folds} folds")
-    shuffled = sorted(pool)
-    random.Random(split_seed).shuffle(shuffled)
-    fold_of = {s: i % folds for i, s in enumerate(shuffled)}
 
     trainer_kwargs = dict(config.get("trainer", {}))
     for forbidden in ("early_stop_patience", "restore_best"):
@@ -132,34 +140,50 @@ def cross_val_candidate(config: dict, folds: int = 4, split_seed: int = 0) -> di
     batch_size = config.get("train_provider", {}).get("batch_size", 32)
     per_fold: list[float | None] = []
     fold_sizes: list[int] = []
-    for f in range(folds):
-        fold_manifest = copy.deepcopy(manifest)
-        fold_manifest["split"] = {
-            **manifest["split"],
-            "train": [s for s in shuffled if fold_of[s] != f],
-            "dev": [s for s in shuffled if fold_of[s] == f],
-        }
-        fold_sizes.append(len(fold_manifest["split"]["dev"]))
-        torch.manual_seed(trainer_kwargs.get("seed", 0))
-        model = build_real_model(fold_manifest, config.get("model", {}))
-        trainer = Trainer(model, TrainerConfig(**trainer_kwargs))
-        provider = RealBatchProvider(fold_manifest, records, "train", batch_size=batch_size)
-        trainer.fit(provider)  # no eval provider: nothing may steer fitting
-        val = RealBatchProvider(fold_manifest, records, "dev", batch_size=64)
-        evaluator = TCMTrustedEvaluator(real_eval_manifest(fold_manifest))
-        per_fold.append(evaluator.evaluate(model, val, partition="dev").macro_f1)
+    for repeat in range(repeats):
+        # each repeat draws a fresh partition of the same pool; averaging over
+        # R x K folds is what makes a small effect visible above fold noise
+        shuffled = sorted(pool)
+        random.Random(split_seed + repeat).shuffle(shuffled)
+        fold_of = {s: i % folds for i, s in enumerate(shuffled)}
+        for f in range(folds):
+            train_ids = [s for s in shuffled if fold_of[s] != f]
+            dev_ids = [s for s in shuffled if fold_of[s] == f]
+            fold_sizes.append(len(dev_ids))
+            # the scaler is refit on THIS fold's train rows: reusing the
+            # parent manifest's statistics would put validation-fold feature
+            # values into the training inputs of the model that scores them
+            fold = fold_manifest(
+                manifest, records, train_ids, dev_ids,
+                notes=f"selection fold {f} of repeat {repeat}",
+            ).data
+            torch.manual_seed(trainer_kwargs.get("seed", 0))
+            model = build_real_model(fold, config.get("model", {}))
+            trainer = Trainer(model, TrainerConfig(**trainer_kwargs))
+            provider = RealBatchProvider(fold, records, "train", batch_size=batch_size)
+            trainer.fit(provider)  # no eval provider: nothing may steer fitting
+            val = RealBatchProvider(fold, records, "dev", batch_size=64)
+            evaluator = TCMTrustedEvaluator(real_eval_manifest(fold))
+            per_fold.append(evaluator.evaluate(model, val, partition="dev").macro_f1)
 
     scored = [v for v in per_fold if v is not None]
     if not scored:
         raise ValueError("no fold produced a scoreable macro-F1")
     mean = sum(scored) / len(scored)
     variance = sum((v - mean) ** 2 for v in scored) / len(scored)
+    std = variance ** 0.5
     return {
         "primary_value": mean,
-        "primary_std": variance ** 0.5,
+        # spread of one fold's score: what the chart draws error bars from
+        "primary_std": std,
+        # spread of the MEAN: the only quantity a KEEP decision compares, so
+        # the noise margin is derived from this, not from `primary_std`
+        "primary_sem": std / (len(scored) ** 0.5),
         "folds": per_fold,
         "fold_sizes": fold_sizes,
-        "selection": "group_kfold",
+        "repeats": repeats,
+        "n_folds": len(scored),
+        "selection": "repeated_group_kfold" if repeats > 1 else "group_kfold",
     }
 
 

@@ -104,12 +104,26 @@ class FixedProposalProvider:
 
 
 def build_research_prompt(context: dict) -> str:
-    """Render the research state for an LLM agent (#45 editable scope)."""
+    """Render the research state for an LLM agent (#45 editable scope).
+
+    The optimisation target is taken from the frozen runspec the caller put
+    in `context`, not written into this string. It used to say "lower dev
+    subject MAE" unconditionally, so after the metric was changed to
+    macro-F1 (design doc §11.1) an autonomously-prompted agent would have
+    been told to optimise a target the harness had already rejected — and the
+    measured evidence for rejecting it (an L1 loss whose optimum on binary
+    labels is the median) would have been invisible to it.
+    """
+    target = context.get("primary_metric") or "the frozen primary_metric"
+    direction = context.get("primary_direction", "max")
+    aim = "maximise" if direction == "max" else "minimise"
     return (
         "You are the AutoResearch agent optimizing a TCM constitution model. "
         "The research state is given below as JSON. Propose ONE next "
         "candidate by changing ONLY keys listed in editable_scope "
-        "(model/trainer hyperparameters). Target: lower dev subject MAE. "
+        f"(model/trainer hyperparameters). Target: {aim} `{target}` — the "
+        "exact metric the harness scores, at the selection resolution stated "
+        "in the research state. "
         "Respond with STRICT JSON of shape "
         '{"intent": "<one line>", "config_patch": {"<scope key>": <value>}} '
         '— or {"intent": "STOP", "config_patch": {}} if the budget should '
