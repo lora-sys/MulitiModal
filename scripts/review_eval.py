@@ -615,110 +615,197 @@ def e37_champion_evaluated_under_own_scaler():
 
 @check
 def e38_manifest_chain_tamper_evidence():
-    # Pi round-4 R-01: the append-only manifest must detect edits, deletions
-    # and reordering of recorded rounds instead of trusting entry 0 only.
+    # Pi round-4 R-01 + round-5 R-01: the append-only manifest must detect
+    # edits, deletions, reordering AND unchained forged lines (after any
+    # chained entry) instead of trusting entry 0 only. Known undetectable:
+    # last-entry deletion and whole-file rewrite with a recomputed chain
+    # (unkeyed hash, same writable dir) — the real control is #45 isolation.
     from runtime.manifest import RunManifestStore
 
     with tempfile.TemporaryDirectory() as tmp:
         store = RunManifestStore(Path(tmp) / "m.jsonl")
-        store.append({"run_id": "tcm-0000", "decision": "KEEP", "status": "done"})
+        store.append({"run_id": "tcm-0000", "decision": "KEEP", "status": "done",
+                      "artifact_dir": "runs/ar/tcm-0000"})
         store.append({"run_id": "tcm-0001", "decision": "REVERT", "status": "done"})
-        store.append({"run_id": "tcm-0002", "decision": "KEEP", "status": "done"})
+        store.append({"run_id": "tcm-0002", "decision": "KEEP", "status": "done",
+                      "artifact_dir": "runs/ar/tcm-0002"})
         assert len(store.load()) == 3
 
         path = Path(tmp) / "m.jsonl"
         lines = path.read_text().splitlines()
+
+        def expect_integrity_failure(content: str, why: str) -> None:
+            path.write_text(content)
+            try:
+                RunManifestStore(path).load()
+            except RuntimeError as exc:
+                assert "integrity check failed" in str(exc), why
+            else:
+                raise AssertionError(f"loaded without error: {why}")
+
+        # hand-edit of one KEEP entry -> detected
         tampered = json.loads(lines[0])
         tampered["best_so_far"] = 0.0
-        path.write_text(
-            json.dumps(tampered, ensure_ascii=False) + "\n"
-            + lines[1] + "\n" + lines[2] + "\n"
+        expect_integrity_failure(
+            "\n".join([json.dumps(tampered, ensure_ascii=False),
+                       *lines[1:]]) + "\n",
+            "edited entry",
         )
-        try:
-            RunManifestStore(path).load()
-        except RuntimeError as exc:
-            assert "integrity check failed" in str(exc)
-        else:
-            raise AssertionError("edited manifest entry loaded without error")
-
-        # deleting a middle entry breaks the next entry's link (deleting the
-        # LAST entry is undetectable by any in-file chain — known limitation,
-        # real isolation is the #45 AGENT_ISOLATION verification)
-        path.write_text(lines[0] + "\n" + lines[2] + "\n")
-        try:
-            RunManifestStore(path).load()
-        except RuntimeError as exc:
-            assert "integrity check failed" in str(exc)
-        else:
-            raise AssertionError("deleted manifest entry loaded without error")
+        # deletion of a middle entry (breaks the next link) -> detected
+        expect_integrity_failure(
+            "\n".join([lines[0], lines[2]]) + "\n", "deleted entry"
+        )
+        # reordering -> detected
+        expect_integrity_failure(
+            "\n".join([lines[1], lines[0], lines[2]]) + "\n", "reordered"
+        )
+        # forged UNCHAINED line after chained entries (round-5 R-01) -> detected
+        forged = {"run_id": "tcm-9999", "decision": "KEEP",
+                  "best_so_far": 0.0001, "artifact_dir": "runs/ar/evil"}
+        expect_integrity_failure(
+            "\n".join([*lines, json.dumps(forged)]) + "\n", "forged line"
+        )
+        # intact store loads and reports the honest champion
+        path.write_text("\n".join(lines) + "\n")
+        champion = RunManifestStore(path).champion()
+        assert champion is not None and champion["run_id"] == "tcm-0002"
 
 
 @check
 def e39_resume_plan_alignment():
     # Pi round-4 R-02: the stub plan must be indexed by round_index so a
     # resumed run continues the plan instead of replaying tried candidates.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import inspect
-
     from runtime.agent import DeterministicStubProvider
 
-    source = inspect.getsource(DeterministicStubProvider.propose)
-    assert "self.calls" not in source
-    provider = DeterministicStubProvider(plan=[
-        ("baseline", {}), ("wider", {"model.hidden_dim": 64}),
-    ])
-    fresh = DeterministicStubProvider(plan=[
-        ("baseline", {}), ("wider", {"model.hidden_dim": 64}),
-    ])
-    assert fresh.propose(1, {}).intent == "wider"  # resume: no plan replay
-    assert provider.propose(0, {}).intent == "baseline"
-    assert provider.propose(2, {}) is None  # exhausted past the plan
+    plan = [("baseline", {}), ("wider", {"model.hidden_dim": 64}),
+            ("third", {"trainer.epochs": 3})]
+    first = DeterministicStubProvider(plan=plan)
+    assert first.propose(0, {}).intent == "baseline"
+    # a fresh provider on resume must propose plan[1], not replay plan[0]
+    resumed = DeterministicStubProvider(plan=plan)
+    assert resumed.propose(1, {}).intent == "wider"
+    assert resumed.propose(2, {}).intent == "third"
+    assert resumed.propose(3, {}) is None  # exhausted past the plan
 
 
 @check
 def e40_fail_to_revert_round_paths():
-    # Pi round-4 R-03: every in-loop failure records a REVERT entry instead
-    # of crashing the loop without a manifest record.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import inspect
+    # Pi round-4 R-03 + round-5 R-03/R-05: every in-loop failure records a
+    # REVERT entry instead of crashing the loop without a manifest record.
+    from runtime.agent import DeterministicStubProvider, Proposal
+    from runtime.harness import AutoResearchHarness, default_tcm_runspec
 
-    from runtime.harness import AutoResearchHarness
+    with tempfile.TemporaryDirectory() as tmp:
+        # a scope key outside the known sections passes patch validation but
+        # fails in apply_config_patch -> recorded rejected round
+        runspec = default_tcm_runspec(rounds=2, timeout_s=120.0)
+        runspec["editable_scope"] = ["model.hidden_dim", "eval_provider.n"]
+        harness = AutoResearchHarness(
+            runspec,
+            provider=DeterministicStubProvider(plan=[
+                ("baseline", {}), ("illegal section", {"eval_provider.n": 3}),
+            ]),
+            out_dir=Path(tmp) / "ar",
+        )
+        summary = harness.run()
+        rejected = summary["decisions"][1]
+        assert rejected["decision"] == "REVERT" and rejected["status"] == "rejected"
+        assert "not editable" in rejected["reason"]
 
-    candidate_src = inspect.getsource(AutoResearchHarness._run_candidate)
-    apply_pos = candidate_src.index("apply_config_patch(")
-    except_pos = candidate_src.index('except ValueError as exc:')
-    assert apply_pos < except_pos, "apply_config_patch outside the static-check guard"
-    assert "json.JSONDecodeError" in candidate_src  # train _worker decode errors
+    with tempfile.TemporaryDirectory() as tmp:
+        # ANY exception from the provider (not just ValueError) is recorded
+        # as an agent_error round and appears in decisions (round-5 R-03/R-06)
+        class Broken:
+            def propose(self, round_index, context):
+                raise TimeoutError("LLM backend timed out")
 
-    run_src = inspect.getsource(AutoResearchHarness.run)
-    assert "agent_error" in run_src  # provider.propose failures are recorded
+        harness = AutoResearchHarness(
+            default_tcm_runspec(rounds=2, timeout_s=120.0),
+            provider=Broken(), out_dir=Path(tmp) / "ar2",
+        )
+        summary = harness.run()
+        assert summary["rounds_completed"] == 2
+        assert len(summary["decisions"]) == 2
+        for decision in summary["decisions"]:
+            assert decision["decision"] == "REVERT"
+            assert decision["status"] == "agent_error"
+            assert "TimeoutError" in decision["reason"]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # a successful score followed by an unreadable artifact is recorded
+        # too (round-5 R-05: artifact hashing is a guarded path)
+        import runtime.harness as harness_module
+
+        harness = AutoResearchHarness(
+            default_tcm_runspec(rounds=1, timeout_s=120.0),
+            provider=DeterministicStubProvider(plan=[("baseline", {})]),
+            out_dir=Path(tmp) / "ar3",
+        )
+        original_hasher = harness_module._artifact_sha256
+
+        def broken_hasher(_artifact_dir):
+            raise OSError("weights.pt vanished")
+
+        harness_module._artifact_sha256 = broken_hasher
+        try:
+            entry = harness.step(Proposal(intent="baseline", config_patch={}))
+        finally:
+            harness_module._artifact_sha256 = original_hasher
+        assert entry["decision"] == "REVERT", entry
+        assert entry["status"] == "score_failed", entry
+        assert "artifact hashing failed" in entry["reason"]
 
 
 @check
 def e41_worker_env_drops_inherited_pythonpath():
-    # Pi round-4 R-04: workers must not inherit the host PYTHONPATH.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import inspect
+    # Pi round-4 R-04: workers must not inherit the host PYTHONPATH —
+    # behavioral: poison the real env and inspect what _worker_env returns.
+    import os
 
-    from runtime.harness import _worker_env
+    from runtime.harness import SRC_DIR, _worker_env
 
-    source = inspect.getsource(_worker_env)
-    assert 'env["PYTHONPATH"] = str(SRC_DIR)' in source
-    assert "os.pathsep + existing" not in source
+    poisoned = "/host/junk:/more/junk"
+    old = os.environ.get("PYTHONPATH")
+    os.environ["PYTHONPATH"] = poisoned
+    try:
+        env = _worker_env()
+    finally:
+        if old is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = old
+    assert env["PYTHONPATH"] == str(SRC_DIR), env["PYTHONPATH"]
+    assert poisoned not in env["PYTHONPATH"]
 
 
 @check
 def e42_real_training_forbids_dev_steering():
     # Pi round-4 R-05: dev is the Trainer's eval provider in real mode for
-    # reporting only; early stop / best-epoch restore must fail closed.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import inspect
+    # reporting only; early stop / best-epoch restore must fail closed —
+    # behavioral: _train_real refuses the config before touching the dataset.
+    from runtime.protocols import train_candidate
 
-    from runtime.protocols import _train_real
-
-    source = inspect.getsource(_train_real)
-    assert "early_stop_patience" in source and "restore_best" in source
-    assert source.index("for forbidden in") < source.index("_load_records")
+    records = fake_records()
+    manifest = build_real_manifest(records, dataset_sha256=DATASET_SHA)
+    with tempfile.TemporaryDirectory() as tmp:
+        manifest_path = Path(tmp) / "manifest.json"
+        manifest.save(manifest_path)
+        base = {
+            "task": "tcm", "data_mode": "real",
+            "data": {"manifest_path": str(manifest_path),
+                     "dataset_path": "unused.xls"},
+            "out_dir": str(Path(tmp) / "runs"),
+        }
+        for key, value in (("early_stop_patience", 2), ("restore_best", True)):
+            config = {**base, "trainer": {"epochs": 1, key: value}}
+            try:
+                train_candidate(config)
+            except ValueError as exc:
+                assert f"trainer.{key}" in str(exc), (key, exc)
+            else:
+                raise AssertionError(
+                    f"real training accepted trainer.{key} (dev steering)"
+                )
 
 
 def check_summary_artifacts(summary_path: str | None, report_path: str | None) -> list[str]:

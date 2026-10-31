@@ -78,6 +78,8 @@ macro-F1 对全部可观测维度平均、未定义 F1 计 0。
 - 冠军由 6 候选在 dev 上选出（winner's curse）；消融单 seed；dev/holdout
   均 <50 人；神经 vs 逻辑回归优势在两个独立划分的 holdout 上均未证实。
 - 报告路径 fail-closed 三重哈希绑定；派生 manifest 镜像冻结划分并断言成员；
-  31/31 冻结 eval + 176 pytest 在开发机全绿。
+  全部冻结 eval 检查（evals/review-eval-50.md，E01–E49）与 pytest 套件在
+  开发机全绿。run manifest 的哈希链仅为防意外/朴素篡改的证据层（E44），
+  对确定写手的隔离控制仍待 #45 验证。
 - GO_RESEARCH_CLAIMS 仍被独立参考数据阻塞（NOT_AVAILABLE）。
 - 本报告仅代表研究口径（GO_REAL_DATA_TRAINING 层级），不可临床使用。

@@ -71,3 +71,17 @@ Pi），经主流程逐条核验后确认为真实问题的条目。此清单是
 | E42 | Pi R-05 | real 训练把 dev 接成 Trainer eval provider；若未来设置 `early_stop_patience`/`restore_best` 会让 dev 参与拟合（与选择双重使用） | `_train_real` fail-closed：这两个 trainer 键非 None 即拒绝（当前行为不变，latent 泄漏关闭） | review_eval `e42_real_training_forbids_dev_steering` + pytest |
 
 Round-4 裁决：Antigravity opus-4-6-thinking 因配额耗尽未产出；Pi GLM-5.3-Flash 确认循环核心不变量成立（dev-only 选择、作用域校验、强制种子、holdout 不可达、无 patch 逃逸），R-01 为唯一高严重度缺陷，已随 E38–E42 冻结修复。
+
+## 第五轮审查追加条目（Pi round-5，R-01–R-07）
+
+| 编号 | 来源 | 发现 | 冻结修复 | 验证 |
+| --- | --- | --- | --- | --- |
+| E43 | Pi round-5 R-01 | "legacy" 形状（无 `entry_sha256`）的行在任意位置都被跳过验链——链后伪造/插入未链行可静默通过并被 `champion()` 采纳 | 只允许**开头** legacy 行；任何已链行之后出现未链行即 RuntimeError（"unchained entry"） | review_eval `e38`（forged line 用例）+ pytest |
+| E44 | Pi round-5 R-02 | 无密钥哈希链挡不住能重算整条链的写手；E38 原表述夸大覆盖面 | 声明改诚实：仅防意外/朴素就地编辑；对确定写手的真控制是 #45 AGENT_ISOLATION OS/container 验证（manifest docstring 已同步） | review_eval `e38` 注释 + docstring |
+| E45 | Pi round-5 R-03 | `run()` 只捕 `ValueError`——后端超时/连接错误等直接杀死循环且不留 manifest 记录 | `except Exception` 记录 `agent_error`（含异常类型名） | review_eval `e40`（TimeoutError 用例）+ pytest |
+| E46 | Pi round-5 R-05 | score 成功后 `_artifact_sha256` 在守卫之外，weights.pt 丢失 → OSError 裸崩 | 哈希计算纳入守卫 → `score_failed` REVERT 条目 | review_eval `e40`（hasher 替换用例） |
+| E47 | Pi round-5 R-06 | `run()` 摘要的 `decisions` 漏掉 `agent_error` 轮（与 `rounds_completed` 不一致） | agent_error 条目同时进入 `decisions` | review_eval `e40` + pytest |
+| E48 | Pi round-5 R-07 | worker rc=0 且 stdout 为空 → `splitlines()[-1]` IndexError，不在任何捕获列表 | 空输出显式 RuntimeError（已被捕获）→ REVERT | pytest（`_worker` 路径经 e40/既有 crash 测试覆盖） |
+| E49 | Pi round-5 R-04 | e39–e42 以源码 grep 钉住修复，语义回归可通过 | e39/e40/e41/e42 全部改写为行为断言（真调用 provider/harness/_worker_env/train_candidate） | review_eval 本身 |
+
+Round-5 裁决：**NO**——#50 数字不被推翻（实际运行的冠军选择由进程内可信评分驱动，报告端有 `assert_champion_matches_manifest` 三重哈希绑定）；但 E38 的防篡改声明须按 E44 限定后方可作为 #50 provenance 引用。

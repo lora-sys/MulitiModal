@@ -332,6 +332,13 @@ def test_manifest_chain_detects_edit_deletion_and_reorder(tmp_path):
     with pytest.raises(RuntimeError, match="integrity check failed"):
         RunManifestStore(tmp_path / "m.jsonl").load()
 
+    # an UNCHAINED forged line after chained entries -> detected (round-5)
+    forged = {"run_id": "tcm-9999", "decision": "KEEP",
+              "best_so_far": 0.0001, "artifact_dir": "runs/ar/evil"}
+    rewrite([*lines, json.dumps(forged)])
+    with pytest.raises(RuntimeError, match="integrity check failed"):
+        RunManifestStore(tmp_path / "m.jsonl").load()
+
     (tmp_path / "m.jsonl").write_text("\n".join(lines) + "\n")
     assert len(store.load()) == 3
 
@@ -344,9 +351,28 @@ def test_manifest_chain_accepts_legacy_entries_and_extends_them(tmp_path):
     store.append({"run_id": "tcm-0001", "decision": "KEEP", "status": "done"})
     entries = store.load()
     assert len(entries) == 2
-    assert "entry_sha256" not in entries[0]  # legacy line untouched
+    assert "entry_sha256" not in entries[0]  # leading legacy line untouched
     assert entries[1]["prev_entry_sha256"] == ""
     assert len(entries[1]["entry_sha256"]) == 64
+
+
+def test_manifest_chain_rejects_unchained_line_after_chained_entries(tmp_path):
+    # round-5 R-01: the legacy skip must apply to LEADING entries only —
+    # an unchained line after any chained entry is a forged insertion
+    store = RunManifestStore(tmp_path / "m.jsonl")
+    store.append({"run_id": "tcm-0000", "decision": "KEEP", "status": "done"})
+    store.append({"run_id": "tcm-0001", "decision": "REVERT", "status": "done"})
+    path = tmp_path / "m.jsonl"
+    lines = path.read_text().splitlines()
+    forged = {"run_id": "tcm-9999", "decision": "KEEP", "best_so_far": 0.0001}
+    path.write_text(
+        "\n".join([lines[0], json.dumps(forged), lines[1]]) + "\n"
+    )
+    with pytest.raises(RuntimeError, match="unchained entry"):
+        store.load()
+    path.write_text("\n".join([*lines, json.dumps(forged)]) + "\n")
+    with pytest.raises(RuntimeError, match="unchained entry"):
+        store.load()
 
 
 def test_resume_continues_plan_without_replay(tmp_path):
@@ -370,16 +396,19 @@ def test_resume_continues_plan_without_replay(tmp_path):
 def test_agent_error_is_recorded_as_reverted_round(tmp_path):
     class Broken:
         def propose(self, round_index, context):
-            raise ValueError("agent reply is not valid JSON: 'oops'")
+            raise TimeoutError("LLM backend timed out")
 
-    # each failed proposal consumes one round of the budget and is recorded
+    # ANY exception type is recorded (round-5 R-03, not just ValueError);
+    # each failed proposal consumes one budget round and appears in the
+    # summary decisions (round-5 R-06)
     summary = harness(tmp_path, Broken(), rounds=2).run()
     assert summary["rounds_completed"] == 2
+    assert len(summary["decisions"]) == 2
+    for decision in summary["decisions"]:
+        assert decision["decision"] == "REVERT"
+        assert decision["status"] == "agent_error"
+        assert "TimeoutError" in decision["reason"]
     entries = RunManifestStore(tmp_path / "ar" / "manifest.jsonl").load()
-    for entry in entries:
-        assert entry["decision"] == "REVERT"
-        assert entry["status"] == "agent_error"
-        assert "not valid JSON" in entry["reason"]
     assert [e["run_id"] for e in entries] == ["tcm-0000", "tcm-0001"]
 
 

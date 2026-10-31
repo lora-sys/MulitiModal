@@ -1,11 +1,16 @@
 """Append-only RunManifest store for the #45 harness (#44 §6).
 
-Entries carry a hash chain (`prev_entry_sha256` + `entry_sha256`) so edits,
-deletions, or reordering of recorded rounds are detected on load. Known
-in-file limitations (tamper-EVIDENCE, not tamper-PROTECTION): deleting the
-last entry, or rewriting the whole file without chain fields, is not
-detectable — real isolation of the store from the agent is the #45
-AGENT_ISOLATION verification.
+Entries carry a hash chain (`prev_entry_sha256` + `entry_sha256`) so naive
+in-place edits, deletions, or reordering of recorded rounds are detected on
+load. Honest scope of this guarantee (review round-5 R-01/R-02):
+
+- Leading entries written before the chain existed pass through unverified;
+  an UNCHAINED line after any chained entry is rejected (forgery/insertion).
+- Deleting the last entry, or rewriting the file with a RECOMPUTED chain,
+  is undetectable: the hash is unkeyed and the store lives in the same
+  agent-writable out_dir as the artifacts. This is tamper-EVIDENCE against
+  accidental or naive corruption only — the control against a determined
+  writer is the #45 AGENT_ISOLATION OS/container verification.
 """
 
 from __future__ import annotations
@@ -42,12 +47,19 @@ class RunManifestStore:
 
     @staticmethod
     def _verify_chain(entries: list[dict]) -> None:
-        """Chained entries must hash-verify and link; legacy entries (written
-        before the chain existed) pass through untouched."""
+        """Chained entries must hash-verify and link; only LEADING legacy
+        entries (written before the chain existed) pass unverified."""
         previous_digest: str | None = None
+        seen_chained = False
         for index, entry in enumerate(entries):
             if "entry_sha256" not in entry:
-                continue  # legacy entry, no chain to verify
+                if seen_chained:
+                    raise RuntimeError(
+                        f"run manifest integrity check failed at line "
+                        f"{index}: unchained entry after chained entries "
+                        "(possible forged or inserted line)"
+                    )
+                continue  # leading legacy entry, no chain to verify
             if entry["prev_entry_sha256"] != (previous_digest or ""):
                 raise RuntimeError(
                     f"run manifest integrity check failed at line {index}: "
@@ -60,6 +72,7 @@ class RunManifestStore:
                     "entry content does not match its recorded hash"
                 )
             previous_digest = entry["entry_sha256"]
+            seen_chained = True
 
     def append(self, entry: dict) -> None:
         if "entry_sha256" not in entry:

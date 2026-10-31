@@ -180,7 +180,10 @@ def _worker(command: list[str], timeout_s: float) -> dict:
             f"worker {' '.join(command)} failed (rc={proc.returncode}): "
             f"{proc.stderr.strip()[-500:]}"
         )
-    return json.loads(proc.stdout.strip().splitlines()[-1])
+    lines = proc.stdout.strip().splitlines()
+    if not lines:
+        raise RuntimeError(f"worker {' '.join(command)} produced no output")
+    return json.loads(lines[-1])
 
 
 def _artifact_sha256(artifact_dir: str | Path) -> str:
@@ -331,6 +334,13 @@ class AutoResearchHarness:
         if value is None:
             return finish("REVERT", "score_failed", "primary metric missing or NaN")
 
+        try:
+            artifact_sha = _artifact_sha256(candidate_dir)
+        except OSError as exc:
+            return finish(
+                "REVERT", "score_failed", f"artifact hashing failed: {exc}"
+            )
+
         champion = self.store.champion()
         previous_best = champion.get("best_so_far") if champion else None
         keep = previous_best is None or value < previous_best
@@ -343,7 +353,7 @@ class AutoResearchHarness:
                 else f"baseline {value:.6f}"
             ),
             artifact_dir=str(candidate_dir),
-            artifact_sha256=_artifact_sha256(candidate_dir),
+            artifact_sha256=artifact_sha,
             model_type=train_report.get("model_type"),
             metrics={"primary_metric": self.runspec["frozen"]["primary_metric"],
                      "primary_value": value, "report": score},
@@ -424,10 +434,11 @@ class AutoResearchHarness:
                 proposal = self.provider.propose(
                     context["round_index"], context
                 )
-            except ValueError as exc:
-                # an agent failure is a recorded round, not a crashed loop
+            except Exception as exc:  # noqa: BLE001 — agent failures are rounds
+                # an agent failure is a recorded round, not a crashed loop;
+                # it consumes one budget round so the manifest stays honest
                 index = context["round_index"]
-                self.store.append({
+                failed = {
                     "run_id": f"tcm-{index:04d}", "round_index": index,
                     "intent": None, "patch": None,
                     "mode": self.mode, "agent_status": self.agent_status,
@@ -435,9 +446,12 @@ class AutoResearchHarness:
                     "source_commit": _git_sha(),
                     "frozen_hashes": self._frozen_hashes(),
                     "decision": "REVERT", "status": "agent_error",
-                    "reason": f"agent proposal failed: {exc}",
+                    "reason": f"agent proposal failed: "
+                              f"{type(exc).__name__}: {exc}",
                     "best_so_far": None,
-                })
+                }
+                self.store.append(failed)
+                decisions.append(failed)
                 continue
             if proposal is None:
                 plan_exhausted = True
