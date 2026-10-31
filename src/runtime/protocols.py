@@ -87,6 +87,148 @@ def _train_real(config: dict) -> dict:
     }
 
 
+def cross_val_candidate(config: dict, folds: int = 4, split_seed: int = 0) -> dict:
+    """Subject-level k-fold score over the SELECTION POOL (train + dev).
+
+    Why: a single 41-subject dev split cannot rank candidates — the spread
+    between different splits of the same config (dev macro-F1 0.145 vs holdout
+    0.345 in v7) dwarfs the spread between candidates. Each fold trains on the
+    pool minus the fold and scores the held-out fold with the same trusted
+    evaluator; the harness then requires the mean to beat the champion by a
+    margin derived from the fold spread before accepting a KEEP.
+
+    The holdout partition is never read here: folds are drawn from
+    manifest["split"]["train"] + ["dev"] only.
+    """
+    import copy
+    import random
+
+    import torch
+
+    from .real_data import (
+        RealBatchProvider,
+        build_real_model,
+        manifest_from_path,
+        real_eval_manifest,
+    )
+    from .tcm_eval import TCMTrustedEvaluator
+
+    manifest = manifest_from_path(config["data"]["manifest_path"])
+    records = _load_records(config["data"]["dataset_path"])
+    pool = list(manifest["split"]["train"]) + list(manifest["split"]["dev"])
+    if len(pool) < folds * 4:
+        raise ValueError(f"selection pool of {len(pool)} subjects is too small for {folds} folds")
+    shuffled = sorted(pool)
+    random.Random(split_seed).shuffle(shuffled)
+    fold_of = {s: i % folds for i, s in enumerate(shuffled)}
+
+    trainer_kwargs = dict(config.get("trainer", {}))
+    for forbidden in ("early_stop_patience", "restore_best"):
+        if trainer_kwargs.get(forbidden) is not None:
+            raise ValueError(
+                f"real-data training forbids trainer.{forbidden}: a validation "
+                "fold must never steer fitting"
+            )
+    batch_size = config.get("train_provider", {}).get("batch_size", 32)
+    per_fold: list[float | None] = []
+    fold_sizes: list[int] = []
+    for f in range(folds):
+        fold_manifest = copy.deepcopy(manifest)
+        fold_manifest["split"] = {
+            **manifest["split"],
+            "train": [s for s in shuffled if fold_of[s] != f],
+            "dev": [s for s in shuffled if fold_of[s] == f],
+        }
+        fold_sizes.append(len(fold_manifest["split"]["dev"]))
+        torch.manual_seed(trainer_kwargs.get("seed", 0))
+        model = build_real_model(fold_manifest, config.get("model", {}))
+        trainer = Trainer(model, TrainerConfig(**trainer_kwargs))
+        provider = RealBatchProvider(fold_manifest, records, "train", batch_size=batch_size)
+        trainer.fit(provider)  # no eval provider: nothing may steer fitting
+        val = RealBatchProvider(fold_manifest, records, "dev", batch_size=64)
+        evaluator = TCMTrustedEvaluator(real_eval_manifest(fold_manifest))
+        per_fold.append(evaluator.evaluate(model, val, partition="dev").macro_f1)
+
+    scored = [v for v in per_fold if v is not None]
+    if not scored:
+        raise ValueError("no fold produced a scoreable macro-F1")
+    mean = sum(scored) / len(scored)
+    variance = sum((v - mean) ** 2 for v in scored) / len(scored)
+    return {
+        "primary_value": mean,
+        "primary_std": variance ** 0.5,
+        "folds": per_fold,
+        "fold_sizes": fold_sizes,
+        "selection": "group_kfold",
+    }
+
+
+def refit_champion(config: dict, selection: dict | None = None) -> dict:
+    """Fit the selected configuration on the whole SELECTION POOL (train+dev).
+
+    The deliverable model: every row that took part in the cross-validated
+    selection is used for the final fit, and the frozen holdout is never
+    read here (it is unlocked once, by the report). The checkpoint records
+    the frozen manifest it descends from, so a report can verify the
+    binding instead of trusting the directory name.
+    """
+    import torch
+
+    from data.real_split import pool_manifest
+
+    from .real_data import RealBatchProvider, build_real_model, manifest_from_path
+
+    data_cfg = dict(config["data"])
+    manifest = manifest_from_path(data_cfg["manifest_path"])
+    records = _load_records(data_cfg["dataset_path"])
+    pool = pool_manifest(
+        manifest, records,
+        notes="final refit on the AutoResearch selection pool (train+dev)",
+    )
+    trainer_kwargs = dict(config.get("trainer", {}))
+    for forbidden in ("early_stop_patience", "restore_best"):
+        if trainer_kwargs.get(forbidden) is not None:
+            raise ValueError(
+                f"refit forbids trainer.{forbidden}: there is no validation "
+                "partition left to steer fitting"
+            )
+    trainer_cfg = TrainerConfig(**trainer_kwargs)
+    torch.manual_seed(trainer_cfg.seed)
+    model = build_real_model(pool.data, config.get("model", {}))
+    trainer = Trainer(model, trainer_cfg)
+    batch_size = config.get("train_provider", {}).get("batch_size", 32)
+    provider = RealBatchProvider(pool.data, records, "train", batch_size=batch_size)
+    report = trainer.fit(provider)
+    artifact_dir = trainer.save_checkpoint(
+        Path(config.get("out_dir", "runs/autoresearch/final")),
+        smoke_only=False,
+        extra_state={
+            "manifest_sha256": pool.data["manifest_sha256"],
+            "selection_parent_manifest_sha256": manifest["manifest_sha256"],
+            "dataset_sha256": manifest["dataset_sha256"],
+            "label_version": manifest["label_version"],
+            "train_batch_size": batch_size,
+            "refit_partition": "train+dev",
+            "refit_rows": len(pool.data["split"]["train"]),
+            "selection": selection or {},
+        },
+    )
+    return {
+        "artifact_dir": str(artifact_dir),
+        "model_type": model.model_type,
+        "epochs_run": report.epochs_run,
+        "smoke_only": False,
+        "data_mode": "real",
+        "manifest_sha256": pool.data["manifest_sha256"],
+        "selection_parent_manifest_sha256": manifest["manifest_sha256"],
+        "dataset_sha256": manifest["dataset_sha256"],
+        "label_version": manifest["label_version"],
+        "refit_partition": "train+dev",
+        "refit_rows": len(pool.data["split"]["train"]),
+        "holdout_rows_untouched": len(pool.data["split"]["holdout"]),
+    }
+
+
 def _load_records(dataset_path: str) -> list:
     from data.mendeley import load_mendeley_scores
 

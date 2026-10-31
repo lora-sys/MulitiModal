@@ -257,6 +257,47 @@ def exclude_subjects_from_manifest(
     return RealManifest(data=data, sha256=digest)
 
 
+def pool_manifest(manifest: dict, records: list[SubjectRecord], notes: str = "") -> RealManifest:
+    """Derive the SELECTION-POOL manifest (train + dev) for the final refit.
+
+    AutoResearch selects a configuration by subject-level cross-validation
+    over train+dev; once selected, the final model is fitted on every row
+    that took part in selection. Fitting on train alone would discard 41 of
+    232 selection subjects for no gain in honesty — dev is no longer a
+    validation set once it has steered selection. The holdout partition is
+    untouched and stays unread until the report scores it once.
+
+    Like exclude_subjects_from_manifest, this keeps the frozen row-to-
+    partition assignment and only moves dev rows into train; nothing is
+    reshuffled. The scaler is refit on the pool, which is exactly the data
+    the final model sees.
+    """
+    data = json.loads(json.dumps(manifest))
+    data.pop("manifest_sha256", None)
+    data["split"] = {
+        "train": list(data["split"]["train"]) + list(data["split"]["dev"]),
+        "dev": [],
+        "holdout": list(data["split"]["holdout"]),
+    }
+    by_row = {r.subject_index: r for r in records}
+    groups = {
+        modality: tuple(params["feature_groups"])
+        for modality, params in data["modalities"].items()
+    }
+    data["scaler"] = _fit_scaler(
+        [data["subject_row_by_id"][s] for s in data["split"]["train"]],
+        by_row,
+        groups,
+    )
+    data["scaler_fit_rows"] = len(data["split"]["train"])
+    data["selection_parent_manifest_sha256"] = manifest["manifest_sha256"]
+    if notes:
+        data["notes"] = notes
+    digest = _manifest_digest(data)
+    data["manifest_sha256"] = digest
+    return RealManifest(data=data, sha256=digest)
+
+
 def load_real_manifest(path: str | Path) -> dict:
     data = json.loads(Path(path).read_text())
     expected = data.pop("manifest_sha256", None)

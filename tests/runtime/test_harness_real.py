@@ -56,7 +56,23 @@ def test_real_data_harness_round(tmp_path):
         assert entry["smoke_only"] is False
         assert entry["mode"] == "REAL_DATA_TRAINING"
     champion = RunManifestStore(tmp_path / "runs" / "manifest.jsonl").champion()
-    assert champion is not None and champion["artifact_dir"]
-    from runtime.checkpoint import checkpoint_summary
+    # k-fold selection keeps no per-round model: a round trains `folds` models
+    # and discards them, so the champion carries a fold-averaged score and no
+    # artifact_dir. The deliverable comes from finalize(), one fit on the pool.
+    assert champion is not None
+    assert champion["artifact_dir"] is None
+    assert champion["selection"]["folds"] == 4
+    assert champion["primary_std"] is not None
 
-    assert checkpoint_summary(champion["artifact_dir"])["smoke_only"] is False
+    final = harness.finalize()
+    assert final["champion_run_id"] == champion["run_id"]
+    assert final["refit"]["refit_partition"] == "train+dev"
+
+    from runtime.checkpoint import checkpoint_summary, load_training_checkpoint
+
+    assert checkpoint_summary(final["refit"]["artifact_dir"])["smoke_only"] is False
+    _, state, _ = load_training_checkpoint(final["refit"]["artifact_dir"])
+    # the refit checkpoint must name the frozen manifest as its selection parent,
+    # not merely descend from some manifest with the same row count
+    assert state["selection_parent_manifest_sha256"] == saved.sha256
+    assert state["manifest_sha256"] != saved.sha256

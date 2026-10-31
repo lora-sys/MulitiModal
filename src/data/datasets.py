@@ -142,9 +142,93 @@ DATASET_ZENODO_4431679 = DatasetRecord(
           "engines, never as supervised training data.",
 )
 
+#: 2026-10-31 expansion search. The model pairs physiological/lifestyle
+#: features with CCMQ-derived categories, so a usable dataset must carry
+#: BOTH sides per subject. The records below are the candidates that search
+#: surfaced; none could be downloaded in this session, and the record exists
+#: so the search is checkable instead of being re-run from memory.
+DATASET_NCMI_PULSE = DatasetRecord(
+    dataset_id="ncmi-phda-pulse-constitution-2015-2019",
+    primary_url=(
+        "https://www.ncmi.cn/phda/dataDetails.html?type=project_data"
+        "&id=CSTR:A0006.11.A001I.202006.001095-V1.0"
+    ),
+    doi="10.12041/geodata.1588738452788.ver1.db",
+    version="V1.0",
+    license="PHDA service terms; registration + per-dataset application",
+    source_type="public_dataset",
+    label_source="PUBLISHED",
+    standard_version="ZYYXH/T157-2009",
+    n_subjects=26154,
+    modality_summary=(
+        "pulse-diagnosis physiological parameters, 58,863 records, "
+        "~75.8-96.9 GB, four regions; constitution type per subject"
+    ),
+    label_availability=(
+        "constitution type per subject (project reports 26,154 person-times); "
+        "row-level label column not inspected"
+    ),
+    eligibility=ELIGIBILITY_PENDING,
+    retrieved_at="2026-10-31",
+    notes=(
+        "CSTR:A0006.11.A001I.202006.001095 (PHDA) and geodata DOI above are "
+        "two records of the same CACMS project. Metadata labels it "
+        "完全共享/线上共享, but the detail page returns HTTP 403 without an "
+        "account and the download needs an order plus manual review. This is "
+        "the only candidate that would genuinely extend the training set "
+        "(pulse features + constitution labels). Application is a human step."
+    ),
+)
+
+DATASET_TCMECQ_ELDERLY = DatasetRecord(
+    dataset_id="frontiers-tcmecq-elderly-2026",
+    primary_url="https://www.frontiersin.org/journals/medicine/articles/10.3389/fmed.2026.1698576/full",
+    doi="10.3389/fmed.2026.1698576",
+    version="published article",
+    license="not stated for row-level data",
+    source_type="publication",
+    label_source="PUBLISHED",
+    standard_version="ZYYXH/T157-2009",
+    n_subjects=25586,
+    modality_summary="TCMECQ questionnaire (33 items) + 13 biochemical indicators",
+    label_availability="nine-class constitution + transformation trend, aggregate in paper",
+    eligibility=ELIGIBILITY_REJECTED,
+    retrieved_at="2026-10-31",
+    notes=(
+        "25,586 cleaned records with paired biochemical features would have "
+        "been the best extension found, but the data availability statement "
+        "puts row-level data with the corresponding author and no repository. "
+        "Rejected as NOT_PUBLICLY_DOWNLOADABLE; no adapter written."
+    ),
+)
+
+DATASET_CCMQ_NATIONAL = DatasetRecord(
+    dataset_id="ccmq-national-91145",
+    primary_url="https://pmc.ncbi.nlm.nih.gov/articles/PMC11403957/",
+    doi="10.1186/s13020-024-00992-0",
+    version="published article",
+    license="not stated",
+    source_type="publication",
+    label_source="RULE",
+    standard_version="ZYYXH/T157-2009",
+    n_subjects=91145,
+    modality_summary="CCMQ-60 item responses, web survey (no physiological features)",
+    label_availability="item-level responses; data on request from the corresponding author",
+    eligibility=ELIGIBILITY_REJECTED,
+    retrieved_at="2026-10-31",
+    notes=(
+        "Rejected on two independent grounds: no downloadable file, and no "
+        "physiological features — it could only validate the #38 scoring "
+        "rule, which the 14-row Zenodo fixture already covers."
+    ),
+)
+
 DATASET_REGISTRY: dict[str, DatasetRecord] = {
     DATASET_CXTPH3TJSG.dataset_id: DATASET_CXTPH3TJSG,
     DATASET_ZENODO_4431679.dataset_id: DATASET_ZENODO_4431679,
+    DATASET_NCMI_PULSE.dataset_id: DATASET_NCMI_PULSE,
+    DATASET_TCMECQ_ELDERLY.dataset_id: DATASET_TCMECQ_ELDERLY,
+    DATASET_CCMQ_NATIONAL.dataset_id: DATASET_CCMQ_NATIONAL,
 }
 
 

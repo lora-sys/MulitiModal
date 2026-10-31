@@ -119,11 +119,19 @@ class RunManifestStore:
         return self.load()
 
     def champion(self) -> dict | None:
-        """Artifact dir + best metric of the last KEEP entry, or None."""
+        """The last KEEP entry (its config, best metric and provenance).
+
+        `artifact_dir` is deliberately NOT required. Under k-fold selection
+        a round trains `folds` models and discards them, so no round owns a
+        deliverable; the artifact comes from `AutoResearchHarness.finalize()`
+        (one fit on the selection pool). Requiring `artifact_dir` here would
+        make every fold-scored round invisible as a champion and silently
+        turn the hill climb into "always keep the first candidate".
+        """
         for entry in reversed(self.load()):
             # .get: leading legacy entries pass unverified and need not
             # carry any particular keys (review round-7 R-04)
-            if entry.get("decision") == "KEEP" and entry.get("artifact_dir"):
+            if entry.get("decision") == "KEEP":
                 return entry
         return None
 

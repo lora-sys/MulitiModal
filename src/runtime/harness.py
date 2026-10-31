@@ -66,6 +66,14 @@ def default_real_tcm_runspec(
             "metric_version": "tcm-eval-v0",
             "primary_metric": "category_probs/macro_f1",
             "primary_direction": "max",
+            # selection runs on subject-level k-fold over the pool, not on the
+            # 41-subject dev split: the between-split spread of ONE config
+            # dwarfs the between-candidate spread, so a single split cannot
+            # rank candidates (measured: same weights scored dev 0.145,
+            # holdout 0.345). KEEP additionally needs to clear a margin
+            # derived from the fold spread.
+            "selection_folds": 4,
+            "selection_margin_std": 0.5,
         },
         "data": {
             "manifest_path": str(manifest_path),
@@ -133,6 +141,14 @@ def default_tcm_runspec(rounds: int = 3, timeout_s: float = 300.0) -> dict:
             "metric_version": "tcm-eval-v0",
             "primary_metric": "category_probs/macro_f1",
             "primary_direction": "max",
+            # selection runs on subject-level k-fold over the pool, not on the
+            # 41-subject dev split: the between-split spread of ONE config
+            # dwarfs the between-candidate spread, so a single split cannot
+            # rank candidates (measured: same weights scored dev 0.145,
+            # holdout 0.345). KEEP additionally needs to clear a margin
+            # derived from the fold spread.
+            "selection_folds": 4,
+            "selection_margin_std": 0.5,
         },
         "seed": 0,
         "budget": {
@@ -355,9 +371,30 @@ class AutoResearchHarness:
             # eval subjects must stay disjoint from the train pool (#27)
             config["eval_provider"]["subject_prefix"] = f"eval-{run_id}"
 
+        folds = int(self.runspec["frozen"].get("selection_folds", 1) or 1)
+        config_path = self._dump_config(config, run_id)
+        if self.real_data and folds > 1:
+            try:
+                score = _worker(
+                    ["cv", "--config", config_path, "--folds", str(folds),
+                     "--seed", str(self.runspec["seed"])], timeout_s
+                )
+            except subprocess.TimeoutExpired:
+                return finish("REVERT", "timeout", f"exceeded {timeout_s}s budget")
+            except (RuntimeError, OSError, json.JSONDecodeError) as exc:
+                return finish("REVERT", "crash", f"cross-validation failed: {exc}")
+            value = _primary_value(score)
+            if value is None:
+                return finish("REVERT", "score_failed", "primary metric missing or NaN")
+            std = float(score.get("primary_std") or 0.0)
+            return self._decide(
+                entry, value, std, folds=folds, folds_raw=score.get("folds"),
+                finish=finish,
+            )
+
         try:
             train_report = _worker(
-                ["train", "--config", self._dump_config(config, run_id)], timeout_s
+                ["train", "--config", config_path], timeout_s
             )
         except subprocess.TimeoutExpired:
             return finish("REVERT", "timeout", f"exceeded {timeout_s}s budget")
@@ -388,30 +425,65 @@ class AutoResearchHarness:
                 "REVERT", "score_failed", f"artifact hashing failed: {exc}"
             )
 
+        return self._decide(
+            entry, value, 0.0, folds=1, folds_raw=None, finish=finish,
+            artifact_dir=str(candidate_dir), artifact_sha=artifact_sha,
+            model_type=train_report.get("model_type"), report=score,
+        )
+
+    def _decide(
+        self, entry: dict, value: float, std: float, *, folds: int,
+        folds_raw, finish, artifact_dir: str | None = None,
+        artifact_sha: str | None = None, model_type: str | None = None,
+        report: dict | None = None,
+    ) -> dict:
+        """KEEP/REVERT against the champion.
+
+        The runspec declares the metric direction. A candidate must beat the
+        champion by STRICTLY more than a noise margin: on fold-averaged
+        selection the margin is `selection_margin_std` times the candidate's
+        own fold standard deviation. Without it, a candidate that is merely
+        noise-different from the champion gets promoted and the hill climb
+        random-walks (measured in v7: dev 0.145 vs holdout 0.345 for the same
+        weights). Single-split (synthetic smoke) rounds have std 0 and behave
+        exactly as before.
+        """
         champion = self.store.champion()
         previous_best = champion.get("best_so_far") if champion else None
-        # the frozen runspec declares whether the primary metric is minimised
-        # (a loss) or maximised (a score); KEEP requires a STRICT improvement
         direction = self.runspec["frozen"].get("primary_direction", "min")
+        factor = float(self.runspec["frozen"].get("selection_margin_std", 0.0))
+        margin = factor * std if folds > 1 else 0.0
         if previous_best is None:
             keep = True
         elif direction == "max":
-            keep = value > previous_best
+            keep = value > previous_best + margin
         else:
-            keep = value < previous_best
+            keep = value < previous_best - margin
+        if previous_best is None:
+            reason = f"baseline {value:.6f}"
+        elif folds > 1:
+            reason = (
+                f"{value:.6f} (fold std {std:.4f}, margin {margin:.4f}) vs "
+                f"best {previous_best:.6f}: {'beats' if keep else 'does not clear the margin'}"
+            )
+        else:
+            reason = f"{value:.6f} vs best {previous_best:.6f}"
         entry.update(
             decision="KEEP" if keep else "REVERT",
             status="completed",
-            reason=(
-                f"{value:.6f} vs best {previous_best:.6f}"
-                if previous_best is not None
-                else f"baseline {value:.6f}"
-            ),
-            artifact_dir=str(candidate_dir),
+            reason=reason,
+            artifact_dir=artifact_dir,
             artifact_sha256=artifact_sha,
-            model_type=train_report.get("model_type"),
+            model_type=model_type,
+            primary_std=std if folds > 1 else None,
+            selection={
+                "folds": folds,
+                "per_fold": folds_raw,
+                "margin": margin,
+                "margin_factor": factor,
+            } if folds > 1 else None,
             metrics={"primary_metric": self.runspec["frozen"]["primary_metric"],
-                     "primary_value": value, "report": score},
+                     "primary_value": value, "report": report},
             best_so_far=value if keep else previous_best,
         )
         self.store.append(entry)
@@ -486,6 +558,62 @@ class AutoResearchHarness:
             index, proposal, self.runspec["budget"]["per_run_timeout_s"],
             provenance=provenance,
         )
+
+    # -- final deliverable ---------------------------------------------------
+
+    def finalize(self) -> dict:
+        """Fit the selected configuration on the whole selection pool.
+
+        Cross-validated selection never keeps a per-round model: each round
+        trains k fold models that are discarded. The deliverable is a single
+        fit on every row that took part in selection (train + dev). The
+        holdout is not read here; the report scores it once.
+        """
+        entries = self.store.load()
+        if not entries:
+            raise RuntimeError("no rounds recorded; nothing to finalize")
+        champion = self.store.champion()
+        config = {**self.runspec["base_config"], **self._champion_config()}
+        config.update({
+            "task": "tcm",
+            "data_mode": "real",
+            "out_dir": str(self.out_dir / "champion"),
+            "data": {
+                **self.runspec["data"],
+                "task_type": self.runspec["base_config"]["data"]["task_type"],
+            },
+        })
+        config["trainer"]["seed"] = self.runspec["seed"]
+        selection = {
+            "primary_metric": self.runspec["frozen"]["primary_metric"],
+            "best_so_far": champion.get("best_so_far") if champion else None,
+            "champion_run_id": champion.get("run_id") if champion else None,
+            "rounds": len(entries),
+        }
+        path = self.out_dir / "finalize-config.json"
+        path.write_text(json.dumps(config, indent=2))
+        result = _worker(
+            ["refit", "--config", str(path)],
+            self.runspec["budget"]["per_run_timeout_s"],
+        )
+        out = {
+            "champion_run_id": selection["champion_run_id"],
+            "rounds": len(entries),
+            "selection": selection,
+            "config": {
+                "model": config["model"],
+                "trainer": {k: v for k, v in config["trainer"].items()
+                            if k != "seed"},
+                "train_provider": config.get("train_provider", {}),
+                "seed": config["trainer"]["seed"],
+            },
+            "refit": result,
+            "frozen_hashes": self._frozen_hashes(),
+        }
+        (self.out_dir / "finalize.json").write_text(
+            json.dumps(out, indent=2, ensure_ascii=False)
+        )
+        return out
 
     # -- full loop ----------------------------------------------------------
 

@@ -280,6 +280,24 @@ def cmd_research_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_research_finalize(args: argparse.Namespace) -> int:
+    """Fit the selected configuration on the selection pool (train+dev) and
+    write the deliverable checkpoint under <out>/champion."""
+    from runtime.harness import AutoResearchHarness, default_real_tcm_runspec
+
+    runspec = default_real_tcm_runspec(
+        args.data_manifest, args.dataset, rounds=args.rounds, timeout_s=args.timeout
+    )
+    runspec["seed"] = args.seed
+    harness = AutoResearchHarness(runspec, provider=None, out_dir=args.out)
+    try:
+        print(json.dumps(harness.finalize(), indent=2, ensure_ascii=False))
+    except RuntimeError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 1
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="runtime.cli", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -353,6 +371,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("research-status")
     p.add_argument("--out", default="runs/autoresearch")
     p.set_defaults(func=cmd_research_status)
+
+    p = sub.add_parser("research-finalize",
+                       help="fit the champion config on the selection pool (train+dev)")
+    p.add_argument("--out", default="runs/autoresearch")
+    p.add_argument("--data-manifest", required=True)
+    p.add_argument("--dataset", required=True)
+    p.add_argument("--rounds", type=int, default=1000,
+                   help="only sets the runspec budget; must not be lower than "
+                        "the rounds already recorded")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--timeout", type=float, default=1800.0)
 
     p = sub.add_parser("research-report")
     p.add_argument("--out", default="runs/autoresearch")

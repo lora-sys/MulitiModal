@@ -308,6 +308,11 @@ def e15_report_tolerates_none():
                                "dev_subject_mae_without": None},
         "deployable_ablation": {"dev_subject_mae": None, "f1": {}},
         "availability": {},
+        "deliverable": {
+            "dir": "d", "weights_sha256": None, "refit_partition": None,
+            "refit_rows": None, "selection_parent_manifest_sha256": None,
+            "dev_metrics_are_in_sample": False,
+        },
     }
     with tempfile.TemporaryDirectory() as tmp:
         write_reports(Path(tmp), summary, manifest, 30)  # must not crash
@@ -1105,6 +1110,194 @@ def e62_committed_docs_check_bites_and_does_not_false_positive():
         doc.write_text(base.format(width=32) + "\n部署 macro-F1 0.349。\n")
         problems = check_committed_docs_numbers(str(summary), doc)
         assert any("0.349" in p for p in problems), problems
+
+
+@check
+def e71_keep_requires_the_noise_margin():
+    # v7 measured the same weights at dev macro-F1 0.145 and holdout 0.345:
+    # between-split spread dwarfs between-candidate spread, so a candidate
+    # that is merely noise-different from the champion must not be promoted.
+    # First round sets the baseline; second is +0.02 with fold std 0.10
+    # (margin 0.05) -> REVERT; third is +0.15 -> KEEP.
+    import runtime.harness as harness_mod
+    from runtime.agent import Proposal
+    from runtime.harness import AutoResearchHarness, default_tcm_runspec
+
+    canned = iter([
+        {"primary_value": 0.50, "primary_std": 0.10},
+        {"primary_value": 0.52, "primary_std": 0.10},
+        {"primary_value": 0.65, "primary_std": 0.10},
+    ])
+    original = harness_mod._worker
+
+    def fake_worker(command, timeout_s):
+        assert command[0] == "cv", command
+        return next(canned)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        runspec = default_tcm_runspec(rounds=3, timeout_s=120.0)
+        runspec["base_config"]["data"] = {
+            "manifest_path": "unused", "dataset_path": "unused",
+            "task_type": "derived_multilabel_classification",
+        }
+        runspec["data"] = runspec["base_config"]["data"]
+        harness = AutoResearchHarness(runspec, provider=None, out_dir=Path(tmp) / "ar")
+        harness.real_data = True
+        harness.smoke_only = False
+        harness_mod._worker = fake_worker
+        try:
+            first = harness.step(Proposal(intent="baseline", config_patch={}))
+            second = harness.step(Proposal(intent="within noise",
+                                          config_patch={"trainer.epochs": 3}))
+            third = harness.step(Proposal(intent="real gain",
+                                         config_patch={"trainer.epochs": 4}))
+        finally:
+            harness_mod._worker = original
+        assert first["decision"] == "KEEP" and first["primary_std"] == 0.10, first
+        assert second["decision"] == "REVERT", second
+        assert second["best_so_far"] == 0.50, second
+        assert "margin" in second["reason"], second["reason"]
+        assert third["decision"] == "KEEP" and third["best_so_far"] == 0.65, third
+
+
+@check
+def e72_cross_validation_never_reads_the_holdout():
+    # the selection pool is train+dev; a fold must never contain a holdout
+    # subject, and fitting must never receive an eval provider (a validation
+    # fold steering early stopping/best-epoch is the same double-use defect
+    # review R-05 closed on the single-split path).
+    import runtime.protocols as protocols
+    import runtime.real_data as real_data
+    import runtime.tcm_eval as tcm_eval
+
+    pool = [f"mendeley-r{i:03d}" for i in range(40)]
+    holdout = [f"mendeley-r{i:03d}" for i in range(40, 60)]
+    manifest = {
+        "split": {"train": pool[:30], "dev": pool[30:], "holdout": holdout},
+        "manifest_sha256": "d" * 64,
+    }
+    seen: list[tuple[str, list[str]]] = []
+
+    class StubTrainer:
+        def __init__(self, model, cfg):
+            pass
+
+        def fit(self, provider, eval_provider=None):
+            assert eval_provider is None, "a validation fold must not steer fitting"
+            return None
+
+    class StubEvaluator:
+        def __init__(self, _manifest):
+            pass
+
+        def evaluate(self, model, provider, partition="dev"):
+            class _Report:
+                macro_f1 = 0.5
+
+            return _Report()
+
+    class StubProvider:
+        def __init__(self, m, records, partition, batch_size=32):
+            subjects = m["split"][partition]
+            seen.append((partition, list(subjects)))
+            assert not set(subjects) & set(holdout), "holdout leaked into a fold"
+
+    originals = (
+        real_data.manifest_from_path, real_data.build_real_model,
+        real_data.RealBatchProvider, real_data.real_eval_manifest,
+        tcm_eval.TCMTrustedEvaluator, protocols.Trainer,
+        protocols._load_records,
+    )
+    real_data.manifest_from_path = lambda _p: manifest
+    real_data.build_real_model = lambda _m, _c: object()
+    real_data.RealBatchProvider = StubProvider
+    real_data.real_eval_manifest = lambda _m: None
+    tcm_eval.TCMTrustedEvaluator = StubEvaluator
+    protocols.Trainer = StubTrainer
+    protocols._load_records = lambda _p: []
+    try:
+        out = protocols.cross_val_candidate(
+            {"data": {"manifest_path": "m", "dataset_path": "d"},
+             "model": {}, "trainer": {"seed": 1}},
+            folds=4, split_seed=0,
+        )
+    finally:
+        (real_data.manifest_from_path, real_data.build_real_model,
+         real_data.RealBatchProvider, real_data.real_eval_manifest,
+         tcm_eval.TCMTrustedEvaluator, protocols.Trainer,
+         protocols._load_records) = originals
+    assert len(out["folds"]) == 4 and out["primary_value"] == 0.5, out
+    held = [s for partition, subjects in seen if partition == "dev" for s in subjects]
+    assert sorted(held) == sorted(pool), "folds must partition the pool exactly once"
+    assert out["fold_sizes"] == [10, 10, 10, 10], out["fold_sizes"]
+
+
+@check
+def e73_pool_refit_moves_dev_into_train_and_keeps_the_holdout():
+    from data.real_split import build_real_manifest, pool_manifest
+
+    records = fake_records()
+    base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
+    pool = pool_manifest(base, records).data
+    assert pool["split"]["train"] == base["split"]["train"] + base["split"]["dev"]
+    assert pool["split"]["dev"] == []
+    assert pool["split"]["holdout"] == base["split"]["holdout"]
+    assert pool["scaler_fit_rows"] == len(pool["split"]["train"])
+    assert pool["selection_parent_manifest_sha256"] == base["manifest_sha256"]
+    assert pool["manifest_sha256"] != base["manifest_sha256"]
+    # the parent binding must survive a round-trip through the manifest reader
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "manifest.json"
+        path.write_text(json.dumps(pool, ensure_ascii=False))
+        from data.real_split import load_real_manifest
+
+        reloaded = load_real_manifest(path)
+        assert reloaded["manifest_sha256"] == pool["manifest_sha256"]
+        assert reloaded["selection_parent_manifest_sha256"] == base["manifest_sha256"]
+
+
+@check
+def e74_finalize_writes_the_deliverable_from_the_pool():
+    import runtime.harness as harness_mod
+    from runtime.agent import Proposal
+    from runtime.harness import AutoResearchHarness, default_tcm_runspec
+
+    calls: list[list[str]] = []
+    original = harness_mod._worker
+    canned = iter([{"primary_value": 0.40, "primary_std": 0.05}])
+
+    def fake_worker(command, timeout_s):
+        calls.append(command)
+        if command[0] == "cv":
+            return next(canned)
+        assert command[0] == "refit", command
+        return {"artifact_dir": "champion", "refit_partition": "train+dev"}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        runspec = default_tcm_runspec(rounds=1, timeout_s=120.0)
+        runspec["base_config"]["data"] = {
+            "manifest_path": "unused", "dataset_path": "unused",
+            "task_type": "derived_multilabel_classification",
+        }
+        runspec["data"] = runspec["base_config"]["data"]
+        harness = AutoResearchHarness(runspec, provider=None, out_dir=Path(tmp) / "ar")
+        harness.real_data = True
+        harness.smoke_only = False
+        harness_mod._worker = fake_worker
+        try:
+            harness.step(Proposal(intent="baseline", config_patch={}))
+            out = harness.finalize()
+        finally:
+            harness_mod._worker = original
+        assert [c[0] for c in calls] == ["cv", "refit"], calls
+        assert out["champion_run_id"] == "tcm-0000", out
+        assert out["refit"]["refit_partition"] == "train+dev", out
+        written = json.loads((Path(tmp) / "ar" / "finalize.json").read_text())
+        assert written["refit"]["artifact_dir"] == "champion", written
+        # the refit config must name the frozen data, not a reshuffled copy
+        cfg = json.loads((Path(tmp) / "ar" / "finalize-config.json").read_text())
+        assert cfg["data"]["manifest_path"] == "unused", cfg["data"]
+        assert cfg["data_mode"] == "real", cfg
 
 
 def check_committed_docs_numbers(

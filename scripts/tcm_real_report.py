@@ -64,6 +64,14 @@ BASELINE_STYLE = {
 }
 
 
+def _file_sha256(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    import hashlib
+
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def qc_rows_from_records(records) -> tuple[int, ...]:
     """QC exclusions derived from the adapter's audit trail, never hardcoded."""
     return tuple(
@@ -78,17 +86,28 @@ def qc_rows_from_records(records) -> tuple[int, ...]:
 
 def assert_champion_matches_manifest(state: dict, manifest: dict) -> None:
     """Fail-closed binding on the REPORT path (not just the worker scoring
-    path): the champion checkpoint must have been trained on exactly this
-    frozen manifest and dataset, or the report would describe an artifact
-    no contract can account for."""
+    path): the champion checkpoint must descend from exactly this frozen
+    manifest and dataset, or the report would describe an artifact no
+    contract can account for.
+
+    Two shapes are accepted. (a) Trained on the frozen manifest's train
+    partition. (b) The final refit on the selection pool (train+dev): its
+    own manifest hash differs, so it must name the frozen manifest as its
+    parent and state the refit partition. Anything else fails closed.
+    """
     if state.get("smoke_only"):
         raise ValueError("champion checkpoint is SMOKE_ONLY; refusing to report on it")
     if state.get("manifest_sha256") != manifest["manifest_sha256"]:
-        raise ValueError(
-            "champion checkpoint was trained on manifest "
-            f"{state.get('manifest_sha256')!r}, not the frozen manifest "
-            f"{manifest['manifest_sha256']!r}; refusing to build the report"
-        )
+        parent = state.get("selection_parent_manifest_sha256")
+        if not (parent == manifest["manifest_sha256"]
+                and state.get("refit_partition") == "train+dev"):
+            raise ValueError(
+                "champion checkpoint was trained on manifest "
+                f"{state.get('manifest_sha256')!r} (selection parent {parent!r}, "
+                f"refit {state.get('refit_partition')!r}), which does not descend "
+                f"from the frozen manifest {manifest['manifest_sha256']!r}; "
+                "refusing to build the report"
+            )
     if state.get("dataset_sha256") != manifest["dataset_sha256"]:
         raise ValueError(
             "champion checkpoint dataset_sha256 "
@@ -318,8 +337,15 @@ def chart_rounds(entries: list[dict], out: Path) -> None:
     ys = [e["metrics"]["primary_value"] for e in rounds]
     xs = [int(e["run_id"].rsplit("-", 1)[-1]) for e in rounds]
     colors = [KEEP_COLOR if e["decision"] == "KEEP" else REVERT_COLOR for e in rounds]
+    # fold-averaged rounds carry their spread; without the bars a 0.03
+    # difference reads as a signal when it is inside the fold noise
+    errs = [e.get("primary_std") for e in rounds]
+    has_err = any(v is not None for v in errs)
+    folded = any((e.get("selection") or {}).get("folds", 1) > 1 for e in rounds)
     fig, ax = plt.subplots(figsize=(7.5, 4))
-    ax.bar(xs, ys, color=colors)
+    ax.bar(xs, ys, color=colors,
+           yerr=[v or 0.0 for v in errs] if has_err else None,
+           ecolor="#264653", capsize=3)
     best = max(ys)  # the primary metric is maximised (macro-F1)
     ax.axhline(best, color="#264653", linestyle="--", linewidth=1,
                label=f"best {best:.4f}")
@@ -333,8 +359,12 @@ def chart_rounds(entries: list[dict], out: Path) -> None:
     ax.set_xticks(xs)
     ax.set_xticklabels([e["run_id"] for e in rounds], fontsize=8)
     ax.set_xlabel("AutoResearch round")
-    ax.set_ylabel("dev macro-F1 (selection metric)\n(higher is better)")
-    ax.set_title("AutoResearch rounds — selection metric (dev macro-F1)")
+    metric_label = (
+        "selection macro-F1, k-fold over train+dev (mean, bars = fold std)"
+        if folded else "dev macro-F1 (selection metric)"
+    )
+    ax.set_ylabel(f"{metric_label}\n(higher is better)")
+    ax.set_title("AutoResearch rounds — selection metric")
     ax.legend(handles, labels, fontsize=8)
     for x, y in zip(xs, ys, strict=True):
         ax.text(x, y, f"{y:.4f}", ha="center", va="bottom", fontsize=8)
@@ -525,6 +555,31 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"，剔除 {len(manifest.get('excluded_subject_rows', []))} 行"
         if manifest.get("excluded_subject_rows") else ""
     )
+    deliverable = summary["deliverable"]
+    in_sample_dev = deliverable["dev_metrics_are_in_sample"]
+    folds = sorted({
+        (e.get("selection") or {}).get("folds", 1) for e in ar["per_round"]
+    })
+    if folds == [1]:
+        selection_line = (
+            f"dev macro-F1（单划分，{split_sizes['dev']} 人）——该划分的划分间波动"
+            "大于候选间差异，排序不可信"
+        )
+    else:
+        k = folds[-1]
+        selection_line = (
+            f"subject 级 {k} 折交叉验证的 macro-F1 均值（池 = train+dev 共 "
+            f"{split_sizes['train'] + split_sizes['dev']} 人，holdout 从不进入）；"
+            "KEEP 需超过冠军一个由折间 std 派生的余量，避免把噪声当改进"
+        )
+    dev_label = (
+        f"dev（{split_sizes['dev']} 人；**已被最终模型拟合，属样本内**，仅作诊断）"
+        if in_sample_dev else f"dev（{split_sizes['dev']} 人；样本外）"
+    )
+    selection_header = (
+        "选择 macro-F1（dev 单划分）" if folds == [1]
+        else f"选择 macro-F1（{folds[-1]} 折均值 ± 折间 std）"
+    )
 
     def holdout_macro_f1(entry: dict) -> str:
         return _fmt(entry["holdout"]["macro_f1"])
@@ -546,18 +601,23 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "## AutoResearch 轮次",
         "",
         f"共 {ar['rounds_completed']} 轮：KEEP {keep}，REVERT {revert}。",
-        "冠军：`" + ar["champion"]["run_id"] + "`（dev macro-F1（选择指标）"
-        f"{_fmt(ar['champion']['best_so_far'], 4)}，权重 SHA-256 "
-        f"`{(ar['champion']['artifact_sha256'] or '')[:16]}…`）。",
+        f"选择口径：{selection_line}。",
+        "冠军配置：`" + ar["champion"]["run_id"] + "`（"
+        f"选择值 {_fmt(ar['champion']['best_so_far'], 4)}）。最终交付模型是按该配置"
+        f"在**选择池（train+dev）全量重训**的结果（{_fmt(deliverable['refit_rows'], 0)} 行），"
+        f"权重 SHA-256 `{(deliverable['weights_sha256'] or '')[:16]}…`。",
         "所有候选使用相同冻结种子与 epoch 级确定性 shuffle；batch_size 被改动时"
         "批次组成随之变化，其余超参独立比较。",
         "",
-        "| 轮 | 意图 | 提案者 | 决定 | dev macro-F1 |",
+        f"| 轮 | 意图 | 提案者 | 决定 | {selection_header} |",
         "| --- | --- | --- | --- | --- |",
     ]
     for e in ar["per_round"]:
         value = e.get("primary_value")
+        std = e.get("primary_std")
         cell = f"{value:.4f}" if value is not None else "—"
+        if value is not None and std is not None:
+            cell += f" ± {std:.4f}"
         lines.append(
             f"| {e['run_id']} | {e['intent']} | {e.get('proposer') or '—'} "
             f"| {e['decision']} | {cell} |"
@@ -567,12 +627,12 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "## 最终评估（holdout 在研究结束后解锁；历次解锁见「证据状态与限制」，"
         "均已如实披露）",
         "",
-        f"- 神经冠军：dev macro-F1 {_fmt(neural['dev']['macro_f1'])}，"
+        f"- 神经冠军：{dev_label} macro-F1 {_fmt(neural['dev']['macro_f1'])}，"
         f"holdout macro-F1 {_fmt(neural['holdout']['macro_f1'])}"
         f"（macro 对全部可观测维度平均，未定义 F1 计 0，分母不随模型漂移；"
         f"dev 未定义维度 {neural['dev']['n_undefined_f1']} 个，holdout "
         f"{neural['holdout']['n_undefined_f1']} 个）",
-        f"- 神经冠军 subject MAE：dev {_fmt(neural['dev']['subject_mae'], 4)}，"
+        f"- 神经冠军 subject MAE：dev（同上口径）{_fmt(neural['dev']['subject_mae'], 4)}，"
         f"holdout {_fmt(neural['holdout']['subject_mae'], 4)}"
         f"（诊断口径；选择指标是 macro-F1，即上方口径）",
         f"- 神经冠军 subject RMSE（Brier 诊断，非选择指标）：dev "
@@ -646,9 +706,10 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         "模型表现和 holdout 均无关，不构成 holdout 信息泄漏。",
         f"- 受试者身份 = 数据行序（{summary.get('subject_identity', 'UNVERIFIED')}）——"
         "数据集无受试者 ID 列，无法独立核验每行确为不同受试者。",
-        f"- 冠军由 {ar['rounds_completed']} 个候选在 dev 上选出（winner's curse）；"
-        f"消融为单 seed 固定配置；dev {split_sizes['dev']} 人 / holdout "
-        f"{split_sizes['holdout']} 人，小数位差异属噪声，未做置信区间重采样。",
+        f"- 冠军由 {ar['rounds_completed']} 轮候选按交叉验证选出（每轮都在上一轮冠军"
+        f"基础上改动，属爬山；winner's curse 仍然存在，只是从 41 人单划分换成 k 折均值"
+        f"加余量门槛）；消融为单 seed 固定配置；holdout 仅 {split_sizes['holdout']} 人，"
+        "小数位差异属噪声，未做置信区间重采样。",
         "- holdout 解锁记录（逐项）：split seed 20261030 在 v1、v2 解锁；"
         "20261101 在 v3 前置报告解锁；20261102 在 v3 报告解锁（另有一次中止运行"
         "未产出报告）；20261103 在 v4 报告解锁；20261104 在 v5 报告解锁；"
@@ -676,8 +737,9 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         + "；train-fold 标准化，退化列置零，缺失模态行 availability-masked）",
         "- 输出：9 维独立 sigmoid（`category_probs`）；平和维永远 ABSTAIN",
         f"- 训练数据：Mendeley cxtph3tjsg/1（CC BY 4.0）共 {records_count} 名受试者，"
-        f"按 70/15/15 行级划分后只用 train {split_sizes['train']} 人训练"
-        f"（dev {split_sizes['dev']} / holdout {split_sizes['holdout']} 从不参与拟合），"
+        f"按 70/15/15 行级划分；最终模型在选择池（train {split_sizes['train']} + "
+        f"dev {split_sizes['dev']}）上重训，holdout {split_sizes['holdout']} 人从不参与"
+        "拟合或选择，"
         f"RULE 派生二值标签（`{summary['label_version']}`）",
         "- 适用人群：与研究样本同源的成年体检人群；不适用于临床诊断、无按摩场景外的任何干预决策",
         "- 已知偏差：类别支持不均衡；体型代理变量（BMI）基线较强；"
@@ -695,6 +757,9 @@ def main(argv=None) -> int:
     parser.add_argument("--out", default="artifacts/tcm-50")
     parser.add_argument("--label", default="v3",
                         help="report version label (goes into titles and the holdout log)")
+    parser.add_argument("--champion-dir", default=None,
+                        help="deliverable checkpoint directory (research-finalize "
+                             "output); defaults to the champion round's artifact")
     args = parser.parse_args(argv)
 
     out = Path(args.out)
@@ -706,13 +771,33 @@ def main(argv=None) -> int:
     champion = store.champion()
     if not champion:
         raise SystemExit("no AutoResearch champion found; run the research loop first")
-    model, state, metadata = load_training_checkpoint(champion["artifact_dir"])
+    # fold-scored rounds keep no per-round model; the deliverable comes from
+    # `research-finalize` (one fit on the selection pool)
+    champion_dir = args.champion_dir or champion.get("artifact_dir")
+    if not champion_dir:
+        raise SystemExit(
+            "the champion round has no artifact directory (k-fold selection): "
+            "run `runtime.cli research-finalize` and pass --champion-dir"
+        )
+    model, state, metadata = load_training_checkpoint(champion_dir)
     assert_champion_matches_manifest(state, manifest)
     entries = store.load()
     champion_cfg = dict(metadata.get("config", {}))
     champion_trainer = dict(state["trainer_config"])
     champion_seed = int(champion_trainer.get("seed", 0))
     champion_batch = int(state.get("train_batch_size", 32))
+    refit_partition = state.get("refit_partition")
+    in_sample_dev = refit_partition == "train+dev"
+    deliverable = {
+        "dir": str(champion_dir),
+        "weights_sha256": _file_sha256(Path(champion_dir) / "weights.pt"),
+        "refit_partition": refit_partition,
+        "refit_rows": state.get("refit_rows"),
+        "selection_parent_manifest_sha256": state.get(
+            "selection_parent_manifest_sha256"
+        ),
+        "dev_metrics_are_in_sample": in_sample_dev,
+    }
 
     neural_eval = evaluate_neural(model, manifest, records)
     baselines = evaluate_baselines(manifest, records)
@@ -739,7 +824,9 @@ def main(argv=None) -> int:
          # something was proposed but not what (audit A-01)
          "config_patch": e.get("config_patch"),
          "effective_config": e.get("effective_config"),
-         "primary_value": (e.get("metrics") or {}).get("primary_value")}
+         "primary_value": (e.get("metrics") or {}).get("primary_value"),
+         "primary_std": e.get("primary_std"),
+         "selection": e.get("selection")}
         for e in entries
     ]
     split_sizes = {p: len(manifest["split"][p]) for p in ("train", "dev", "holdout")}
@@ -778,9 +865,11 @@ def main(argv=None) -> int:
                             "score up to a monotone root — the selection metric",
             "partitions": split_sizes,
         },
+        "deliverable": deliverable,
         "champion_provenance": {
             "run_id": champion["run_id"],
-            "weights_sha256": champion.get("artifact_sha256"),
+            "weights_sha256": deliverable["weights_sha256"],
+            "round_artifact_sha256": champion.get("artifact_sha256"),
             "manifest_sha256": manifest["manifest_sha256"],
             "dataset_sha256": manifest["dataset_sha256"],
             "label_version": manifest["label_version"],
@@ -791,12 +880,26 @@ def main(argv=None) -> int:
         },
         "availability": availability_rates(manifest, records),
         "autoresearch": {
+            "selection": {
+                "folds": sorted({
+                    (e.get("selection") or {}).get("folds", 1) for e in entries
+                }),
+                "margin_factor": next(
+                    (e["selection"]["margin_factor"] for e in entries
+                     if e.get("selection") and "margin_factor" in e["selection"]),
+                    None,
+                ),
+                "pool_rows": split_sizes["train"] + split_sizes["dev"],
+                "holdout_never_used_for_selection": True,
+            },
             "rounds_completed": len(entries),
             "champion": {
                 "run_id": champion["run_id"],
-                "artifact_dir": champion["artifact_dir"],
-                "artifact_sha256": champion.get("artifact_sha256"),
+                "artifact_dir": deliverable["dir"],
+                "artifact_sha256": deliverable["weights_sha256"],
+                "round_artifact_sha256": champion.get("artifact_sha256"),
                 "best_so_far": champion.get("best_so_far"),
+                "refit_partition": refit_partition,
             },
             "per_round": per_round,
         },

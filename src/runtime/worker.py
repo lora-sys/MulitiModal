@@ -23,7 +23,7 @@ import os
 import sys
 from pathlib import Path
 
-from runtime.protocols import train_candidate
+from runtime.protocols import cross_val_candidate, refit_champion, train_candidate
 
 #: the only host environment variables a worker may inherit (#45 hard rule:
 #: no credentials, no proxy/auth material from the harness host). Exact-match
@@ -48,6 +48,16 @@ def sanitize_env(env: dict) -> dict:
 def _train(config_path: str) -> dict:
     config = json.loads(Path(config_path).read_text())
     return train_candidate(config)
+
+
+def _cv(config_path: str, folds: int, seed: int) -> dict:
+    config = json.loads(Path(config_path).read_text())
+    return cross_val_candidate(config, folds=folds, split_seed=seed)
+
+
+def _refit(config_path: str) -> dict:
+    config = json.loads(Path(config_path).read_text())
+    return refit_champion(config)
 
 
 def _score_real(artifact_dir: str, manifest_path: str, dataset_path: str) -> dict:
@@ -118,6 +128,16 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("train")
     p.add_argument("--config", required=True)
     p.set_defaults(func=lambda a: _train(a.config))
+
+    p = sub.add_parser("cv", help="subject-level k-fold score over the selection pool")
+    p.add_argument("--config", required=True)
+    p.add_argument("--folds", type=int, default=4)
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=lambda a: _cv(a.config, a.folds, a.seed))
+
+    p = sub.add_parser("refit", help="fit the selected config on train+dev (the deliverable)")
+    p.add_argument("--config", required=True)
+    p.set_defaults(func=lambda a: _refit(a.config))
 
     p = sub.add_parser("score")
     p.add_argument("--artifact", required=True)
