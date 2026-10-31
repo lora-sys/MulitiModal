@@ -212,3 +212,63 @@ v7 实测：**同一套权重** dev macro-F1 0.1451、holdout 0.3445。划分间
 | 最好被否决 | `tcm-0011`（epochs 80 + batch 16）0.3270 ± 0.0439，未过 0.0220 余量 |
 
 结论：**可编辑空间内没有配置能在超过折间噪声的程度上击败基线。** 停止判据 = 每个 scope 维度都被扫过且无 KEEP（本轮在 24 轮达到），不是轮次预算耗尽。
+
+---
+
+## 12. 与上游 karpathy/autoresearch 的核心核对（2026-10-31）
+
+核对方法：`git clone https://github.com/karpathy/autoresearch` 于 `228791f`（与 §2 记录的 SHA 一致），逐文件读 `program.md`(114 行)/`prepare.py`(389 行)/`train.py`(630 行)，再逐条对照本项目实现。**结论放在最前面：上游的核心（Agent 直接改训练源码 + 分支前进）我们没有实现。**
+
+### 12.1 上游的核心是什么
+
+| 要素 | 上游实现 | 位置 |
+| --- | --- | --- |
+| Agent 改的是**源码** | "Modify `train.py` — this is the only file you edit. Everything is fair game: model architecture, optimizer, hyperparameters, training loop, batch size, model size, etc." | `program.md` |
+| 固定**墙钟训练预算** | `TIME_BUDGET = 300`（5 分钟），训练时长不是可调项 | `prepare.py:31` |
+| keep/discard = **git 分支前进** | improved → 保留 commit（advance），equal/worse → `git reset`；产物是**代码** | `program.md` 实验循环第 3/8/9 步 |
+| 冻结边界是**一个文件** | `prepare.py`（数据/分词器/dataloader/`evaluate_bpb`/预算常量）；"Modify the evaluation harness" 明令禁止 | `prepare.py:344` `evaluate_bpb` |
+| **simplicity 准则是目标的一部分** | "All else being equal, simpler is better… removing something and getting equal or better results is a great outcome" | `program.md` |
+| 结果表 | `results.tsv`（commit / val_bpb / memory_gb / status / description） | `program.md` |
+| 运行纪律 | "NEVER STOP… do NOT pause to ask the human"；约 12 次/小时 | `program.md` |
+
+### 12.2 我们实现的是什么（逐条对照）
+
+| 上游要素 | 本项目 | 判定 |
+| --- | --- | --- |
+| Agent 改源码 | `EDITABLE_SECTIONS = ("model","trainer")`（`agent.py:29`）只接受 **6 个配置键**：`model.hidden_dim/fusion_dim`、`trainer.epochs/learning_rate/grad_clip/batch_size`（`harness.py:88-95`） | **未实现** |
+| Agent 改源码（机制层） | `Proposal.source_patch` 被 `validate_source_patch` 校验后**从不落盘、从不应用**（`harness.py:341-343`，`config` 只由 `apply_config_patch` 生成）；`ExternalAgentProvider.propose` 直接 `raise NotImplementedError`（`agent.py:184-190`） | **硬禁用** |
+| 固定墙钟预算 | 无训练时间预算；`per_run_timeout_s` 是超时上限，`max_wall_clock_s` 是整个循环的墙钟上限（`harness.py:86`）。训练时长由 `trainer.epochs` 决定，而它在白名单里 | **不存在（且相反）** |
+| keep/discard = git 分支前进 | append-only `RunManifestStore`（JSONL + 哈希链），交付物是按冠军配置**重训的检查点**；仓库内无任何 `git commit/reset/checkout` 调用 | **不同机制，产物不同** |
+| 冻结边界是一组符号 | `FORBIDDEN_SOURCE_SYMBOLS` 静态检查 + 子进程 sanitized env + 指标版本 (`tcm-eval-v0`) | **更强，但见 12.3** |
+| simplicity 准则 | 全仓无对应机制（`grep -rni "simplicity\|complexity" src/ docs/` 无结果） | **未实现** |
+| NEVER STOP | 有轮次预算；v8 的停止判据由驱动方事后声明（§11.5） | **弱化** |
+
+### 12.3 我们比上游强的地方（也要说清）
+
+上游的 Agent 直接编辑 `train.py`，而 `val_bpb` 是 `train.py` 自己打印的（`train.py:613,622`）——**Agent 可以改掉打印那一行**，上游对此的防线只有 `program.md` 的禁令。本项目把评估放在 Agent 之外的子进程、指标版本冻结、结果进哈希链 manifest，评估完整性明显更强。
+
+所以这不是"我们做得差"，而是一次**用研究自由换评估完整性**的交易。问题是：这笔交易把 autoresearch 之所以是 autoresearch 的那一步换掉了。
+
+### 12.4 后果：这解释了 v8 为什么"找不到任何改进"
+
+白名单里的 6 个键是**超参数值**。在 232 行、8 个二值标签的表格数据上，这些超参数的有效效应量小于折间噪声（§11.2），因此 24 轮全部 REVERT 是必然结果，不是运气。而真正的杠杆——网络结构、损失函数、特征组选择、标签切点处理——**一个都不在可编辑面内**：
+
+- 标签切点是 `>= 40` 的硬规则（`derived-multilabel-v1`），而 CCMQ 分数粒度使各维有效切点漂移（6 题维 ≈41.7、7 题 ≈42.9、8 题 ≈40.6），模型无法自行补偿；
+- 特征分组（经络/脉搏波/舌诊/体格）的选择能力为零；
+- 损失函数、池化/融合结构、类别不平衡处理全部冻结。
+
+**因此"RSI 找不到东西"不是模型的结论，是搜索空间为空的结论。** 现有 v8 报告只应被读作：*在给定的 6 维超参空间内无可检测改进*。
+
+### 12.5 要真正实现上游核心，需要动的边界（需项目负责人批准，Agent 不得自行改）
+
+以下每一条都触及 AGENTS.md 硬规则 9（Agent 只能改白名单内 train/model/config）。按预期信息量排序：
+
+| # | 动作 | 触及的硬规则 | 需要的保护 |
+| --- | --- | --- | --- |
+| 1 | 允许 Agent 提交**源码 patch**（先限定在一个"可改文件"内，如 `src/core/models.py` + `src/core/losses.py`），由 harness 应用到一个**隔离的工作副本**再训练 | 硬规则 9 的"白名单"从配置键扩展为文件 | 评估器/标签/split/holdout 继续在 Agent 不可写的路径；现有 `FORBIDDEN_SOURCE_SYMBOLS` + 子进程 env 白名单保留；多一层"patch 只落在声明文件"的校验 |
+| 2 | 引入**固定墙钟训练预算**（如每轮 120s），把训练时长从可调项变成常量 | 无（收紧） | 同时移除 `trainer.epochs` 白名单键，否则"训练更久"仍是后门 |
+| 3 | 加入 **simplicity 判据**：patch 增大代码量时，收益须过更高余量；等效且更简的改动直接 KEEP | 无（新增目标项） | 需要定义可机械计算的规模指标（行数/diff 行数），并在报告里写清权重 |
+| 4 | 让**分支前进**成为记录机制（或在 manifest 之外额外记录每轮源码 diff 的哈希），使交付物包含研究产出的代码 | 无（新增记录） | 与现有 manifest 并存，不替换（哈希链的防篡改证据层要保留） |
+| 5 | 逐轮**先读上下文再提案**，并把 §11.5 的时间戳自检作为硬约束（当前 22/24 轮为批量预写） | 无（收紧溯源） | 已有 `proposal_predates_context` 字段，只需把它从"记录"升级为"拒绝" |
+
+**在这 5 条落地之前，本项目的 `AutoResearchHarness` 应被如实称为"带溯源的受限超参搜索"，而不是 RSI/autoresearch。** 文档、README 与 issue 措辞需要同步改，否则就是把一个空搜索空间的结论包装成研究结论。
