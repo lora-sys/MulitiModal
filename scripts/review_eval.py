@@ -310,6 +310,7 @@ def e15_report_tolerates_none():
                                "holdout_subject_mae_champion_on_reduced": None},
         "deployable_ablation": {"holdout_subject_mae": None, "fit_rows": None,
                                 "f1": {}},
+        "seed_robustness": {"seeds": [1, 2], "fit_rows": None, "per_seed": {}},
         "availability": {},
         "deliverable": {
             "dir": "d", "weights_sha256": None, "refit_partition": None,

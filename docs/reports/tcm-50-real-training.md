@@ -1,6 +1,6 @@
 # TCM 真实训练报告（#50，AutoResearch V1，v8）
 
-生成时间：2026-10-31T09:45:52.232439+00:00  
+生成时间：2026-10-31T09:48:16.414425+00:00  
 数据：`mendeley-cxtph3tjsg-v1`（SHA-256 `6206f432b683f8a7…`，274 名受试者，其中 274 名入冻结 manifest；QC 异常行 [273] 四维计分指纹不符）  
 标准：ZYYXH/T157-2009；标签契约：`derived-multilabel-v1:RULE(ZYYXH/T157-2009):YES>=40 -> 1, TENDENCY/NO -> 0, balanced abstain`  
 冻结 manifest：`775ba73bfe8f4da6…`；划分：train 191 / dev 41 / holdout 42（行级互斥划分；受试者级不重叠未经验证——数据集无 ID 列）
@@ -49,6 +49,7 @@
 - Dummy（多数类）：holdout macro-F1 0.000，holdout subject MAE 0.2887
 - BMI-only 逻辑回归：holdout macro-F1 0.014，holdout subject MAE 0.4032
 - 全特征逻辑回归（含可用性指示位）：holdout macro-F1 0.215，holdout subject MAE 0.3941
+- **种子稳健性**（冠军同配置、同一池 232 行、同一 holdout，属同一次解锁事件）：seed 0（交付模型）macro-F1 0.383；seed 1: 0.439 / MAE 0.3777，seed 2: 0.426 / MAE 0.3962。全部 2 个额外种子都高于全特征逻辑回归 0.215，差距不是单一种子的偶然
 - **口径说明（必读）**：AutoResearch 的选择指标就是这里报告的 macro-F1（0.5 阈值、固定观测维分母），保证爬山的落点和交付指标一致。两个概率损失代理都被实测否决：subject MAE 是 L1，二值标签下的最优常数是中位数 0（本数据正类率 ≈0.29 < 0.5），按它爬山永远赢不过全零预测器；subject RMSE（Brier）虽是 proper scoring rule，但对没有可用信号的模型，最优解是预测基率常数——实测那一轮冠军 dev macro-F1 只有 0.021，而普通逻辑回归 holdout 是 0.215。因此 MAE/RMSE 仅作诊断，选择看 F1：holdout macro-F1 0.383 对 Dummy 0.000、全特征逻辑回归 0.215。三个口径都给出，读者可自行权衡。**统计强度**：holdout 仅 42 人，macro-F1 的差异在数十个正例量级上属噪声范围，未做重采样置信区间；跨划分的重复性才是判据，单一划分上的领先不构成「该模型更好」的证据。
 
 图表：`chart-rounds.png`、`chart-per-dim-f1.png`、`chart-support.png`、`chart-regression-dev.png`、`chart-regression-holdout.png`（图中缺失柱 = F1/MAE 未定义，不是 0）。

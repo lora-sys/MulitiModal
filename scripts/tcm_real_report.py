@@ -487,6 +487,54 @@ def chart_regression(regression: dict, out: Path) -> None:
         plt.close(fig)
 
 
+def seed_robustness(
+    manifest, records, out_dir: Path, champion_cfg: dict, champion_trainer: dict,
+    seeds: tuple[int, ...] = (1, 2), train_batch_size: int = 32,
+) -> dict:
+    """Refit the champion config on the pool with other seeds and score the
+    SAME holdout.
+
+    The headline number is one fit of one seed. If the margin over the
+    logistic baseline is seed luck, it will not survive two more fits — and
+    that is exactly the claim a reader is entitled to check before believing
+    "the neural model is better". Same split, same holdout, same unlock
+    event: this is not a second look at a fresh partition.
+    """
+    trainer_kwargs = {
+        k: champion_trainer[k] for k in ("learning_rate", "grad_clip")
+        if champion_trainer.get(k) is not None
+    }
+    epochs = champion_trainer.get("epochs", 40)
+    per_seed: dict[str, dict] = {}
+    for seed in seeds:
+        model = _fixed_training(
+            manifest, records, champion_cfg, epochs, out_dir / f"seed-{seed}",
+            trainer_kwargs, seed=seed, train_batch_size=train_batch_size,
+        )
+        report = evaluate_neural(model, manifest, records)["holdout"]
+        per_seed[str(seed)] = {
+            "macro_f1": report["macro_f1"],
+            "subject_mae": report["subject_mae"],
+        }
+    return {"seeds": list(seeds), "per_seed": per_seed,
+            "fit_rows": len(manifest["split"]["train"])}
+
+
+def _seed_verdict(seeds: dict, reference_f1: float | None, primary_f1: float | None) -> str:
+    """Say whether the headline margin survives a change of seed."""
+    values = [v["macro_f1"] for v in seeds.get("per_seed", {}).values()
+              if v.get("macro_f1") is not None]
+    if not values or reference_f1 is None:
+        return "无法判定（缺少种子或基线指标）"
+    above = sum(1 for v in values if v > reference_f1)
+    all_above = above == len(values)
+    if all_above:
+        return (f"全部 {len(values)} 个额外种子都高于全特征逻辑回归 "
+                f"{_fmt(reference_f1)}，差距不是单一种子的偶然")
+    return (f"仅 {above}/{len(values)} 个额外种子高于全特征逻辑回归 "
+            f"{_fmt(reference_f1)}——单种子领先不可复现，不得当作模型优势的证据")
+
+
 def _regression_verdict(regression: dict) -> str:
     """State the outcome of the 8-score regression against its own reference,
     rather than leaving the reader to diff two bar series (#audit: the report
@@ -569,6 +617,7 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
     regression = summary["regression_task"]
     qc = summary["row_qc_sensitivity"]
     dep = summary["deployable_ablation"]
+    seeds = summary["seed_robustness"]
     avail = summary["availability"]
 
     keep = [e["run_id"] for e in ar["per_round"] if e["decision"] == "KEEP"]
@@ -705,6 +754,16 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         f"- 全特征逻辑回归（含可用性指示位）：holdout macro-F1 "
         f"{holdout_macro_f1(base['feature_logistic'])}，"
         f"holdout subject MAE {_fmt(base['feature_logistic']['holdout']['subject_mae'], 4)}",
+        f"- **种子稳健性**（冠军同配置、同一池 {seeds['fit_rows']} 行、同一 holdout，"
+        "属同一次解锁事件）：seed 0（交付模型）macro-F1 "
+        f"{_fmt(neural['holdout']['macro_f1'])}；"
+        + "，".join(
+            f"seed {s}: {_fmt(v['macro_f1'])} / MAE {_fmt(v['subject_mae'], 4)}"
+            for s, v in seeds["per_seed"].items()
+        )
+        + "。"
+        + _seed_verdict(seeds, base["feature_logistic"]["holdout"]["macro_f1"],
+                        neural["holdout"]["macro_f1"]),
         "- **口径说明（必读）**：AutoResearch 的选择指标就是这里报告的 "
         "macro-F1（0.5 阈值、固定观测维分母），保证爬山的落点和交付指标一致。"
         "两个概率损失代理都被实测否决：subject MAE 是 L1，二值标签下的最优常数是"
@@ -886,6 +945,8 @@ def main(argv=None) -> int:
     deployable = deployable_ablation(manifest, records, out, champion_cfg,
                                      champion_trainer, seed=champion_seed,
                                      train_batch_size=champion_batch)
+    seeds = seed_robustness(pool, records, out, champion_cfg, champion_trainer,
+                            train_batch_size=champion_batch)
 
     chart_rounds(entries, out)
     chart_per_dim_f1(baselines, neural_eval, out)
@@ -985,6 +1046,7 @@ def main(argv=None) -> int:
         "regression_task": regression,
         "row_qc_sensitivity": qc,
         "deployable_ablation": deployable,
+        "seed_robustness": seeds,
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False))
     write_reports(out, summary, manifest, len(records))
