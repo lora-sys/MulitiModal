@@ -1847,7 +1847,7 @@ def _report_metric_label_problems(source_text: str) -> list[str]:
     problems: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Dict):
-            for key, value in zip(node.keys, node.values):
+            for key, value in zip(node.keys, node.values, strict=True):
                 if (isinstance(key, ast.Constant) and key.value == "name"
                         and isinstance(value, ast.Constant)
                         and isinstance(value.value, str)
