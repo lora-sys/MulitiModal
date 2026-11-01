@@ -22,6 +22,7 @@ the model.
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from pathlib import Path
@@ -125,8 +126,73 @@ def editable_complexity(worktree: Path, editable: str) -> int:
     reset a per-line floor. Counting AST statements plus expressions prices
     the semantics the file carries: densifying cannot reduce it, and only
     genuinely removing constructs reads as negative growth.
-    """
-    import ast
 
-    tree = ast.parse((worktree / editable).read_text(encoding="utf-8"))
-    return sum(isinstance(node, (ast.stmt, ast.expr)) for node in ast.walk(tree))
+    String constants are parsed recursively and their nodes counted too
+    (bounded depth/size): otherwise a patch could delete real constructs and
+    re-add them wrapped in a string (`exec("...")`), buying the negative
+    growth the simplification criterion rewards while actually hiding code.
+    Together with `validate_source_ast`'s zero tolerance for exec/eval/
+    compile/__import__ calls, the "simpler is better" branch is only
+    reachable by genuinely removing AST constructs.
+    """
+    return _ast_node_count(
+        ast.parse((worktree / editable).read_text(encoding="utf-8"))
+    )
+
+
+#: recursion bounds for string-constant parsing: a hostile file can nest
+#: strings exponentially; these caps keep the count honest for real code and
+#: finite for adversarial input
+_MAX_STRING_PARSE_DEPTH = 3
+_MAX_STRING_PARSE_LENGTH = 100_000
+
+
+def _ast_node_count(tree: ast.AST, depth: int = 0) -> int:
+    total = sum(isinstance(node, (ast.stmt, ast.expr)) for node in ast.walk(tree))
+    if depth >= _MAX_STRING_PARSE_DEPTH:
+        return total
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and len(node.value) <= _MAX_STRING_PARSE_LENGTH
+        ):
+            try:
+                inner = ast.parse(node.value)
+            except (SyntaxError, ValueError, RecursionError):
+                continue
+            total += _ast_node_count(inner, depth + 1)
+    return total
+
+
+#: Dynamic-execution builtins a patch may never CALL. The text-level symbol
+#: scan catches the quoted name; this AST check is zero tolerance — any Call
+#: whose function is one of these bare names is refused outright, whatever
+#: the payload, however it was obfuscated.
+DYNAMIC_EXECUTION_CALLS = frozenset({"exec", "eval", "compile", "__import__"})
+
+
+def validate_source_ast(source: str) -> None:
+    """Refuse any dynamic-execution call in the candidate's source.
+
+    `exec`/`eval` string wrapping is how a patch could hide arbitrary logic
+    from the complexity metric (one string node instead of the code it
+    carries) and from the simplification criterion (delete real constructs,
+    re-add them inside an `exec` string: the score's negative growth is then
+    fiction, and a "simplification" KEEP can smuggle anything). A bare-name
+    call to one of these builtins is refused unconditionally — zero
+    tolerance, not a complexity price. `model.eval()` (an Attribute call) is
+    the legitimate training idiom and is not touched.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in DYNAMIC_EXECUTION_CALLS
+        ):
+            raise PatchRejected(
+                f"patch calls {node.func.id}(): dynamic code execution is "
+                "refused outright — it hides logic from the complexity metric "
+                "and the source guards"
+            )

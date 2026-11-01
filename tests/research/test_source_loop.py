@@ -125,6 +125,49 @@ def test_complexity_metric_counts_removed_constructs_as_negative_growth(tmp_path
     assert after < before
 
 
+def test_complexity_counts_string_wrapped_code_so_simplification_cannot_be_faked(tmp_path):
+    # F-07: `exec("...")` hides a construct tree inside one string node — a
+    # patch could delete real code, re-add it wrapped in a string, and buy the
+    # negative growth the simplification criterion rewards. String constants
+    # are parsed recursively and their nodes counted: hiding code in a string
+    # costs what the code costs.
+    (tmp_path / "honest.py").write_text("x = 1\ny = x + 1\nz = y * 2\n")
+    (tmp_path / "wrapped.py").write_text('exec("x = 1\\ny = x + 1\\nz = y * 2\\n")\n')
+    assert editable_complexity(tmp_path, "wrapped.py") >= (
+        editable_complexity(tmp_path, "honest.py")
+    )
+    # a plain short string is still just a couple of nodes
+    (tmp_path / "small.py").write_text('NAME = "category_labels"\n')
+    assert editable_complexity(tmp_path, "small.py") > 0
+
+
+def test_dynamic_execution_calls_are_refused_zero_tolerance():
+    # F-07: any bare-name call to exec/eval/compile/__import__ is refused
+    # outright, whatever the payload — `eval(` as a text symbol would also
+    # match the legitimate `model.eval()`, so this is an AST check
+    from research.guard import validate_source_ast
+
+    validate_source_ast("model.eval()\n")  # the training idiom is fine
+    validate_source_ast("self.compile_all()\n")  # attribute names are fine
+    for call in (
+        'exec("payload = 1")',
+        "eval(input)",
+        "compile(src, 'x', 'exec')",
+        "__import__('os')",
+    ):
+        with pytest.raises(PatchRejected, match="dynamic code execution"):
+            validate_source_ast(call)
+
+
+def test_forbidden_symbols_cover_the_dynamic_execution_text():
+    # the text-level scan still catches the quoted name in added lines where
+    # no AST exists yet (patch validation runs before the patch is applied)
+    for symbol in ("__import__", "compile(", "exec("):
+        patch = GOOD_PATCH + f"+x = {symbol}('payload')\n"
+        with pytest.raises(PatchRejected):
+            validate_source_patch(patch, EDITABLE)
+
+
 def test_simplicity_criterion_matches_upstream_intent():
     # the margin is in standard errors of the mean, so more folds sharpen it
     assert SourceResearchLoop.decide(0.30, 0.01, 0, None) == (True, "baseline 0.300000")

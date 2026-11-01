@@ -36,6 +36,7 @@ from research.guard import (
     apply_patch,
     editable_complexity,
     validate_frozen_imports,
+    validate_source_ast,
     validate_source_patch,
 )
 from runtime.manifest import MANIFEST_FILE, RunManifestStore
@@ -65,6 +66,13 @@ from runtime.tcm_eval import PRIMARY_METRIC
 #: patch must show a big gain, while a targeted small one only has to clear
 #: the noise margin.
 MIN_GAIN_PER_ADDED_NODE = 0.001
+
+#: The complexity unit is one AST statement/expression node, with string
+#: constants parsed recursively and their payload nodes counted too (guard.
+#: editable_complexity). The v10 archived rounds used plain AST nodes without
+#: string recursion, so the recorded metric changed name with the semantics:
+#: complexity numbers are only comparable within one metric name.
+COMPLEXITY_METRIC = "ast_statement_expr_nodes+string_payloads"
 
 DEFAULT_EDITABLE = "src/research/candidate.py"
 
@@ -243,7 +251,11 @@ class SourceResearchLoop:
           ignores complexity will happily accept an unreadable patch for noise.
         * Removing constructs while scoring at least as well is kept outright:
           that is upstream's "removing something and getting equal or better
-          results is a great outcome".
+          results is a great outcome". This branch is only reachable by
+          genuinely removing AST constructs: complexity counts string-
+          wrapped payloads (see COMPLEXITY_METRIC) and dynamic-execution
+          calls are refused outright, so deleting real code and re-adding it
+          inside an `exec` string cannot buy negative growth.
         """
         margin = margin_sem * sem
         if best is None:
@@ -302,7 +314,7 @@ class SourceResearchLoop:
             "proposal_mtime": proposal_mtime,
             "batch_supplied": batch_supplied,
             "editable_file": self.editable,
-            "complexity": {"metric": "ast_statement_expr_nodes",
+            "complexity": {"metric": COMPLEXITY_METRIC,
                            "nodes_before": complexity_before},
             "started_at": _iso(),
         }
@@ -328,6 +340,12 @@ class SourceResearchLoop:
             validate_frozen_imports(
                 (self.worktree.path / self.editable).read_text(encoding="utf-8")
             )
+            # zero tolerance for exec/eval/compile/__import__ calls: a dynamic
+            # execution would hide logic from this file's own guards and from
+            # the complexity metric
+            validate_source_ast(
+                (self.worktree.path / self.editable).read_text(encoding="utf-8")
+            )
         except PatchRejected as exc:
             self.worktree.reset_to(parent_sha)
             return finish("REVERT", "rejected", f"guard: {exc}")
@@ -335,7 +353,7 @@ class SourceResearchLoop:
         complexity_after = self.complexity()
         growth = complexity_after - complexity_before
         entry["complexity"] = {
-            "metric": "ast_statement_expr_nodes",
+            "metric": COMPLEXITY_METRIC,
             "nodes_before": complexity_before, "nodes_after": complexity_after,
             "growth": growth,
             "min_gain_required": MIN_GAIN_PER_ADDED_NODE * max(0, growth),
