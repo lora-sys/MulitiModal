@@ -1,75 +1,118 @@
 """Finalise the source-level run: refit the champion on the selection pool in
-its own subprocess, then score the holdout once.
+a one-shot training subprocess, then score the holdout once — in an isolated
+evaluator subprocess.
 
 What this must not do:
 
-* read the holdout while choosing anything. The champion is already fixed by the
-  manifest before this module runs, and the holdout is touched exactly once, at
-  the end, to produce a number;
-* refit on train alone. The champion was selected by cross-validation over
-  train+dev, so both partitions belong to the selection and the deliverable is
-  fitted on all of it — with the pool manifest's scaler refit on those rows,
-  and its holdout partition intact and untouched;
-* import the champion's code into the driver. The first implementation imported
-  research.candidate into the process running research-src-finalize, with no
-  binding between the code that fitted and the candidate file whose SHA-256 the
-  finalize record shows. Now the driver only prepares the pool manifest and
-  spawns `python -m research.finalize` with the worktree's src as the only
-  import path (the same pattern as the loop's runner); the worker asserts the
-  candidate file's hash matches the recorded one BEFORE importing it, so the
-  fitted code is provably the recorded one;
-* unlock the holdout a third time. Phase 1 allows two unlock events
-  (AGENTS.md rule 11): every successful unlock appends one event to the
-  out_dir's append-only ledger and a third attempt is refused before any
-  fitting starts. The pool manifest handed to the worker carries no holdout
-  row mapping (data.real_split.pool_manifest); the worker restores it from the
-  frozen parent AFTER fitting, so the fitting code never had holdout identity
-  in reach.
+* read the holdout while choosing anything. The champion is already fixed by
+  the manifest before this module runs, and the holdout is touched exactly
+  once, at the end, to produce a number;
+* execute candidate code anywhere but a one-shot training subprocess. The
+  first implementation imported research.candidate into the driver; the
+  second let the finalize worker fit AND score in one interpreter, so the
+  candidate's code ran alongside the holdout read. Now the driver only
+  prepares the pool manifest and the trimmed pool records, appends the
+  unlock-intent event to the ledger, and spawns `python -m research.finalize`
+  (fit only) and then `research.evaluator --mode holdout` (state_dict only,
+  holdout rebuilt from the frozen parent manifest) — the same isolated
+  evaluation process the selection folds use;
+* unlock the holdout without paying. Phase 1 allows two unlock events
+  (AGENTS.md rule 11). The unlock event is the GRANT of read permission, not
+  a successful read: the driver appends the intent event BEFORE spawning the
+  fit worker (under an flock, into the repo-global ledger), and a crashed or
+  killed worker has still consumed the event. The worker re-checks the
+  ledger — its own budget assertion and the presence of its specific event —
+  before importing the candidate, and `python -m research.finalize` invoked
+  by hand cannot skip that check: the worker validates the event itself. The
+  ledger lives at `<repo-root>/runs/holdout-unlock-ledger.jsonl` (resolved
+  through the worktree's git common dir), never inside --out, so changing
+  the output directory cannot reset the count.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
+import os
+import subprocess
 import sys
+import tempfile
 import time
 import traceback
+import uuid
 from pathlib import Path
 
 #: AGENTS.md rule 11: at most two holdout unlock events in Phase 1.
 MAX_UNLOCKS = 2
 UNLOCK_LEDGER_FILE = "holdout-unlock-ledger.jsonl"
+UNLOCK_LEDGER_DIR = "runs"
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def _ledger_path(out_dir: Path) -> Path:
-    return Path(out_dir) / UNLOCK_LEDGER_FILE
+def global_ledger_path(worktree: Path) -> Path:
+    """The repo-global ledger, resolved from the worktree's git common dir.
+
+    Anchored to the repository, not to --out: the unlock budget is a property
+    of the project's lifetime, and a ledger inside the output directory would
+    reset on every new output path (or on deleting one file).
+    """
+    worktree = Path(worktree)
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "--path-format=absolute",
+             "--git-common-dir"],
+            text=True, capture_output=True, check=True,
+        )
+        git_dir = Path(result.stdout.strip())
+        return git_dir.parent / UNLOCK_LEDGER_DIR / UNLOCK_LEDGER_FILE
+    except (subprocess.CalledProcessError, OSError):
+        return worktree / UNLOCK_LEDGER_DIR / UNLOCK_LEDGER_FILE
 
 
-def unlock_count(out_dir: Path) -> int:
-    path = _ledger_path(out_dir)
+def unlock_count(ledger_path: Path) -> int:
+    path = Path(ledger_path)
     if not path.exists():
         return 0
     return sum(1 for line in path.read_text().splitlines() if line.strip())
 
 
-def _assert_unlock_budget(out_dir: Path) -> None:
-    used = unlock_count(out_dir)
+def ledger_contains(ledger_path: Path, event_id: str) -> bool:
+    path = Path(ledger_path)
+    if not path.exists():
+        return False
+    return any(
+        f'"event_id": "{event_id}"' in line
+        for line in path.read_text().splitlines() if line.strip()
+    )
+
+
+def _assert_unlock_budget(ledger_path: Path) -> int:
+    used = unlock_count(ledger_path)
     if used >= MAX_UNLOCKS:
         raise RuntimeError(
             f"holdout unlock budget exhausted: {used} of {MAX_UNLOCKS} events "
-            f"recorded in {_ledger_path(out_dir)}; a further unlock needs a new "
-            "data milestone or explicit user authorisation (AGENTS.md rule 11)"
+            f"recorded in {ledger_path}; a further unlock needs a new data "
+            "milestone or explicit user authorisation (AGENTS.md rule 11)"
         )
+    return used
 
 
-def _record_unlock(out_dir: Path, event: dict) -> None:
-    with _ledger_path(out_dir).open("a") as fh:
+def _append_unlock_event(ledger_path: Path, event: dict) -> None:
+    """Append one intent event under an exclusive flock (concurrent drivers
+    must not both slip under the budget between count and append)."""
+    ledger_path = Path(ledger_path)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    with ledger_path.open("a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
         fh.write(json.dumps(event, sort_keys=True) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+        fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def refit_and_score(
@@ -83,26 +126,28 @@ def refit_and_score(
     budget_seconds: float | None = None,
     records=None,
     spawn=None,
+    spawn_holdout=None,
 ) -> dict:
-    """Drive the finalize: pool manifest here, fitting + holdout in the worker.
+    """Drive the finalize: pool manifest here, fitting + holdout in children.
 
     The driver never imports research.candidate: the champion's code runs in
-    the worker subprocess only. `records` and `spawn` exist so tests can
-    inject a parsed fixture and observe the spawn without a real workbook or
+    the fit subprocess only, and the holdout is scored in an evaluator
+    subprocess. `records`, `spawn` and `spawn_holdout` exist so tests can
+    inject a parsed fixture and observe the spawns without a real workbook or
     interpreter.
     """
-    from data.mendeley import load_mendeley_scores
+    from data.mendeley import load_mendeley_scores, records_to_json
     from data.real_split import load_real_manifest, pool_manifest
     from research.frozen import TIME_BUDGET_SECONDS
 
     worktree = Path(worktree)
     out_dir = Path(out_dir)
     budget = TIME_BUDGET_SECONDS if budget_seconds is None else budget_seconds
-    _assert_unlock_budget(out_dir)
 
     candidate_path = worktree / editable
     expected_sha = _sha256(candidate_path)
     frozen = load_real_manifest(manifest_path)
+    dataset_records = None if records is None else list(records)
     if records is None:
         records = load_mendeley_scores(dataset_path)
     pool = pool_manifest(
@@ -113,6 +158,28 @@ def refit_and_score(
     champion_dir.mkdir(parents=True, exist_ok=True)
     pool_path = champion_dir / "pool-manifest.json"
     pool_path.write_text(json.dumps(pool, indent=2, ensure_ascii=False))
+    # the fit subprocess's only records: the pool rows (F-08 — no full-set
+    # file path enters its config, and pool_manifest carries no holdout)
+    pool_rows = set(pool["subject_row_by_id"].values())
+    pool_records_path = champion_dir / "pool-records.json"
+    pool_records_path.write_text(records_to_json(
+        [r for r in records if r.subject_index in pool_rows]
+    ))
+
+    # ---- pay BEFORE spawning: the unlock event is the grant of read access,
+    # not a successful read — a crashed worker has still consumed it
+    ledger = global_ledger_path(worktree)
+    _assert_unlock_budget(ledger)
+    event = {
+        "event_id": uuid.uuid4().hex,
+        "event": "holdout_unlock_intent",
+        "unlocked_at": _iso(),
+        "champion_commit": commit,
+        "candidate_sha256": expected_sha,
+        "pool_manifest_sha256": pool["manifest_sha256"],
+        "selection_parent_manifest_sha256": frozen["manifest_sha256"],
+    }
+    _append_unlock_event(ledger, event)
 
     config = {
         "worktree_path": str(worktree),
@@ -121,75 +188,174 @@ def refit_and_score(
         "git_commit": commit,
         "seed": seed,
         "time_budget_seconds": budget,
+        "train_batch_size": 32,
+        "ledger_path": str(ledger),
+        "unlock_event_id": event["event_id"],
         "data": {
             "pool_manifest_path": str(pool_path),
-            "frozen_manifest_path": str(manifest_path),
-            "dataset_path": str(dataset_path),
+            "pool_records_path": str(pool_records_path),
         },
         "out_dir": str(out_dir),
     }
     config_path = out_dir / "finalize-worker-config.json"
     config_path.write_text(json.dumps(config, indent=2))
-    result = (spawn or _spawn_worker)(config, config_path)
-    _record_unlock(out_dir, {
-        "unlocked_at": _iso(),
-        "champion_commit": commit,
-        "candidate_sha256": expected_sha,
-        "pool_manifest_sha256": pool["manifest_sha256"],
-        "selection_parent_manifest_sha256": frozen["manifest_sha256"],
-    })
-    return result
+    fitted = (spawn or _spawn_worker)(config, config_path)
+
+    holdout_config = {
+        "worktree_path": str(worktree),
+        "data": {
+            "pool_manifest_path": str(pool_path),
+            "frozen_manifest_path": str(manifest_path),
+        },
+        "out_dir": str(out_dir),
+    }
+    if dataset_records:
+        # records were injected (tests / smoke): pass them to the evaluator
+        # subprocess as a file instead of a workbook path
+        records_path = champion_dir / "holdout-input-records.json"
+        records_path.write_text(records_to_json(dataset_records))
+        holdout_config["data"]["records_path"] = str(records_path)
+    else:
+        holdout_config["data"]["dataset_path"] = str(dataset_path)
+    holdout_request = {
+        "weights_path": fitted["weights_path"],
+        "architecture_path": fitted["architecture_path"],
+        "weights_sha256": fitted["weights_sha256"],
+        "architecture_sha256": fitted["architecture_sha256"],
+    }
+    holdout = (spawn_holdout or _spawn_holdout_evaluator)(
+        holdout_config, holdout_request
+    )
+
+    finalize = {**fitted["finalize"],
+                "holdout_rows_untouched": len(frozen["split"]["holdout"])}
+    (champion_dir / "finalize.json").write_text(json.dumps(finalize, indent=2))
+    return {"finalize": finalize, "holdout": holdout["holdout"],
+            "baselines": holdout["baselines"]}
+
+
+def _child_env(worktree: str) -> dict:
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "PYTHONPATH": str(Path(worktree) / "src"),
+    }
 
 
 def _spawn_worker(config: dict, config_path: Path) -> dict:
-    """Run the finalize worker with this worktree's src as its import path."""
-    import os
-    import subprocess
-
+    """Run the finalize fit worker: sanitized env, worktree src only."""
     worktree = config["worktree_path"]
     budget = float(config["time_budget_seconds"])
     timeout = budget + 600.0
     command = [
         sys.executable, "-m", "research.finalize", "--config", str(config_path),
     ]
-    env = {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "PYTHONPATH": str(Path(worktree) / "src"),
-    }
     try:
         result = subprocess.run(
             command, cwd=worktree, text=True, capture_output=True,
-            timeout=timeout, env=env,
+            timeout=timeout, env=_child_env(worktree),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
             f"finalize worker exceeded {timeout:.0f}s"
         ) from exc
+    return _parse_worker_payload(result, "finalize worker")
+
+
+def _spawn_holdout_evaluator(config: dict, request: dict) -> dict:
+    """Score the holdout in an isolated evaluator subprocess (state_dict
+    only, holdout rebuilt from the frozen parent manifest)."""
+    worktree = config["worktree_path"]
+    with tempfile.TemporaryDirectory(prefix="research-holdout-io-") as io_dir:
+        io = Path(io_dir)
+        config_path = io / "holdout-config.json"
+        config_path.write_text(json.dumps(config))
+        request_path = io / "holdout-request.json"
+        request_path.write_text(json.dumps(request))
+        command = [
+            sys.executable, "-m", "research.evaluator", "--mode", "holdout",
+            "--config", str(config_path), "--request", str(request_path),
+        ]
+        try:
+            result = subprocess.run(
+                command, cwd=worktree, text=True, capture_output=True,
+                timeout=600.0, env=_child_env(worktree),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("holdout evaluator exceeded 600s") from exc
+    return _parse_worker_payload(result, "holdout evaluator")
+
+
+def _parse_worker_payload(result: subprocess.CompletedProcess, name: str) -> dict:
     payload = result.stdout
     if result.returncode != 0:
         detail = (payload or result.stderr).strip().splitlines()
         last = detail[-1][:400] if detail else "no output"
-        raise RuntimeError(f"finalize worker failed ({result.returncode}): {last}")
+        raise RuntimeError(f"{name} failed ({result.returncode}): {last}")
     try:
         parsed = json.loads(payload.strip().splitlines()[-1])
     except (json.JSONDecodeError, IndexError) as exc:
         raise RuntimeError(
-            f"finalize worker produced no JSON result: {payload[-300:]!r}"
+            f"{name} produced no JSON result: {payload[-300:]!r}"
         ) from exc
     if not parsed.get("ok"):
-        raise RuntimeError(f"finalize worker failed: {parsed.get('error')}")
+        raise RuntimeError(f"{name} failed: {parsed.get('error')}")
     return parsed
 
 
-def _worker(config: dict, records=None) -> dict:
-    """Fit the champion on the pool and read the holdout once (worker side)."""
-    import torch
+def _assert_git_binding(config: dict) -> str:
+    """The fitted code is the recorded commit, on a clean tree (F-09).
 
+    A candidate-file SHA alone does not pin the run: the rest of the worktree
+    (frozen machinery, data adapters) must be exactly the committed state the
+    manifest records, and HEAD must be the champion commit.
+    """
+    worktree = Path(config["worktree_path"])
+    editable = config["editable"]
+
+    def git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", "-C", str(worktree), *args], text=True, capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"git {' '.join(args)} failed in {worktree}: "
+                f"{result.stderr.strip()[:200]}"
+            )
+        return result.stdout.strip()
+
+    head = git("rev-parse", "HEAD")
+    expected_commit = config.get("git_commit")
+    if expected_commit and head != expected_commit:
+        raise RuntimeError(
+            f"worktree HEAD {head[:12]}… is not the recorded commit "
+            f"{expected_commit[:12]}…; refusing to fit code from an "
+            "unrecorded tree state"
+        )
+    # tracked-file drift is the threat: an uncommitted edit to any frozen
+    # module would make the fitted code something no commit recorded.
+    # UNTRACKED work products (the unlock ledger, out_dir payloads, run
+    # configs) are not code bindings and must not refuse the fit.
+    dirty = [
+        line[3:].strip('"')
+        for line in git("status", "--porcelain", "--untracked-files=no").splitlines()
+        if line[3:].strip('"') != editable
+    ]
+    if dirty:
+        raise RuntimeError(
+            f"worktree is dirty beyond the editable file: {dirty[:5]} — the "
+            "fitted code would not be the committed, recorded one"
+        )
+    return head
+
+
+def _worker(config: dict, records=None) -> dict:
+    """Fit the champion on the pool (worker side). No holdout is read here:
+    this process's config carries no frozen-manifest path, no dataset path
+    and no holdout rows — the holdout is scored by the evaluator subprocess."""
     from data.real_split import load_real_manifest
-    from research.frozen import FoldData
-    from runtime.real_data import RealBatchProvider, real_eval_manifest, real_input_spec
-    from runtime.tcm_eval import TCMTrustedEvaluator
+    from research.frozen import training_fold_data
+    from research.model_export import save_eval_model
 
     # the code↔SHA binding is checked BEFORE the agent-authored module is
     # imported: what fits is provably what the record binds
@@ -202,89 +368,77 @@ def _worker(config: dict, records=None) -> dict:
             f"the finalize record binds {expected_sha[:12]}…; refusing to fit "
             "code that is not the recorded one"
         )
+    _assert_git_binding(config)
+
+    # ---- ledger re-check (the worker entry cannot be bypassed by invoking
+    # `python -m research.finalize` by hand): budget must not be exhausted
+    # and THIS run's intent event must already be recorded
+    ledger = Path(config["ledger_path"])
+    _assert_unlock_budget(ledger)
+    if not ledger_contains(ledger, config["unlock_event_id"]):
+        raise RuntimeError(
+            f"unlock intent event {config['unlock_event_id'][:8]}… is not in "
+            f"{ledger}; refusing to fit — the holdout read permission is "
+            "granted by the ledger, not by this worker's success"
+        )
+
     import research.candidate as candidate
 
-    pool = load_real_manifest(config["data"]["pool_manifest_path"])
     if records is None:
-        from data.mendeley import load_mendeley_scores
+        from data.mendeley import records_from_json
 
-        records = load_mendeley_scores(config["data"]["dataset_path"])
+        records = records_from_json(
+            Path(config["data"]["pool_records_path"]).read_text()
+        )
+    pool = load_real_manifest(config["data"]["pool_manifest_path"])
+    if pool["split"]["holdout"]:
+        raise RuntimeError(
+            "pool manifest still carries a holdout partition; refusing to fit "
+            "against data the pool contract must not contain"
+        )
     seed = int(config["seed"])
     budget = float(config["time_budget_seconds"])
-    spec = real_input_spec(pool)
-    dims = {"modalities": {n: p["dim"] for n, p in pool["modalities"].items()},
-            "targets": 9}
-    # the pool manifest carries pool rows only; the records are pruned the
-    # same way, so holdout scores are not reachable from the fitting code
     pool_rows = set(pool["subject_row_by_id"].values())
-    pool_records = [r for r in records if r.subject_index in pool_rows]
-    train_provider = RealBatchProvider(pool, pool_records, "train", batch_size=32)
-    fold = FoldData(
-        train=train_provider, dev=None, input_spec=spec, dims=dims,
-        n_train_subjects=len(pool["split"]["train"]), n_dev_subjects=0, seed=seed,
-    )
+    leaked = sorted({r.subject_index for r in records} - pool_rows)
+    if leaked:
+        raise RuntimeError(
+            f"pool records contain rows outside the pool manifest: {leaked[:3]} "
+            "— refusing to fit on data the pool contract did not trim"
+        )
+    fold = training_fold_data(pool, records, config)
     started = time.monotonic()
-    torch.manual_seed(seed)
     model = candidate.build_model(fold)
     candidate.train(model, fold, budget, seed)
     fit_seconds = round(time.monotonic() - started, 2)
 
-    champion_dir = Path(config["out_dir"]) / "champion"
-    champion_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), champion_dir / "weights.pt")
+    saved = save_eval_model(
+        model, Path(config["out_dir"]) / "champion", "weights"
+    )
     finalize = {
         "candidate_file": config["editable"],
         "candidate_sha256": actual_sha,
+        "worktree_commit": _assert_git_binding(config),
         "git_commit": config["git_commit"],
         "pool_manifest_sha256": pool["manifest_sha256"],
         "selection_parent_manifest_sha256": pool["selection_parent_manifest_sha256"],
         "refit_partition": "train+dev",
         "refit_rows": len(pool["split"]["train"]),
-        "holdout_rows_untouched": len(pool["split"]["holdout"]),
         "seed": seed,
         "time_budget_seconds": budget,
         "fit_seconds": fit_seconds,
-        "input_spec_version": spec.version,
+        "input_spec_version": fold.input_spec.version,
+        **saved,
     }
+    champion_dir = Path(config["out_dir"]) / "champion"
     (champion_dir / "finalize.json").write_text(json.dumps(finalize, indent=2))
-
-    # ---- the single holdout read -----------------------------------------
-    # restore the holdout row mapping from the frozen parent NOW, after
-    # fitting: the pool manifest deliberately does not carry it
-    frozen = load_real_manifest(config["data"]["frozen_manifest_path"])
-    holdout_view = json.loads(json.dumps(pool))
-    holdout_view["subject_row_by_id"] = {
-        **holdout_view["subject_row_by_id"],
-        **{sid: frozen["subject_row_by_id"][sid]
-           for sid in frozen["split"]["holdout"]},
-    }
-    holdout = RealBatchProvider(holdout_view, records, "holdout", batch_size=64)
-    report = TCMTrustedEvaluator(real_eval_manifest(holdout_view)).evaluate(
-        model, holdout, partition="holdout"
-    )
-    from runtime.baselines import evaluate_baselines
-
-    baselines = evaluate_baselines(holdout_view, records)
-    return {
-        "finalize": finalize,
-        "holdout": report.to_dict(),
-        "baselines": {
-            name: {
-                "macro_ap": vals["holdout"]["macro_ap"],
-                "macro_f1": vals["holdout"]["macro_f1"],
-                "subject_mae": vals["holdout"]["subject_mae"],
-            }
-            for name, vals in baselines.items()
-            if isinstance(vals, dict) and "holdout" in vals
-        },
-    }
+    return {"finalize": finalize, **saved}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="research.finalize")
     parser.add_argument("--config", required=True,
                         help="JSON written by the driver: worktree, editable, "
-                             "candidate SHA, data paths, seed and budget")
+                             "candidate SHA, ledger binding, data paths")
     args = parser.parse_args(argv)
     config = json.loads(Path(args.config).read_text())
     try:

@@ -262,7 +262,9 @@ def refit_champion(config: dict, selection: dict | None = None) -> dict:
         "label_version": manifest["label_version"],
         "refit_partition": "train+dev",
         "refit_rows": len(pool.data["split"]["train"]),
-        "holdout_rows_untouched": len(pool.data["split"]["holdout"]),
+        # pool_manifest no longer carries a holdout partition (F-05): the
+        # untouched count comes from the frozen parent the pool derives from
+        "holdout_rows_untouched": len(manifest["split"]["holdout"]),
     }
 
 

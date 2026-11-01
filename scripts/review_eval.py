@@ -1349,14 +1349,18 @@ def e72_cross_validation_never_reads_the_holdout():
 
 @check
 def e73_pool_refit_moves_dev_into_train_and_keeps_the_holdout():
-    from data.real_split import pool_manifest
+    from data.real_split import holdout_view, pool_manifest
 
     records = fake_records()
     base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
     pool = pool_manifest(base, records).data
     assert pool["split"]["train"] == base["split"]["train"] + base["split"]["dev"]
     assert pool["split"]["dev"] == []
-    assert pool["split"]["holdout"] == base["split"]["holdout"]
+    # F-05: the pool manifest carries NO holdout at all — the ids in a
+    # pool-manifest file on disk would let fitting code (or anything that can
+    # read the champion directory) recover holdout identity by set difference
+    assert pool["split"]["holdout"] == []
+    assert not set(pool["subject_row_by_id"]) & set(base["split"]["holdout"])
     assert pool["scaler_fit_rows"] == len(pool["split"]["train"])
     assert pool["selection_parent_manifest_sha256"] == base["manifest_sha256"]
     assert pool["manifest_sha256"] != base["manifest_sha256"]
@@ -1369,6 +1373,11 @@ def e73_pool_refit_moves_dev_into_train_and_keeps_the_holdout():
         reloaded = load_real_manifest(path)
         assert reloaded["manifest_sha256"] == pool["manifest_sha256"]
         assert reloaded["selection_parent_manifest_sha256"] == base["manifest_sha256"]
+    # and the trusted scoring side rebuilds the holdout view from the parent
+    view = holdout_view(pool, base)
+    assert view["split"]["holdout"] == base["split"]["holdout"]
+    assert set(view["subject_row_by_id"]) == set(base["subject_row_by_id"])
+    assert view["scaler"] == pool["scaler"], "the view keeps the pool's own scaler"
 
 
 @check

@@ -66,7 +66,14 @@ FORBIDDEN_SYMBOLS = (
     "derive_classification_targets",
     "_fit_scaler",
     "input_spec_version",
+    "exec(",
+    "compile(",
+    "__import__",
 )
+#: `eval(` is deliberately NOT a text symbol: the substring matches the
+#: legitimate `model.eval()` training idiom. Dynamic-eval calls are rejected
+#: precisely, as AST Call nodes with Name in the zero-tolerance set — see
+#: `guard.validate_source_ast`.
 
 #: Deliberately NOT forbidden: `category_labels`, `target_mask`, `score_mask`.
 #: Those are the keys the frozen provider HANDS a candidate — it cannot train
@@ -104,6 +111,25 @@ class FoldData:
         }
 
 
+def selection_fold_ids(
+    manifest: dict, fold: int, folds: int, repeat: int
+) -> tuple[list[str], list[str]]:
+    """Derive one selection fold's (train, dev) subject ids from the pool.
+
+    The single derivation both the runner (which prepares the training
+    subprocess's trimmed inputs) and the evaluator (which rebuilds the fold
+    for scoring) must agree on: identical (manifest, fold, folds, repeat)
+    yield identical partitions.
+    """
+    pool = sorted(list(manifest["split"]["train"]) + list(manifest["split"]["dev"]))
+    rng = random.Random(manifest["split"]["seed"] + repeat)
+    rng.shuffle(pool)
+    fold_of = {s: i % folds for i, s in enumerate(pool)}
+    train_ids = [s for s in pool if fold_of[s] != fold]
+    dev_ids = [s for s in pool if fold_of[s] == fold]
+    return train_ids, dev_ids
+
+
 def build_fold(
     config: dict,
     manifest_path,
@@ -137,12 +163,7 @@ def build_fold(
     manifest = load_real_manifest(manifest_path)
     if records is None:
         records = load_mendeley_scores(dataset_path)
-    pool = sorted(list(manifest["split"]["train"]) + list(manifest["split"]["dev"]))
-    rng = random.Random(manifest["split"]["seed"] + repeat)
-    rng.shuffle(pool)
-    fold_of = {s: i % folds for i, s in enumerate(pool)}
-    train_ids = [s for s in pool if fold_of[s] != fold]
-    dev_ids = [s for s in pool if fold_of[s] == fold]
+    train_ids, dev_ids = selection_fold_ids(manifest, fold, folds, repeat)
     data = fold_manifest(
         manifest, records, train_ids, dev_ids,
         notes=f"source-level selection fold {fold} repeat {repeat}",
@@ -163,6 +184,35 @@ def build_fold(
         seed=int(config.get("trainer", {}).get("seed", 0)),
     )
     return fold_data, data
+
+
+def training_fold_data(fit_manifest: dict, records, config: dict) -> FoldData:
+    """The FoldData a candidate trains against: train rows only, no dev.
+
+    The training subprocess's inputs are the fit manifest (holdout emptied,
+    dev partition dropped, subject_row_by_id pruned to the training rows) and
+    records pruned to those same rows — the candidate-visible world contains
+    no dev labels to fit against (F-06) and no full-set rows to diff (F-08).
+    """
+    from runtime.real_data import RealBatchProvider, real_input_spec
+
+    return FoldData(
+        train=RealBatchProvider(
+            fit_manifest, records, "train",
+            batch_size=int(config.get("train_batch_size", 32)),
+        ),
+        dev=None,
+        input_spec=real_input_spec(fit_manifest),
+        dims={
+            "modalities": {
+                name: params["dim"] for name, params in fit_manifest["modalities"].items()
+            },
+            "targets": 9,
+        },
+        n_train_subjects=len(fit_manifest["split"]["train"]),
+        n_dev_subjects=0,
+        seed=int(config.get("seed", 0)),
+    )
 
 
 def assert_api_is_closed() -> None:

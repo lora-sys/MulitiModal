@@ -174,6 +174,7 @@ def test_pool_manifest_keeps_only_selection_pool_rows():
     expected = set(base["split"]["train"]) | set(base["split"]["dev"])
     assert set(pool["subject_row_by_id"]) == expected
     assert not set(pool["subject_row_by_id"]) & set(base["split"]["holdout"])
-    # everything else about the pool derivation is unchanged
-    assert pool["split"]["holdout"] == base["split"]["holdout"]
+    # F-05: the pool manifest is a file on disk — the holdout LIST must go
+    # too, or its ids are recoverable by set difference against any fold
+    assert pool["split"]["holdout"] == []
     assert pool["scaler_fit_rows"] == len(pool["split"]["train"])

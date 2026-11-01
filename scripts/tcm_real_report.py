@@ -351,11 +351,16 @@ def deployable_ablation(
         out_dir / "deployable-only", trainer_kwargs, seed=seed,
         train_batch_size=train_batch_size,
     )
+    # the pool manifest carries no holdout (F-05): the fitting view stays
+    # pruned, the scoring view re-attaches the frozen parent's holdout
+    from data.real_split import holdout_view
+
+    scoring_dep = holdout_view(manifest_dep, manifest)
     return {
         "manifest_sha256": manifest_dep["manifest_sha256"],
         "fit_rows": len(manifest_dep["split"]["train"]),
-        "holdout_subject_mae": holdout_primary(model_dep, manifest_dep, records),
-        "f1": evaluate_neural(model_dep, manifest_dep, records),
+        "holdout_subject_mae": holdout_primary(model_dep, scoring_dep, records),
+        "f1": evaluate_neural(model_dep, scoring_dep, records),
     }
 
 
@@ -1011,17 +1016,23 @@ def main(argv=None) -> int:
         "dev_metrics_are_in_sample": in_sample_dev,
     }
 
-    neural_eval = evaluate_neural(model, pool, records)
-    baselines = evaluate_baselines(pool, records)
+    # the pool manifest carries no holdout (F-05): the in-sample/holdout
+    # scoring views re-attach the frozen parent's holdout, the fitting views
+    # below stay pruned to the pool
+    from data.real_split import holdout_view
+
+    pool_score = holdout_view(pool, manifest)
+    neural_eval = evaluate_neural(model, pool_score, records)
+    baselines = evaluate_baselines(pool_score, records)
     regression = regression_task(manifest, records, out)
-    qc = row_qc_sensitivity(pool, records, out, champion_cfg, champion_trainer,
+    qc = row_qc_sensitivity(pool_score, records, out, champion_cfg, champion_trainer,
                             champion_model=model, seed=champion_seed,
                             train_batch_size=champion_batch)
     qc["holdout_subject_mae_with"] = neural_eval["holdout"]["subject_mae"]
     deployable = deployable_ablation(manifest, records, out, champion_cfg,
                                      champion_trainer, seed=champion_seed,
                                      train_batch_size=champion_batch)
-    seeds = seed_robustness(pool, records, out, champion_cfg, champion_trainer,
+    seeds = seed_robustness(pool_score, records, out, champion_cfg, champion_trainer,
                             train_batch_size=champion_batch)
 
     chart_rounds(entries, out)

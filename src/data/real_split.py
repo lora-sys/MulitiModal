@@ -279,15 +279,20 @@ def pool_manifest(manifest: dict, records: list[SubjectRecord], notes: str = "")
     The subject-row mapping is pruned to the pool: a manifest handed to a
     refit whose fitting code is agent-authored (research/candidate.py) must
     not carry the holdout rows at all, or the fitting code could read their
-    labels. The single holdout read rebuilds a holdout view from the frozen
-    parent manifest AFTER fitting (see research.finalize).
+    labels. The holdout LIST is emptied too — even pruned of the row mapping,
+    the holdout ids in the pool manifest are the leak: the champion/
+    pool-manifest.json file sits on disk where agent-authored fitting code
+    can read it, and diffing its ids against any fold manifest recovers
+    holdout identity. The single holdout read rebuilds the holdout view from
+    the frozen parent manifest AFTER fitting (see data.real_split.holdout_view
+    and research.finalize).
     """
     data = json.loads(json.dumps(manifest))
     data.pop("manifest_sha256", None)
     data["split"] = {
         "train": list(data["split"]["train"]) + list(data["split"]["dev"]),
         "dev": [],
-        "holdout": list(data["split"]["holdout"]),
+        "holdout": [],
     }
     by_row = {r.subject_index: r for r in records}
     groups = {
@@ -310,6 +315,28 @@ def pool_manifest(manifest: dict, records: list[SubjectRecord], notes: str = "")
     digest = _manifest_digest(data)
     data["manifest_sha256"] = digest
     return RealManifest(data=data, sha256=digest)
+
+
+def holdout_view(derived: dict, parent: dict) -> dict:
+    """Re-attach the frozen holdout partition to a pool/derived manifest.
+
+    `pool_manifest` empties the holdout list and prunes the row mapping so
+    agent-authored fitting code can never reach holdout identity or labels.
+    The trusted evaluation/reporting paths need the holdout BACK to score a
+    finished deliverable exactly once; they rebuild that view here, from the
+    frozen parent manifest, keeping the derived manifest's own (pool-refit)
+    scaler. The result is an in-memory view, NOT a manifest: it is never
+    re-hashed, never written where fitting code reads, and never handed to
+    agent-authored code.
+    """
+    view = json.loads(json.dumps(derived))
+    view["split"]["holdout"] = list(parent["split"]["holdout"])
+    view["subject_row_by_id"] = {
+        **view["subject_row_by_id"],
+        **{sid: parent["subject_row_by_id"][sid]
+           for sid in parent["split"]["holdout"]},
+    }
+    return view
 
 
 def fold_manifest(

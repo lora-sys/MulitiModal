@@ -99,3 +99,25 @@ def test_fold_manifest_derivation_is_directly_pruned(tmp_path):
     expected = set(train_ids[:-1]) | set(dev_ids[:1])
     assert set(fold["subject_row_by_id"]) == expected
     assert not set(fold["subject_row_by_id"]) & set(base["split"]["holdout"])
+
+
+def test_pool_manifest_carries_no_holdout_at_all(tmp_path):
+    """F-05: the pool manifest is written to disk (champion/pool-manifest.json)
+    where anything that can read the champion directory can diff its subject
+    ids against a fold manifest and recover holdout identity. Both the holdout
+    list and the row mapping must be empty of holdout rows; the trusted holdout
+    scoring path rebuilds the view from the frozen parent manifest."""
+    from data.real_split import holdout_view, pool_manifest
+
+    records = fake_records()
+    _, base = _manifest_path(tmp_path, records)
+    pool = pool_manifest(base, records, notes="test").data
+    assert pool["split"]["holdout"] == []
+    holdout_ids = set(base["split"]["holdout"])
+    assert holdout_ids and not holdout_ids & set(pool["subject_row_by_id"])
+    # the pool scaler is the pool's own; the view re-attaches only the holdout
+    # partition and rows, never a different scaler
+    view = holdout_view(pool, base)
+    assert view["split"]["holdout"] == base["split"]["holdout"]
+    assert view["subject_row_by_id"] == base["subject_row_by_id"]
+    assert view["scaler"] == pool["scaler"]

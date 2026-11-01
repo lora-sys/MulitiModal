@@ -1,76 +1,107 @@
-"""Subprocess entry point: fit ONE candidate on the selection folds.
+"""Subprocess orchestrator: fit ONE candidate on the selection folds, one
+one-shot training subprocess per fold, scoring in evaluator subprocesses.
 
 Run as `python -m research.runner --config <json>`. Prints a JSON line:
 
     {"primary_value": float, "primary_std": float, "primary_sem": float,
      "folds": [...], "n_folds": int, "overran": bool, "fold_seconds": [...]}
 
-The split of responsibility is the point, and it spans TWO process
-boundaries:
+This process imports NO candidate code — not the module, not a full pickled
+model, nothing (F-02: candidate code ran here until the second hardening
+round, and a monkeypatched `subprocess.run` could forge its own score). For
+every (repeat, fold) it:
 
-- this process builds every fold from the frozen manifest and imports the
-  candidate: `build_model` + `train` with the fixed budget. The model is
-  then saved to a file and the fold data is discarded — the candidate
-  trained against them in place, so nothing it held may be trusted after
-  train() returns;
-- the score comes from a fresh `research.evaluator` subprocess that rebuilds
-  the fold from the frozen manifest and loads the saved model there. The
-  candidate never sees a score, cannot poison the FoldData the evaluator
-  uses (the evaluator builds its own), and cannot rebind the evaluator
-  in-process (its code ran in a different interpreter). This process records
-  an integrity snapshot of the manifest, the dataset and the candidate file
-  before training and refuses to score if any of them changed during
-  training; the evaluator re-checks the snapshot with its own pristine
-  hashlib.
-
-A candidate that hangs is killed by the PARENT (the loop passes a hard
-timeout), because a candidate can always write `while True`. That is why the
-budget is enforced on both sides: the runner stops the loop it controls, and
-the parent kills the process the candidate controls.
+1. derives the fold's subject ids from the frozen manifest (the same
+   derivation the evaluator uses) and writes the training subprocess's ONLY
+   data inputs: a fit manifest (holdout emptied, dev dropped, row mapping
+   pruned to the training rows) and the records for exactly those rows — the
+   full-set workbook path never enters the training subprocess's config, and
+   each fold starts from a fresh interpreter, so nothing accumulates across
+   folds that a set-difference could turn back into holdout identity (F-08);
+2. spawns `python -m research.train_worker` (sanitized env, hard timeout =
+   budget + grace) and reads back file paths + hashes from its JSON line;
+3. spawns `research.evaluator`, which rebuilds the fold from the frozen
+   manifest and scores the state_dict there. The runner's own integrity
+   snapshot (manifest, dataset, candidate file) is taken before training and
+   re-checked by the evaluator with its own pristine hashlib.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import time
 import traceback
 from pathlib import Path
 
+from research.frozen import TIME_BUDGET_GRACE_SECONDS
+
 
 def run(config: dict, folds: int, repeats: int, records=None,
-        spawn_evaluator=None) -> dict:
-    import research.candidate as candidate
+        spawn_training=None, spawn_evaluator=None) -> dict:
+    from data.mendeley import load_mendeley_scores, records_to_json
+    from data.real_split import fold_manifest, load_real_manifest
     from research.evaluator import integrity_snapshot
-    from research.frozen import TIME_BUDGET_SECONDS, build_fold
+    from research.frozen import TIME_BUDGET_SECONDS, selection_fold_ids
 
     manifest_path = config["data"]["manifest_path"]
     dataset_path = config["data"]["dataset_path"]
     budget = float(config.get("time_budget_seconds", TIME_BUDGET_SECONDS))
+    spawn_train = spawn_training or _spawn_training
     spawn = spawn_evaluator or _spawn_evaluator
+    manifest = load_real_manifest(manifest_path)
+    if records is None:
+        records = load_mendeley_scores(dataset_path)
+    candidate_sha = integrity_snapshot(config).get("candidate_sha256")
     scores: list[float | None] = []
     fold_seconds: list[float] = []
     overran = False
-    with tempfile.TemporaryDirectory(prefix="research-eval-") as eval_dir:
+    with tempfile.TemporaryDirectory(prefix="research-eval-") as work_dir:
+        work = Path(work_dir)
         for repeat in range(repeats):
             for fold in range(folds):
                 before = integrity_snapshot(config)
-                fold_data, _ = build_fold(
-                    config, manifest_path, dataset_path, fold, folds, repeat,
-                    records=records,
-                )
-                model = candidate.build_model(fold_data)
+                train_ids, _dev_ids = selection_fold_ids(manifest, fold, folds, repeat)
+                # the fit manifest is the fold manifest with dev dropped: holdout
+                # emptied, scaler refit on the fold's train rows, row mapping
+                # pruned to exactly those rows
+                fit_manifest = fold_manifest(
+                    manifest, records, train_ids, [],
+                    notes=f"fit inputs for selection fold {fold} repeat {repeat}",
+                ).data
+                fit_rows = set(fit_manifest["subject_row_by_id"].values())
+                fit_records = [r for r in records if r.subject_index in fit_rows]
+                fit_manifest_path = work / f"fit-manifest-r{repeat}-f{fold}.json"
+                fit_manifest_path.write_text(json.dumps(fit_manifest, ensure_ascii=False))
+                fit_records_path = work / f"fit-records-r{repeat}-f{fold}.json"
+                fit_records_path.write_text(records_to_json(fit_records))
+                worker_config = {
+                    "worktree_path": config["worktree_path"],
+                    "editable": config["editable"],
+                    "candidate_sha256": candidate_sha,
+                    "seed": int(config.get("trainer", {}).get("seed", 0)),
+                    "time_budget_seconds": budget,
+                    "train_batch_size": int(
+                        config.get("train_provider", {}).get("batch_size", 32)),
+                    "fit_manifest_path": str(fit_manifest_path),
+                    "fit_records_path": str(fit_records_path),
+                    "output_dir": str(work),
+                    "output_stem": f"model-r{repeat}-f{fold}",
+                }
+                worker_config_path = work / f"train-config-r{repeat}-f{fold}.json"
+                worker_config_path.write_text(json.dumps(worker_config))
                 started = time.monotonic()
-                candidate.train(model, fold_data, budget, fold_data.seed)
+                trained = spawn_train(worker_config, worker_config_path)
                 elapsed = time.monotonic() - started
                 fold_seconds.append(round(elapsed, 2))
-                if elapsed > budget * 1.5:
-                    # the runner cannot kill the candidate's code, but it can
-                    # refuse to report a score that was bought with more than
-                    # the budget — the parent's timeout is the real
-                    # enforcement, this is the honest record
+                # the training subprocess's whole wall clock is the compute the
+                # candidate gets (including interpreter startup and any thread
+                # it leaves behind); the parent's timeout is the enforcement
+                if elapsed > budget + TIME_BUDGET_GRACE_SECONDS:
                     overran = True
                 after = integrity_snapshot(config)
                 if after != before:
@@ -79,16 +110,12 @@ def run(config: dict, folds: int, repeats: int, records=None,
                         "training inputs were modified during training: "
                         f"{changed} — the fold is not scoreable"
                     )
-                # hand the evaluator a file and a request, never the fold:
-                # the objects the candidate trained against are dead here
-                model_path = Path(eval_dir) / f"model-r{repeat}-f{fold}.pt"
-                import torch
-
-                torch.save(model, model_path)
-                del model, fold_data
                 request = {
                     "fold": fold, "folds": folds, "repeat": repeat,
-                    "model_path": str(model_path),
+                    "weights_path": trained["weights_path"],
+                    "architecture_path": trained["architecture_path"],
+                    "weights_sha256": trained["weights_sha256"],
+                    "architecture_sha256": trained["architecture_sha256"],
                     "integrity": before,
                 }
                 report = spawn(config, request)
@@ -110,54 +137,63 @@ def run(config: dict, folds: int, repeats: int, records=None,
     }
 
 
+def _child_env(worktree: str) -> dict:
+    """Whitelist environment for every child: no inherited secrets, no other
+    checkout's modules — only this worktree's src on the import path."""
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", ""),
+        "PYTHONPATH": str(Path(worktree) / "src"),
+    }
+
+
+def _spawn(config: dict, command: list[str], timeout: float) -> dict:
+    result = subprocess.run(
+        command, cwd=config["worktree_path"], text=True, capture_output=True,
+        timeout=timeout, env=_child_env(config["worktree_path"]),
+    )
+    payload = result.stdout
+    if result.returncode != 0:
+        detail = (payload or result.stderr).strip().splitlines()
+        last = detail[-1][:400] if detail else "no output"
+        raise RuntimeError(f"subprocess failed ({result.returncode}): {last}")
+    try:
+        parsed = json.loads(payload.strip().splitlines()[-1])
+    except (json.JSONDecodeError, IndexError) as exc:
+        raise RuntimeError(
+            f"subprocess produced no JSON result: {payload[-300:]!r}"
+        ) from exc
+    if not parsed.get("ok"):
+        raise RuntimeError(f"subprocess refused: {parsed.get('error')}")
+    return parsed
+
+
+def _spawn_training(config: dict, worker_config_path: Path) -> dict:
+    """Fit one fold in a one-shot training subprocess; hard-killed at
+    budget + grace (a candidate that hangs is a crash, not a slow winner)."""
+    budget = float(config["time_budget_seconds"])
+    return _spawn(
+        config,
+        [sys.executable, "-m", "research.train_worker",
+         "--config", str(worker_config_path)],
+        timeout=budget + TIME_BUDGET_GRACE_SECONDS,
+    )
+
+
 def _spawn_evaluator(config: dict, request: dict) -> dict:
-    """Score one fold in a fresh, environment-restricted subprocess.
-
-    Same pattern as the loop's _run_runner: only this worktree's src on the
-    import path, no inherited environment, so the evaluator cannot reach the
-    loop's modules or another checkout's code.
-    """
-    import os
-    import subprocess
-
-    worktree = config["worktree_path"]
+    """Score one fold in a fresh, environment-restricted subprocess."""
     with tempfile.TemporaryDirectory(prefix="research-eval-io-") as io_dir:
         io = Path(io_dir)
         config_path = io / "config.json"
         config_path.write_text(json.dumps(config))
         request_path = io / "request.json"
         request_path.write_text(json.dumps(request))
-        command = [
-            sys.executable, "-m", "research.evaluator",
-            "--config", str(config_path), "--request", str(request_path),
-        ]
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": os.environ.get("HOME", ""),
-            "PYTHONPATH": str(Path(worktree) / "src"),
-        }
-        try:
-            result = subprocess.run(
-                command, cwd=worktree, text=True, capture_output=True,
-                timeout=float(config.get("evaluator_timeout_s", 300.0)),
-                env=env,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("evaluator subprocess timed out") from exc
-        payload = result.stdout
-    if result.returncode != 0:
-        detail = (payload or result.stderr).strip().splitlines()
-        last = detail[-1][:400] if detail else "no output"
-        raise RuntimeError(f"evaluator failed ({result.returncode}): {last}")
-    try:
-        parsed = json.loads(payload.strip().splitlines()[-1])
-    except (json.JSONDecodeError, IndexError) as exc:
-        raise RuntimeError(
-            f"evaluator produced no JSON result: {payload[-300:]!r}"
-        ) from exc
-    if not parsed.get("ok"):
-        raise RuntimeError(f"evaluator refused to score: {parsed.get('error')}")
-    return parsed
+        return _spawn(
+            config,
+            [sys.executable, "-m", "research.evaluator",
+             "--config", str(config_path), "--request", str(request_path)],
+            timeout=float(config.get("evaluator_timeout_s", 300.0)),
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
