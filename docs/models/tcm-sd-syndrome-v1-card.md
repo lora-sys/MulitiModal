@@ -41,12 +41,16 @@
 （`src/data/tcm_sd.py::EXCLUDED_LEAK_RECORDS`）在数据边界跳过该例，原始文件
 保持只读；全部下游（训练/评估/清单）一律看到剔除后的 54,151 例流。
 
-**评估集单向去重（R1 F1）**：dev 中与任一 train 病例临床全文
-（`build_clinical_text`）逐字节相同的病例被剔除，test 对 train∪dev 同理；
-**train 侧全量保留**（train 侧重复是真实再诊数据）。subject-level 重划分
-后实际病例数：train 44,407 / dev 5,412（泄漏记录剔除后 train 44,406）；
-去重后 train 44,406 / dev **4,817**（剔 595）/ test（封存）3,838（剔 495）。
-去重策略与理由见 `data.tcm_sd.deduplicate_evaluation_records`。
+**评估集单向去重（R1 F1 + 主线仲裁 2026-11-02）**：评估侧病例若其**本场景
+输入文本**与先前 partition 任一病例逐字节相同即被剔除（clinical 基准=
+`build_clinical_text`，short 基准=`build_short_text`；基准必须随场景切换，
+否则「主诉相同、现病史不同」的可记忆副本会漏进 short 场景）；test 对
+train∪dev 同理；**train 侧全量保留**（train 侧重复是真实再诊数据）。
+subject-level 重划分后实际病例数：train 44,407 / dev 5,412（泄漏记录剔除后
+train 44,406）；clinical 去重后 dev **4,817**（剔 595）/ test（封存）3,838
+（剔 495）；short 去重后 dev **3,347**（剔 2,065）/ test（封存，解锁时按同
+基准计算）。去重策略与理由见
+`data.tcm_sd.deduplicate_evaluation_records`。
 
 ## 模型与训练
 
@@ -60,27 +64,32 @@
 `short`（仅主诉）。训练/模型选择/阈值选择只使用 train/dev partition；
 test partition 封存，最终解锁测试由主线按 AGENTS.md 硬规则 11 执行。
 
-## 指标（dev partition，真实数据，去重后 n=4,817 病例 / 148 类全部出现）
+## 指标（dev partition，真实数据，按场景基准去重后）
 
-主表为**去重后**数字（R1 F1：dev 中与任一 train 病例临床全文逐字节相同的
-595 例已剔除；与多数类 Dummy 的配对差值 bootstrap 同口径重跑，n_boot=1000,
+主表为**按场景输入文本基准去重后**的数字（主线仲裁 2026-11-02：去重基准=
+模型实际看到的文本——clinical 场景剔 595 例（n=4,817），short 场景剔 2,065 例
+（n=3,347）；与多数类 Dummy 的配对差值 bootstrap 同口径重跑，n_boot=1000,
 seed 20261101）：
 
 | 场景 | 模型 | macro-F1（95% CI） | accuracy | Top-3 | Top-5 |
 | --- | --- | --- | --- | --- | --- |
 | clinical | dummy-most-frequent | 0.00203 | — | — | — |
 | clinical | tfidf-char-1-3-logreg | **0.5754**（0.5007–0.5631） | 0.8360 | 0.9520 | 0.9695 |
-| clinical | bert-base-chinese（6 ep，重评分） | 0.3197（0.2856–0.3256） | 0.7804 | 0.9082 | 0.9402 |
-| short | tfidf-char-1-3-logreg | **0.3835**（0.3262–0.3805） | 0.6431 | 0.8703 | 0.9197 |
-| short | bert-base-chinese（6 ep，重评分） | 0.2359（0.2139–0.2445） | 0.7046 | 0.8829 | 0.9197 |
+| clinical | bert-base-chinese（6 ep，重评分） | 0.2249（—） | — | — | — |
+| short | tfidf-char-1-3-logreg | **0.3449**（0.2845–0.3421） | 0.5907 | 0.8500 | 0.9032 |
+| short | bert-base-chinese（6 ep，重评分） | 0.1658（—） | — | — | — |
+
+（BERT 重评分只出了 macro-F1 与 n；CI/Top-k 未重算，如实留空。）
 
 与多数类 Dummy 的配对差值：clinical +0.5734（CI [0.4988, 0.5611]，p≈0）；
-short +0.3815（CI [0.3241, 0.3785]，p≈0）。
+short +0.3427（CI [0.2823, 0.3399]，p≈0）。
 
-**去重前（含记忆效应，short dev 38.1% 病例有 train 同文本副本，R1 审计口径
-预估影响 −0.0525）**：clinical TF-IDF 0.5895 / BERT 0.3262（n=5,412）；
-short TF-IDF 0.3971 / BERT 0.2454。实测去重降幅：clinical −0.0141、
-short −0.0136——记忆副本的膨胀量级低于 R1 逐组预估，方向一致，如实记录。
+**去重前（含记忆效应）**：clinical TF-IDF 0.5895 / BERT 0.3262（n=5,412）；
+short TF-IDF 0.3971 / BERT 0.2454。实测按场景基准去重降幅：clinical −0.0141、
+short −0.0386（short 38.1% 的 dev 病例主诉与 train 逐字节相同——临床全文基准
+抓不到「主诉相同、现病史不同」的可记忆副本，这是 first 修复轮用临床全文基准
+只收到 −0.0136 的原因；按场景基准仲裁后修正）。BERT 在 short 下降 −0.0801，
+幅度大于 TF-IDF——被剔除的模板行正是 BERT 得分高的行。
 **通道披露**：BERT 的最佳 epoch 选择与 UNCERTAIN 阈值选择都发生在去重前的
 dev 上，重评分原样继承（选择用 dev ≠ 评分用 dev，未重选）；TF-IDF 无选择
 通道（配置冻结，seed 相同重跑），其前后差是纯去重效应。
@@ -90,14 +99,15 @@ dev 上，重评分原样继承（选择用 dev ≠ 评分用 dev，未重选）
 BERT 逐类表现。工程结论：以 TF-IDF 为冻结基线模型，BERT 结果如实记录为
 「未胜过简单基线」。
 
-Bootstrap 区间上界低于点估计（如 clinical 0.5895 vs CI high 0.5811）：重采样
+Bootstrap 区间上界低于点估计（如 clinical 0.5754 vs CI high 0.5631）：重采样
 会抽空部分支持度=1 的尾部类，重采样 macro-F1 系统性偏低，属于极小类
 bootstrap 已知偏差，如实记录，不视为 bug。
 
 详细数字（逐类 P/R/F1、环境 provenance、去重统计）见远程
-`runs/tcm-sd-syndrome-v1/baselines-report-deduped.json`（去重前版本在
+`runs/tcm-sd-syndrome-v1/baselines-report.json`（按场景基准去重，权威版本；
+历史中间版本在 baselines-report-deduped.json 与
 `runs/tcm-sd-syndrome-v1-prededup-backup/`）、
-`runs/tcm-sd-syndrome-v1-e6/bert-*/dev-evaluation-deduped.json`
+`runs/tcm-sd-syndrome-v1/bert-*/dev-evaluation-deduped.json`
 （git-ignored，acam-lab 留存）。
 
 推理分数语义：模型原始 softmax 概率，**未经校准**（结果内 `calibrated: false`
@@ -111,10 +121,10 @@ accuracy 0.8487）、BERT short 阈值 0.4036（覆盖率 0.900，过滤后 accu
 - 合成套件（`tests/syndrome/test_robustness.py`）：短输入、否定症状（「无发热」）、
   口语化、越界（英文/乱码/证候名当输入）、缺失字段——接口不崩、状态合法、
   拒判路径不给候选。
-- 真实数据数字（去重后 dev partition，TF-IDF 短文本场景，阈值 0.2024）：文本
-  截断到 20 字符后 macro-F1 0.3835 → 0.3817（下降 0.0018，短文本场景天然对
-  截断不敏感）；7 个对抗探针拒判 6 个（85.7%）：空输入 ABSTAIN ×2、英文/乱码/
-  证候名（「气虚血瘀证」）OUT_OF_DOMAIN ×4。
+- 真实数据数字（按场景基准去重后 dev partition，TF-IDF 短文本场景，阈值
+  0.2061）：文本截断到 20 字符后 macro-F1 0.3449 → 0.3434（下降 0.0015，
+  短文本场景天然对截断不敏感）；7 个对抗探针拒判 6 个（85.7%）：空输入
+  ABSTAIN ×2、英文/乱码/证候名（「气虚血瘀证」）OUT_OF_DOMAIN ×4。
 - 已知盲点：「脾肾阳虚」（词表内名称为「脾肾阳虚证」，无「证」字）未被
   证候名拒判逻辑捕获，按常规输入返回 OK——拒判仅匹配词表精确同名，
   前缀/别名形式的证候名输入不可拒，如实记录。
