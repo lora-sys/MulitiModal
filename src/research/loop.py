@@ -430,7 +430,7 @@ class SourceResearchLoop:
         # the same interpreter that runs the loop; the child starts isolated
         # (no env injection, no user site, no cwd on sys.path) with the same
         # whitelist every other trusted child gets (H-02)
-        env = child_env(str(self.worktree.path))
+        env = child_env()
         try:
             result = subprocess.run(
                 command, cwd=self.worktree.path, text=True, capture_output=True,

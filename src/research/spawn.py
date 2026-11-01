@@ -12,7 +12,8 @@ drift apart about HOW a trusted child is started. Two hard rules (H-02):
    config, never from the environment.
 2. **Whitelist env.** The child environment carries no inherited variable at
    all: PATH is a minimal fixed set (the finalize worker needs `git`), HOME
-   is kept for torch cache dirs, PYTHONHASHSEED=0 pins dict/set iteration
+   is emptied (no cache writes outside the worktree), PYTHONHASHSEED=0 is
+   inert under -I but pinned for any future launch path that drops -I
    for reproducibility. PYTHONPATH is absent — under `-I` it would be
    ignored anyway, and its absence is what makes a planted startup module
    unreachable even if a future launch path drops a flag.
@@ -29,9 +30,12 @@ from pathlib import Path
 CHILD_PATH = "/usr/bin:/bin:/usr/local/bin"
 
 
-def child_env(worktree: str) -> dict:
+def child_env() -> dict:
     """Whitelist environment for every child: no inherited secrets, no other
-    checkout's modules, no attacker-influenced startup hooks."""
+    checkout's modules, no attacker-influenced startup hooks. HOME is set to
+    the empty string DELIBERATELY (torch cache writes land in the worktree's
+    tmp output, not $HOME); PYTHONHASHSEED is inert under -I but pinned for
+    any future launch path that drops the flag."""
     return {
         "PATH": CHILD_PATH,
         "HOME": "",

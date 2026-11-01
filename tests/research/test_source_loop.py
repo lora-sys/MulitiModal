@@ -175,6 +175,29 @@ def test_dynamic_execution_aliases_are_refused_two_generations():
             validate_source_ast(source)
 
 
+def test_dynamic_execution_bare_names_are_refused_in_any_syntax():
+    # round-4 review finding 2: the two-generation alias walk missed walrus,
+    # unpacking and container storage. One rule now covers every form that
+    # makes the builtin appear as a bare ast.Name: Load or Store, any scope.
+    from research.guard import validate_source_ast
+
+    validate_source_ast("model.eval()\n")  # the training idiom is still fine
+    validate_source_ast("def fit(self):\n    return self.model.eval()\n")
+    for source in (
+        'f = exec\nf("x = 1")',
+        'f = exec\ng = f\ng("x = 1")',
+        "f = eval\nscore = f(payload)",
+        'if (f := exec):\n    f("x = 1")',
+        "for f in [exec]:\n    f('x = 1')",
+        "f, = [exec]\nf('x = 1')",
+        "fs = [exec]\nfs[0]('x = 1')",
+        "exec = print",           # even rebinding the name is refused
+        'h = g\ng = f\nf = exec\nh("x = 1")',  # a 3-generation chain
+    ):
+        with pytest.raises(PatchRejected, match="bare name"):
+            validate_source_ast(source)
+
+
 def test_forbidden_symbols_cover_the_dynamic_execution_text():
     # the text-level scan still catches the quoted name in added lines where
     # no AST exists yet (patch validation runs before the patch is applied)

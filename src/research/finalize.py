@@ -107,8 +107,22 @@ def ledger_contains(ledger_path: Path, event_id: str) -> bool:
 
 
 def _assert_unlock_budget(ledger_path: Path) -> int:
+    """DRIVER-side check, run BEFORE charging: refuse when no slot is left."""
     used = unlock_count(ledger_path)
     if used >= MAX_UNLOCKS:
+        raise _unlock_budget_error(ledger_path, used)
+    return used
+
+
+def _assert_worker_budget(ledger_path: Path) -> int:
+    """WORKER-side check, run AFTER this run's event was charged: the
+    driver's own charge for the current run may legitimately have filled
+    the budget, so only an OVER-spend (a ledger beyond MAX_UNLOCKS, i.e.
+    someone bypassed the driver) is refused here. Using the driver-side
+    `>=` check here would crash every legal final unlock (round-4 review
+    finding 1)."""
+    used = unlock_count(ledger_path)
+    if used > MAX_UNLOCKS:
         raise _unlock_budget_error(ledger_path, used)
     return used
 
@@ -267,13 +281,13 @@ def refit_and_score(
             "baselines": holdout["baselines"]}
 
 
-def _child_env(worktree: str) -> dict:
+def _child_env() -> dict:
     """Minimal whitelist env for every child (H-02/H-05): no PYTHONPATH — the
     isolated bootstrap injects the import path; PATH is a minimal fixed set
     because this worker itself needs `git`."""
     from research.spawn import child_env
 
-    return child_env(worktree)
+    return child_env()
 
 
 def _spawn_worker(config: dict, config_path: Path) -> dict:
@@ -289,7 +303,7 @@ def _spawn_worker(config: dict, config_path: Path) -> dict:
     try:
         result = subprocess.run(
             command, cwd=worktree, text=True, capture_output=True,
-            timeout=timeout, env=_child_env(worktree),
+            timeout=timeout, env=_child_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
@@ -317,7 +331,7 @@ def _spawn_holdout_evaluator(config: dict, request: dict) -> dict:
         try:
             result = subprocess.run(
                 command, cwd=worktree, text=True, capture_output=True,
-                timeout=600.0, env=_child_env(worktree),
+                timeout=600.0, env=_child_env(),
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError("holdout evaluator exceeded 600s") from exc
@@ -327,7 +341,9 @@ def _spawn_holdout_evaluator(config: dict, request: dict) -> dict:
 def _parse_worker_payload(result: subprocess.CompletedProcess, name: str) -> dict:
     payload = result.stdout
     if result.returncode != 0:
-        detail = (payload or result.stderr).strip().splitlines()
+        # stdout may carry candidate/library noise; the traceback
+        # lives on stderr, so it wins when the child failed
+        detail = (result.stderr or payload).strip().splitlines()
         last = detail[-1][:400] if detail else "no output"
         raise RuntimeError(f"{name} failed ({result.returncode}): {last}")
     try:
@@ -412,7 +428,7 @@ def _worker(config: dict, records=None) -> dict:
     # `python -m research.finalize` by hand): budget must not be exhausted
     # and THIS run's intent event must already be recorded
     ledger = Path(config["ledger_path"])
-    _assert_unlock_budget(ledger)
+    _assert_worker_budget(ledger)
     if not ledger_contains(ledger, config["unlock_event_id"]):
         raise RuntimeError(
             f"unlock intent event {config['unlock_event_id'][:8]}… is not in "

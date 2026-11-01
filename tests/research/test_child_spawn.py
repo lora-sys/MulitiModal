@@ -22,7 +22,7 @@ def test_child_env_is_a_minimal_whitelist():
     # PYTHONSTARTUP, ...) and must not point PYTHONPATH anywhere
     from research.spawn import child_env
 
-    env = child_env("/some/worktree")
+    env = child_env()
     assert set(env) == {"PATH", "HOME", "PYTHONHASHSEED"}
     for forbidden in ("PYTHONPATH", "TMPDIR", "LD_PRELOAD", "PYTHONSTARTUP",
                       "PYTHONHOME"):

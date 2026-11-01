@@ -146,23 +146,25 @@ def run(config: dict, folds: int, repeats: int, records=None,
     }
 
 
-def _child_env(worktree: str) -> dict:
+def _child_env() -> dict:
     """Whitelist environment for every child: no inherited secrets, no other
     checkout's modules — see research.spawn (H-02: no PYTHONPATH at all, the
     isolated bootstrap injects the import path instead)."""
     from research.spawn import child_env
 
-    return child_env(worktree)
+    return child_env()
 
 
 def _spawn(config: dict, command: list[str], timeout: float) -> dict:
     result = subprocess.run(
         command, cwd=config["worktree_path"], text=True, capture_output=True,
-        timeout=timeout, env=_child_env(config["worktree_path"]),
+        timeout=timeout, env=_child_env(),
     )
     payload = result.stdout
     if result.returncode != 0:
-        detail = (payload or result.stderr).strip().splitlines()
+        # stdout may carry candidate/library noise; the traceback
+        # lives on stderr, so it wins when the child failed
+        detail = (result.stderr or payload).strip().splitlines()
         last = detail[-1][:400] if detail else "no output"
         raise RuntimeError(f"subprocess failed ({result.returncode}): {last}")
     try:

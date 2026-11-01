@@ -201,33 +201,21 @@ def validate_source_ast(source: str) -> None:
     tolerance, not a complexity price. `model.eval()` (an Attribute call) is
     the legitimate training idiom and is not touched.
 
-    Aliasing is refused too, two generations deep (H-01): a target bound to a
-    dynamic-execution builtin (`f = exec`) or to such a target (`g = f`)
-    joins the refused call-name set, so `f("…")` and `g("…")` are refused
-    like the direct call they are.
+    Aliasing is refused by a stronger rule (H-01, hardened after round-4
+    review finding 2): ANY bare `ast.Name` bound to a dynamic-execution
+    builtin is refused, whatever the syntax that binds or reads it — the
+    direct call (`exec("…")`), an alias (`f = exec`, `g = f`), a walrus
+    (`(f := exec)`), unpacking (`for f in [exec]`, `f, = [exec]`), or
+    storage in a container (`fs = [exec]; fs[0]("…")`). Every one of these
+    makes the name itself appear as an `ast.Name` node, so one rule covers
+    all the aliasing games the two-generation walk used to approximate.
+    Attribute calls (`model.eval()`) are `ast.Attribute` and untouched.
     """
     tree = ast.parse(source)
-    banned = set(DYNAMIC_EXECUTION_CALLS)
-    # two passes: the first binds names to the builtins themselves (`f = exec`
-    # — a Name value, not a Call), the second binds names to those names
-    for _generation in range(2):
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Assign)
-                and isinstance(node.value, ast.Name)
-                and node.value.id in banned
-            ):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        banned.add(target.id)
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id in banned
-        ):
+        if isinstance(node, ast.Name) and node.id in DYNAMIC_EXECUTION_CALLS:
             raise PatchRejected(
-                f"patch calls {node.func.id}(): dynamic code execution is "
-                "refused outright — it hides logic from the complexity metric "
-                "and the source guards"
+                f"patch references {node.id!r} as a bare name: dynamic code "
+                "execution is refused outright — it hides logic from the "
+                "complexity metric and the source guards"
             )

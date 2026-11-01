@@ -24,6 +24,7 @@ the same process may legitimately hold research.candidate in their cache.
 from __future__ import annotations
 
 import json
+import tempfile
 import random
 import subprocess
 import sys
@@ -220,6 +221,35 @@ def test_the_unlock_is_billed_before_the_worker_spawns(tmp_path):
         )
     assert refused == []
     assert finalize_mod.unlock_count(ledger) == 2
+
+
+def test_worker_budget_allows_the_final_legal_unlock():
+    """Round-4 review finding 1: the intent event for THIS run is charged
+    before the worker spawns, so a legal final unlock makes the ledger hold
+    exactly MAX_UNLOCKS events when the worker starts. The driver-side
+    check (run before charging) must refuse at >= MAX_UNLOCKS; the
+    worker-side check (run after charging) must refuse only an OVER-spend."""
+    import inspect
+
+    from research import finalize as finalize_mod
+
+    full = [{"event_id": "a" * 32}, {"event_id": "b" * 32}]
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = Path(tmp) / "ledger.jsonl"
+        ledger.write_text("".join(json.dumps(e) + "\n" for e in full))
+        # driver side: no slot left before charging
+        with pytest.raises(RuntimeError, match="unlock budget"):
+            finalize_mod._assert_unlock_budget(ledger)
+        # worker side: this run's own charge has filled the budget — legal
+        assert finalize_mod._assert_worker_budget(ledger) == 2
+        over = ledger.read_text() + json.dumps({"event_id": "c" * 32}) + "\n"
+        ledger.write_text(over)
+        with pytest.raises(RuntimeError, match="unlock budget"):
+            finalize_mod._assert_worker_budget(ledger)
+    # and the worker entry uses the worker-side check, not the driver's
+    worker_src = inspect.getsource(finalize_mod._worker)
+    assert "_assert_worker_budget(ledger)" in worker_src
+    assert "_assert_unlock_budget(ledger)" not in worker_src
 
 
 def test_the_ledger_is_global_and_not_inside_out(tmp_path):
