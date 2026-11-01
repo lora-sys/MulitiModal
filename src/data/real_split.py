@@ -275,6 +275,12 @@ def pool_manifest(manifest: dict, records: list[SubjectRecord], notes: str = "")
     partition assignment and only moves dev rows into train; nothing is
     reshuffled. The scaler is refit on the pool, which is exactly the data
     the final model sees.
+
+    The subject-row mapping is pruned to the pool: a manifest handed to a
+    refit whose fitting code is agent-authored (research/candidate.py) must
+    not carry the holdout rows at all, or the fitting code could read their
+    labels. The single holdout read rebuilds a holdout view from the frozen
+    parent manifest AFTER fitting (see research.finalize).
     """
     data = json.loads(json.dumps(manifest))
     data.pop("manifest_sha256", None)
@@ -294,6 +300,10 @@ def pool_manifest(manifest: dict, records: list[SubjectRecord], notes: str = "")
         groups,
     )
     data["scaler_fit_rows"] = len(data["split"]["train"])
+    pool_ids = set(data["split"]["train"]) | set(data["split"]["dev"])
+    data["subject_row_by_id"] = {
+        k: v for k, v in data["subject_row_by_id"].items() if k in pool_ids
+    }
     data["selection_parent_manifest_sha256"] = manifest["manifest_sha256"]
     if notes:
         data["notes"] = notes
@@ -311,7 +321,7 @@ def fold_manifest(
 ) -> RealManifest:
     """Derive the manifest for ONE cross-validation fold.
 
-    Two things must not survive from the parent manifest:
+    Three things must not survive from the parent manifest:
 
     1. **The scaler.** Keeping the parent's statistics means every validation
        subject that also sits in the parent's train partition contributes to
@@ -321,6 +331,12 @@ def fold_manifest(
     2. **The holdout partition.** Emptied here, so "selection never reads the
        holdout" becomes a structural property of the fold manifest instead of
        a convention the calling code is trusted to follow.
+    3. **The subject-row mapping.** The parent's subject_row_by_id covers
+       every subject in the dataset; a candidate holding train∪dev could diff
+       those keys against its own fold membership and derive exactly which
+       subjects form the holdout, then reach for their labels. The mapping is
+       pruned to the fold's own train∪dev ids, so the holdout identity is not
+       derivable from anything the fold path hands out.
     """
     data = json.loads(json.dumps(manifest))
     data.pop("manifest_sha256", None)
@@ -338,6 +354,10 @@ def fold_manifest(
         [data["subject_row_by_id"][s] for s in train_ids], by_row, groups
     )
     data["scaler_fit_rows"] = len(train_ids)
+    fold_ids = set(data["split"]["train"]) | set(data["split"]["dev"])
+    data["subject_row_by_id"] = {
+        k: v for k, v in data["subject_row_by_id"].items() if k in fold_ids
+    }
     data["selection_parent_manifest_sha256"] = manifest["manifest_sha256"]
     if notes:
         data["notes"] = notes

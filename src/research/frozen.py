@@ -108,6 +108,7 @@ def build_fold(
     fold: int,
     folds: int,
     repeat: int,
+    records=None,
 ) -> tuple[FoldData, dict]:
     """Draw one selection fold from the pool (train + dev) of the frozen split.
 
@@ -115,17 +116,24 @@ def build_fold(
     which the CALLER keeps: the candidate must not be able to hand itself a
     manifest, and the runner needs one to score the fitted model.
 
-    `data.real_split.fold_manifest` refits the scaler on this fold's train rows
-    and leaves the holdout partition EMPTY, so "selection never reads the
-    holdout" is a property of the object the candidate is given rather than a
-    convention it is trusted to respect.
+    `data.real_split.fold_manifest` refits the scaler on this fold's train rows,
+    empties the holdout partition, and prunes subject_row_by_id to the fold's
+    own train∪dev rows, so "selection never sees the holdout" is a property of
+    the objects the candidate is given rather than a convention it is trusted
+    to respect. The records handed to the providers are filtered the same way:
+    unfiltered, they would carry every subject's scores — holdout rows
+    included — within reach of `fold.train.records_by_row`.
+
+    `records` is the adapter's full record list; it exists so tests and the
+    evaluator can inject a parsed fixture instead of re-reading the workbook.
     """
     from data.mendeley import load_mendeley_scores
     from data.real_split import fold_manifest, load_real_manifest
     from runtime.real_data import RealBatchProvider, real_input_spec
 
     manifest = load_real_manifest(manifest_path)
-    records = load_mendeley_scores(dataset_path)
+    if records is None:
+        records = load_mendeley_scores(dataset_path)
     pool = sorted(list(manifest["split"]["train"]) + list(manifest["split"]["dev"]))
     rng = random.Random(manifest["split"]["seed"] + repeat)
     rng.shuffle(pool)
@@ -136,10 +144,12 @@ def build_fold(
         manifest, records, train_ids, dev_ids,
         notes=f"source-level selection fold {fold} repeat {repeat}",
     ).data
+    fold_rows = set(data["subject_row_by_id"].values())
+    fold_records = [r for r in records if r.subject_index in fold_rows]
     batch_size = int(config.get("train_provider", {}).get("batch_size", 32))
     fold_data = FoldData(
-        train=RealBatchProvider(data, records, "train", batch_size=batch_size),
-        dev=RealBatchProvider(data, records, "dev", batch_size=64),
+        train=RealBatchProvider(data, fold_records, "train", batch_size=batch_size),
+        dev=RealBatchProvider(data, fold_records, "dev", batch_size=64),
         input_spec=real_input_spec(data),
         dims={
             "modalities": {name: p["dim"] for name, p in data["modalities"].items()},

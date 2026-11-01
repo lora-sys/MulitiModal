@@ -157,12 +157,18 @@ def cross_val_candidate(
                 manifest, records, train_ids, dev_ids,
                 notes=f"selection fold {f} of repeat {repeat}",
             ).data
+            # the fold manifest prunes subject_row_by_id to train∪dev; the
+            # records handed to the providers must be pruned the same way or
+            # every subject's scores — holdout rows included — stay reachable
+            # from provider.records_by_row
+            fold_rows = set(fold["subject_row_by_id"].values())
+            fold_records = [r for r in records if r.subject_index in fold_rows]
             torch.manual_seed(trainer_kwargs.get("seed", 0))
             model = build_real_model(fold, config.get("model", {}))
             trainer = Trainer(model, TrainerConfig(**trainer_kwargs))
-            provider = RealBatchProvider(fold, records, "train", batch_size=batch_size)
+            provider = RealBatchProvider(fold, fold_records, "train", batch_size=batch_size)
             trainer.fit(provider)  # no eval provider: nothing may steer fitting
-            val = RealBatchProvider(fold, records, "dev", batch_size=64)
+            val = RealBatchProvider(fold, fold_records, "dev", batch_size=64)
             evaluator = TCMTrustedEvaluator(real_eval_manifest(fold))
             per_fold.append(
                 evaluator.evaluate(model, val, partition="dev").primary_value
@@ -223,7 +229,12 @@ def refit_champion(config: dict, selection: dict | None = None) -> dict:
     model = build_real_model(pool.data, config.get("model", {}))
     trainer = Trainer(model, trainer_cfg)
     batch_size = config.get("train_provider", {}).get("batch_size", 32)
-    provider = RealBatchProvider(pool.data, records, "train", batch_size=batch_size)
+    # the pool manifest prunes subject_row_by_id to the pool; the records must
+    # be pruned the same way — agent-authored fitting code must not be able to
+    # reach holdout scores through provider.records_by_row
+    pool_rows = set(pool.data["subject_row_by_id"].values())
+    pool_records = [r for r in records if r.subject_index in pool_rows]
+    provider = RealBatchProvider(pool.data, pool_records, "train", batch_size=batch_size)
     report = trainer.fit(provider)
     artifact_dir = trainer.save_checkpoint(
         Path(config.get("out_dir", "runs/autoresearch/final")),

@@ -18,6 +18,7 @@ import random
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -42,8 +43,6 @@ from runtime.tcm_eval import compute_subject_level_metrics
 from runtime.worker import sanitize_env
 
 DATASET_SHA = "c" * 64
-
-
 def fake_records(n=30, seed=7, qc_row=None):
     rng = random.Random(seed)
     records = []
@@ -1242,8 +1241,13 @@ def e72_cross_validation_never_reads_the_holdout():
     manifest = {
         "split": {"train": pool[:30], "dev": pool[30:], "holdout": holdout},
         "manifest_sha256": "d" * 64,
+        "subject_row_by_id": {f"mendeley-r{i:03d}": i for i in range(60)},
     }
+    # one record per subject row; the fold path must prune these to train∪dev
+    # before handing them to a provider, or holdout scores stay reachable
+    records_all = [SimpleNamespace(subject_index=i) for i in range(60)]
     seen: list[tuple[str, list[str]]] = []
+    rows_seen: list[int] = []
 
     class StubTrainer:
         def __init__(self, model, cfg):
@@ -1267,6 +1271,7 @@ def e72_cross_validation_never_reads_the_holdout():
         def __init__(self, m, records, partition, batch_size=32):
             subjects = m["split"][partition]
             seen.append((partition, list(subjects)))
+            rows_seen.extend(r.subject_index for r in records)
             assert not set(subjects) & set(holdout), "holdout leaked into a fold"
 
     import data.real_split as real_split
@@ -1279,10 +1284,14 @@ def e72_cross_validation_never_reads_the_holdout():
         # subjects each fold sees and that the holdout is unreachable, so the
         # fold manifest is built directly (its scaler behaviour is e77)
         seen_folds.append((list(train_ids), list(dev_ids), []))
+        fold_ids = list(train_ids) + list(dev_ids)
         return type("M", (), {"data": {
             "manifest_sha256": "e" * 64,
             "split": {"train": list(train_ids), "dev": list(dev_ids),
                       "holdout": []},
+            "subject_row_by_id": {
+                sid: int(sid.rsplit("r", 1)[-1]) for sid in fold_ids
+            },
         }})()
 
     originals = (
@@ -1297,7 +1306,7 @@ def e72_cross_validation_never_reads_the_holdout():
     real_data.real_eval_manifest = lambda _m: None
     tcm_eval.TCMTrustedEvaluator = StubEvaluator
     protocols.Trainer = StubTrainer
-    protocols._load_records = lambda _p: []
+    protocols._load_records = lambda _p: records_all
     real_split.fold_manifest = stub_fold_manifest
     try:
         out = protocols.cross_val_candidate(
@@ -1316,6 +1325,9 @@ def e72_cross_validation_never_reads_the_holdout():
     assert out["fold_sizes"] == [10, 10, 10, 10], out["fold_sizes"]
     # no fold manifest may carry a holdout partition to score against
     assert all(holdout_part == [] for _, _, holdout_part in seen_folds), seen_folds
+    # and no provider may receive a holdout row's record (rows 40-59): the
+    # pruning must match the manifest pruning or scores stay reachable
+    assert rows_seen and max(rows_seen) < 40, sorted(set(rows_seen))[-5:]
     # train and dev of a fold must be disjoint and cover the pool
     for train_ids, dev_ids, _ in seen_folds:
         assert not set(train_ids) & set(dev_ids), "fold train/dev overlap"

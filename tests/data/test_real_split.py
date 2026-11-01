@@ -147,3 +147,33 @@ def test_load_real_manifest_rejects_tampering(tmp_path):
     path.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="hash mismatch"):
         load_real_manifest(path)
+
+
+def test_fold_manifest_keeps_only_the_folds_own_rows():
+    # a fold manifest deep-copied the parent's subject_row_by_id, so a
+    # candidate holding train∪dev could diff it against the known row count
+    # and derive exactly which subjects form the holdout — then read their
+    # labels. Only the fold's own rows may survive.
+    from data.real_split import fold_manifest
+
+    records = fake_records()
+    base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
+    train_ids, dev_ids = base["split"]["train"], base["split"]["dev"]
+    fold = fold_manifest(base, records, train_ids[:-1], dev_ids[:1]).data
+    expected = set(train_ids[:-1]) | set(dev_ids[:1])
+    assert set(fold["subject_row_by_id"]) == expected
+    assert not set(fold["subject_row_by_id"]) & set(base["split"]["holdout"])
+
+
+def test_pool_manifest_keeps_only_selection_pool_rows():
+    from data.real_split import pool_manifest
+
+    records = fake_records()
+    base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
+    pool = pool_manifest(base, records).data
+    expected = set(base["split"]["train"]) | set(base["split"]["dev"])
+    assert set(pool["subject_row_by_id"]) == expected
+    assert not set(pool["subject_row_by_id"]) & set(base["split"]["holdout"])
+    # everything else about the pool derivation is unchanged
+    assert pool["split"]["holdout"] == base["split"]["holdout"]
+    assert pool["scaler_fit_rows"] == len(pool["split"]["train"])
