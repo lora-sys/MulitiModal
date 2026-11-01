@@ -39,9 +39,7 @@ import time
 import traceback
 from pathlib import Path
 
-from data.mendeley import records_from_json
-from data.real_split import load_real_manifest
-from research.frozen import TIME_BUDGET_SECONDS, training_fold_data
+from research.frozen import TIME_BUDGET_SECONDS
 
 
 def _sha256(path: str | Path) -> str:
@@ -62,16 +60,43 @@ def assert_candidate_binding(config: dict) -> str:
     return actual
 
 
+def import_candidate(config: dict):
+    """Import the candidate module named by the config's editable path.
+
+    The default editable keeps the static import; any other editable file
+    (the syndrome task's src/research/candidate_sd.py) is resolved from the
+    path, so the engine stays candidate-agnostic. The SHA binding above is
+    checked before either path runs."""
+    editable = config.get("editable", "src/research/candidate.py")
+    if editable == "src/research/candidate.py":
+        import research.candidate as candidate
+
+        return candidate
+    parts = Path(editable).with_suffix("").parts
+    if len(parts) != 3 or parts[0] != "src":
+        raise RuntimeError(
+            f"editable {editable!r} must be a src/<package>/<module>.py path"
+        )
+    import importlib
+
+    return importlib.import_module(".".join(parts[1:]))
+
+
 def fit(config: dict, records=None) -> dict:
     """Fit one candidate on the trimmed inputs; write weights + architecture."""
-    import research.candidate as candidate
     from research.model_export import save_eval_model
+    from research.tasks import adapter_for
+
+    adapter = adapter_for(config.get("task", "constitution"))
+    candidate = import_candidate(config)
 
     actual_sha = assert_candidate_binding(config)
 
-    fit_manifest = load_real_manifest(config["fit_manifest_path"])
+    fit_manifest = adapter.load_manifest(config["fit_manifest_path"])
     if records is None:
-        records = records_from_json(Path(config["fit_records_path"]).read_text())
+        records = adapter.records_from_json(
+            Path(config["fit_records_path"]).read_text()
+        )
     fit_rows = set(fit_manifest["subject_row_by_id"].values())
     leaked = sorted({r.subject_index for r in records} - fit_rows)
     if leaked:
@@ -84,7 +109,7 @@ def fit(config: dict, records=None) -> dict:
     import torch
 
     torch.manual_seed(seed)  # before training_fold_data and build_model (H-06)
-    fold = training_fold_data(fit_manifest, records, config)
+    fold = adapter.training_fold_data(fit_manifest, records, config)
 
     started = time.monotonic()
     model = candidate.build_model(fold)

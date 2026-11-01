@@ -247,9 +247,11 @@ def test_worker_budget_allows_the_final_legal_unlock():
         with pytest.raises(RuntimeError, match="unlock budget"):
             finalize_mod._assert_worker_budget(ledger)
     # and the worker entry uses the worker-side check, not the driver's
+    # (the call now passes the task's own budget — see ledger_params)
     worker_src = inspect.getsource(finalize_mod._worker)
-    assert "_assert_worker_budget(ledger)" in worker_src
-    assert "_assert_unlock_budget(ledger)" not in worker_src
+    assert "_assert_worker_budget(" in worker_src
+    assert "_assert_worker_budget(ledger, max_unlocks=" in worker_src
+    assert "_assert_unlock_budget(" not in worker_src
 
 
 def test_the_ledger_is_global_and_not_inside_out(tmp_path):

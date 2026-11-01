@@ -16,17 +16,19 @@ What this must not do:
   (fit only) and then `research.evaluator --mode holdout` (state_dict only,
   holdout rebuilt from the frozen parent manifest) — the same isolated
   evaluation process the selection folds use;
-* unlock the holdout without paying. Phase 1 allows two unlock events
-  (AGENTS.md rule 11). The unlock event is the GRANT of read permission, not
-  a successful read: the driver appends the intent event BEFORE spawning the
-  fit worker (under an flock, into the repo-global ledger), and a crashed or
-  killed worker has still consumed the event. The worker re-checks the
-  ledger — its own budget assertion and the presence of its specific event —
-  before importing the candidate, and `python -m research.finalize` invoked
-  by hand cannot skip that check: the worker validates the event itself. The
-  ledger lives at `<repo-root>/runs/holdout-unlock-ledger.jsonl` (resolved
-  through the worktree's git common dir), never inside --out, so changing
-  the output directory cannot reset the count.
+ * unlock the holdout without paying. Phase 1 allows two unlock events for
+ the constitution task (AGENTS.md rule 11); the syndrome task (#53) has its
+ own ledger file and its own budget (see `ledger_params`). The unlock event
+ is the GRANT of read permission, not a successful read: the driver appends
+ the intent event BEFORE spawning the fit worker (under an flock, into the
+ task's repo-global ledger), and a crashed or killed worker has still
+ consumed the event. The worker re-checks the ledger — its own budget
+ assertion and the presence of its specific event — before importing the
+ candidate, and `python -m research.finalize` invoked by hand cannot skip
+ that check: the worker validates the event itself. The ledger lives at
+ `<repo-root>/runs/<task's ledger file>` (resolved through the worktree's
+ git common dir), never inside --out, so changing the output directory
+ cannot reset the count.
 """
 
 from __future__ import annotations
@@ -44,23 +46,42 @@ import traceback
 import uuid
 from pathlib import Path
 
-#: AGENTS.md rule 11: at most two holdout unlock events in Phase 1.
+#: AGENTS.md rule 11: at most two holdout unlock events in Phase 1 for the
+#: constitution task. The syndrome task (#53) has its own ledger file and its
+#: own budget (MAX_UNLOCKS_SD): a task neither shares nor extends another
+#: task's exhausted budget.
 MAX_UNLOCKS = 2
+MAX_UNLOCKS_SD = 1
 UNLOCK_LEDGER_FILE = "holdout-unlock-ledger.jsonl"
+UNLOCK_LEDGER_FILE_SD = "holdout-unlock-ledger-sd.jsonl"
 UNLOCK_LEDGER_DIR = "runs"
+
+
+def ledger_params(task: str = "constitution") -> tuple[str, int]:
+    """(ledger filename, unlock budget) for one research task."""
+    if task == "constitution":
+        return UNLOCK_LEDGER_FILE, MAX_UNLOCKS
+    if task == "syndrome":
+        return UNLOCK_LEDGER_FILE_SD, MAX_UNLOCKS_SD
+    raise ValueError(
+        f"unknown research task {task!r}; expected 'constitution' or 'syndrome'"
+    )
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def global_ledger_path(worktree: Path) -> Path:
-    """The repo-global ledger, resolved from the worktree's git common dir.
+def global_ledger_path(worktree: Path, task: str = "constitution") -> Path:
+    """The task's repo-global ledger, resolved from the worktree's git common
+    dir.
 
     Anchored to the repository, not to --out: the unlock budget is a property
-    of the project's lifetime, and a ledger inside the output directory would
-    reset on every new output path (or on deleting one file).
-    """
+    of the task's lifetime, and a ledger inside the output directory would
+    reset on every new output path (or on deleting one file). Tasks get
+    separate files, so the syndrome task's unlocks never touch the
+    constitution task's exhausted ledger."""
+    ledger_file, _ = ledger_params(task)
     worktree = Path(worktree)
     try:
         result = subprocess.run(
@@ -69,9 +90,9 @@ def global_ledger_path(worktree: Path) -> Path:
             text=True, capture_output=True, check=True,
         )
         git_dir = Path(result.stdout.strip())
-        return git_dir.parent / UNLOCK_LEDGER_DIR / UNLOCK_LEDGER_FILE
+        return git_dir.parent / UNLOCK_LEDGER_DIR / ledger_file
     except (subprocess.CalledProcessError, OSError):
-        return worktree / UNLOCK_LEDGER_DIR / UNLOCK_LEDGER_FILE
+        return worktree / UNLOCK_LEDGER_DIR / ledger_file
 
 
 def _read_ledger_lines(ledger_path: Path) -> list[str]:
@@ -106,36 +127,40 @@ def ledger_contains(ledger_path: Path, event_id: str) -> bool:
     return False
 
 
-def _assert_unlock_budget(ledger_path: Path) -> int:
+def _assert_unlock_budget(ledger_path: Path,
+                          max_unlocks: int = MAX_UNLOCKS) -> int:
     """DRIVER-side check, run BEFORE charging: refuse when no slot is left."""
     used = unlock_count(ledger_path)
-    if used >= MAX_UNLOCKS:
-        raise _unlock_budget_error(ledger_path, used)
+    if used >= max_unlocks:
+        raise _unlock_budget_error(ledger_path, used, max_unlocks)
     return used
 
 
-def _assert_worker_budget(ledger_path: Path) -> int:
+def _assert_worker_budget(ledger_path: Path,
+                          max_unlocks: int = MAX_UNLOCKS) -> int:
     """WORKER-side check, run AFTER this run's event was charged: the
     driver's own charge for the current run may legitimately have filled
-    the budget, so only an OVER-spend (a ledger beyond MAX_UNLOCKS, i.e.
+    the budget, so only an OVER-spend (a ledger beyond max_unlocks, i.e.
     someone bypassed the driver) is refused here. Using the driver-side
     `>=` check here would crash every legal final unlock (round-4 review
     finding 1)."""
     used = unlock_count(ledger_path)
-    if used > MAX_UNLOCKS:
-        raise _unlock_budget_error(ledger_path, used)
+    if used > max_unlocks:
+        raise _unlock_budget_error(ledger_path, used, max_unlocks)
     return used
 
 
-def _unlock_budget_error(ledger_path: Path, used: int) -> RuntimeError:
+def _unlock_budget_error(ledger_path: Path, used: int,
+                         max_unlocks: int) -> RuntimeError:
     return RuntimeError(
-        f"holdout unlock budget exhausted: {used} of {MAX_UNLOCKS} events "
+        f"holdout unlock budget exhausted: {used} of {max_unlocks} events "
         f"recorded in {ledger_path}; a further unlock needs a new data "
         "milestone or explicit user authorisation (AGENTS.md rule 11)"
     )
 
 
-def _charge_unlock_event(ledger_path: Path, event: dict) -> None:
+def _charge_unlock_event(ledger_path: Path, event: dict,
+                         max_unlocks: int = MAX_UNLOCKS) -> None:
     """Count and append in ONE exclusive critical section (H-03).
 
     The count used to happen outside the lock, so two concurrent drivers
@@ -152,8 +177,8 @@ def _charge_unlock_event(ledger_path: Path, event: dict) -> None:
         try:
             fh.seek(0)
             used = sum(1 for line in fh if line.strip())
-            if used >= MAX_UNLOCKS:
-                raise _unlock_budget_error(ledger_path, used)
+            if used >= max_unlocks:
+                raise _unlock_budget_error(ledger_path, used, max_unlocks)
             fh.write(json.dumps(event, sort_keys=True) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
@@ -171,32 +196,33 @@ def refit_and_score(
     seed: int = 0,
     budget_seconds: float | None = None,
     records=None,
+    task: str = "constitution",
     spawn=None,
     spawn_holdout=None,
 ) -> dict:
     """Drive the finalize: pool manifest here, fitting + holdout in children.
 
-    The driver never imports research.candidate: the champion's code runs in
-    the fit subprocess only, and the holdout is scored in an evaluator
+    The driver never imports the candidate module: the champion's code runs
+    in the fit subprocess only, and the holdout is scored in an evaluator
     subprocess. `records`, `spawn` and `spawn_holdout` exist so tests can
     inject a parsed fixture and observe the spawns without a real workbook or
-    interpreter.
-    """
-    from data.mendeley import load_mendeley_scores, records_to_json
-    from data.real_split import load_real_manifest, pool_manifest
+    interpreter. `task` selects the data/scoring adapter AND the unlock
+    ledger (per-task file and budget — see ledger_params)."""
     from research.frozen import TIME_BUDGET_SECONDS
+    from research.tasks import adapter_for
 
+    adapter = adapter_for(task)
     worktree = Path(worktree)
     out_dir = Path(out_dir)
     budget = TIME_BUDGET_SECONDS if budget_seconds is None else budget_seconds
 
     candidate_path = worktree / editable
     expected_sha = _sha256(candidate_path)
-    frozen = load_real_manifest(manifest_path)
+    frozen = adapter.load_manifest(manifest_path)
     dataset_records = None if records is None else list(records)
     if records is None:
-        records = load_mendeley_scores(dataset_path)
-    pool = pool_manifest(
+        records = adapter.load_records(dataset_path)
+    pool = adapter.pool_manifest(
         frozen, records,
         notes=f"source-level champion {commit[:8]} refit: selection pool train+dev",
     ).data
@@ -208,7 +234,7 @@ def refit_and_score(
     # file path enters its config, and pool_manifest carries no holdout)
     pool_rows = set(pool["subject_row_by_id"].values())
     pool_records_path = champion_dir / "pool-records.json"
-    pool_records_path.write_text(records_to_json(
+    pool_records_path.write_text(adapter.records_to_json(
         [r for r in records if r.subject_index in pool_rows]
     ))
 
@@ -216,21 +242,24 @@ def refit_and_score(
     # not a successful read — a crashed worker has still consumed it. Count
     # and append happen inside one exclusive critical section, so concurrent
     # drivers cannot both slip under the budget (H-03).
-    ledger = global_ledger_path(worktree)
+    ledger_file, max_unlocks = ledger_params(task)
+    ledger = global_ledger_path(worktree, task)
     event = {
         "event_id": uuid.uuid4().hex,
         "event": "holdout_unlock_intent",
+        "task": task,
         "unlocked_at": _iso(),
         "champion_commit": commit,
         "candidate_sha256": expected_sha,
         "pool_manifest_sha256": pool["manifest_sha256"],
         "selection_parent_manifest_sha256": frozen["manifest_sha256"],
     }
-    _charge_unlock_event(ledger, event)
+    _charge_unlock_event(ledger, event, max_unlocks=max_unlocks)
 
     config = {
         "worktree_path": str(worktree),
         "editable": editable,
+        "task": task,
         "candidate_sha256": expected_sha,
         "git_commit": commit,
         "seed": seed,
@@ -250,6 +279,7 @@ def refit_and_score(
 
     holdout_config = {
         "worktree_path": str(worktree),
+        "task": task,
         "data": {
             "pool_manifest_path": str(pool_path),
             "frozen_manifest_path": str(manifest_path),
@@ -260,7 +290,7 @@ def refit_and_score(
         # records were injected (tests / smoke): pass them to the evaluator
         # subprocess as a file instead of a workbook path
         records_path = champion_dir / "holdout-input-records.json"
-        records_path.write_text(records_to_json(dataset_records))
+        records_path.write_text(adapter.records_to_json(dataset_records))
         holdout_config["data"]["records_path"] = str(records_path)
     else:
         holdout_config["data"]["dataset_path"] = str(dataset_path)
@@ -407,9 +437,10 @@ def _worker(config: dict, records=None) -> dict:
     """Fit the champion on the pool (worker side). No holdout is read here:
     this process's config carries no frozen-manifest path, no dataset path
     and no holdout rows — the holdout is scored by the evaluator subprocess."""
-    from data.real_split import load_real_manifest
-    from research.frozen import training_fold_data
-    from research.model_export import save_eval_model
+    from research.tasks import adapter_for
+    from research.train_worker import import_candidate
+
+    adapter = adapter_for(config.get("task", "constitution"))
 
     # the code↔SHA binding is checked BEFORE the agent-authored module is
     # imported: what fits is provably what the record binds
@@ -428,7 +459,8 @@ def _worker(config: dict, records=None) -> dict:
     # `python -m research.finalize` by hand): budget must not be exhausted
     # and THIS run's intent event must already be recorded
     ledger = Path(config["ledger_path"])
-    _assert_worker_budget(ledger)
+    _, max_unlocks = ledger_params(config.get("task", "constitution"))
+    _assert_worker_budget(ledger, max_unlocks=max_unlocks)
     if not ledger_contains(ledger, config["unlock_event_id"]):
         raise RuntimeError(
             f"unlock intent event {config['unlock_event_id'][:8]}… is not in "
@@ -436,15 +468,11 @@ def _worker(config: dict, records=None) -> dict:
             "granted by the ledger, not by this worker's success"
         )
 
-    import research.candidate as candidate
-
     if records is None:
-        from data.mendeley import records_from_json
-
-        records = records_from_json(
+        records = adapter.records_from_json(
             Path(config["data"]["pool_records_path"]).read_text()
         )
-    pool = load_real_manifest(config["data"]["pool_manifest_path"])
+    pool = adapter.load_manifest(config["data"]["pool_manifest_path"])
     if pool["split"]["holdout"]:
         raise RuntimeError(
             "pool manifest still carries a holdout partition; refusing to fit "
@@ -461,9 +489,12 @@ def _worker(config: dict, records=None) -> dict:
         )
     import torch
 
+    from research.model_export import save_eval_model
+
     torch.manual_seed(seed)  # before training_fold_data and build_model (H-06)
-    fold = training_fold_data(pool, records, config)
+    fold = adapter.training_fold_data(pool, records, config)
     started = time.monotonic()
+    candidate = import_candidate(config)
     model = candidate.build_model(fold)
     candidate.train(model, fold, budget, seed)
     fit_seconds = round(time.monotonic() - started, 2)

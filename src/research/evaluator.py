@@ -125,6 +125,15 @@ def _load_model(request: dict):
     return load_eval_model(request["weights_path"], request["architecture_path"])
 
 
+def _editable_path(config: dict) -> Path | None:
+    """The candidate file this run's config binds, when the config carries it."""
+    worktree = config.get("worktree_path")
+    editable = config.get("editable")
+    if worktree and editable:
+        return Path(worktree) / editable
+    return None
+
+
 def score_fold(config: dict, request: dict, records=None) -> dict:
     """Rebuild the fold from the frozen manifest and score the saved model.
 
@@ -132,74 +141,39 @@ def score_fold(config: dict, request: dict, records=None) -> dict:
     is rebuilt (deterministic — identical config yields an identical fold
     manifest, scaler and batches), and the model is rebuilt from state_dict +
     the frozen architecture description. `records` exists so tests can inject
-    a parsed fixture.
-    """
-    from research.frozen import build_fold
-    from runtime.real_data import real_eval_manifest
-    from runtime.tcm_eval import TCMTrustedEvaluator
+    a parsed fixture. The task's adapter (config["task"]) owns the fold and
+    scoring seams."""
+    from research.tasks import adapter_for
 
+    adapter = adapter_for(config.get("task", "constitution"))
     assert_integrity(config, request)
     if records is None:
-        records = _load_records(config)
-    fold_data, fold_manifest = build_fold(
+        records = adapter.load_eval_records(config)
+    fold_data, fold_manifest = adapter.build_fold(
         config, config["data"]["manifest_path"], config["data"]["dataset_path"],
         request["fold"], request["folds"], request["repeat"], records=records,
     )
-    evaluator = TCMTrustedEvaluator(real_eval_manifest(fold_manifest))
     model = _load_model(request)
-    install_candidate_import_guard()
-    report = evaluator.evaluate(model, fold_data.dev, partition="dev")
+    install_candidate_import_guard(_editable_path(config))
+    report = adapter.evaluate_model(model, fold_manifest, fold_data.dev, "dev")
     return {"primary_value": float(report.primary_value)}
 
 
 def score_holdout(config: dict, request: dict, records=None) -> dict:
     """The single holdout read of a finalize run, in this isolated process.
 
-    The holdout view is rebuilt from the frozen parent manifest (holdout ids
-    + row mapping) under the pool manifest's own refit scaler; the pool
-    manifest on disk carries no holdout at all, so nothing the fit worker
-    could have read points here. Baselines are computed in the same isolated
-    process, under the same view.
-    """
-    from data.real_split import holdout_view, load_real_manifest
-    from runtime.baselines import evaluate_baselines
-    from runtime.real_data import RealBatchProvider, real_eval_manifest
-    from runtime.tcm_eval import TCMTrustedEvaluator
+    The model is loaded state_dict-only and handed to the task's adapter,
+    which rebuilds the holdout view from the frozen parent manifest and
+    computes the task's report and baselines under that view. Baselines are
+    computed in the same isolated process, under the same view."""
+    from research.tasks import adapter_for
 
+    adapter = adapter_for(config.get("task", "constitution"))
     if records is None:
-        records = _load_records(config)
-    pool = load_real_manifest(config["data"]["pool_manifest_path"])
-    frozen = load_real_manifest(config["data"]["frozen_manifest_path"])
-    view = holdout_view(pool, frozen)
+        records = adapter.load_eval_records(config)
     model = _load_model(request)
-    install_candidate_import_guard()
-    holdout = RealBatchProvider(view, records, "holdout", batch_size=64)
-    report = TCMTrustedEvaluator(real_eval_manifest(view)).evaluate(
-        model, holdout, partition="holdout"
-    )
-    baselines = evaluate_baselines(view, records)
-    return {
-        "holdout": report.to_dict(),
-        "baselines": {
-            name: {
-                "macro_ap": vals["holdout"]["macro_ap"],
-                "macro_f1": vals["holdout"]["macro_f1"],
-                "subject_mae": vals["holdout"]["subject_mae"],
-            }
-            for name, vals in baselines.items()
-            if isinstance(vals, dict) and "holdout" in vals
-        },
-    }
-
-
-def _load_records(config: dict):
-    """Trusted-side records: the workbook, or the JSON the driver wrote."""
-    from data.mendeley import load_mendeley_scores, records_from_json
-
-    data = config["data"]
-    if data.get("records_path"):
-        return records_from_json(Path(data["records_path"]).read_text())
-    return load_mendeley_scores(data["dataset_path"])
+    install_candidate_import_guard(_editable_path(config))
+    return adapter.score_holdout(config, request, records, model)
 
 
 def main(argv: list[str] | None = None) -> int:

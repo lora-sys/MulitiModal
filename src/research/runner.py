@@ -42,19 +42,20 @@ from research.frozen import TIME_BUDGET_GRACE_SECONDS
 
 def run(config: dict, folds: int, repeats: int, records=None,
         spawn_training=None, spawn_evaluator=None) -> dict:
-    from data.mendeley import load_mendeley_scores, records_to_json
-    from data.real_split import fold_manifest, load_real_manifest
     from research.evaluator import integrity_snapshot
     from research.frozen import TIME_BUDGET_SECONDS, selection_fold_ids
+    from research.tasks import adapter_for
 
+    task = config.get("task", "constitution")
+    adapter = adapter_for(task)
     manifest_path = config["data"]["manifest_path"]
     dataset_path = config["data"]["dataset_path"]
     budget = float(config.get("time_budget_seconds", TIME_BUDGET_SECONDS))
     spawn_train = spawn_training or _spawn_training
     spawn = spawn_evaluator or _spawn_evaluator
-    manifest = load_real_manifest(manifest_path)
+    manifest = adapter.load_manifest(manifest_path)
     if records is None:
-        records = load_mendeley_scores(dataset_path)
+        records = adapter.load_records(dataset_path)
     candidate_sha = integrity_snapshot(config).get("candidate_sha256")
     scores: list[float | None] = []
     fold_seconds: list[float] = []
@@ -68,7 +69,7 @@ def run(config: dict, folds: int, repeats: int, records=None,
                 # the fit manifest is the fold manifest with dev dropped: holdout
                 # emptied, scaler refit on the fold's train rows, row mapping
                 # pruned to exactly those rows
-                fit_manifest = fold_manifest(
+                fit_manifest = adapter.fold_manifest(
                     manifest, records, train_ids, [],
                     notes=f"fit inputs for selection fold {fold} repeat {repeat}",
                 ).data
@@ -77,10 +78,11 @@ def run(config: dict, folds: int, repeats: int, records=None,
                 fit_manifest_path = work / f"fit-manifest-r{repeat}-f{fold}.json"
                 fit_manifest_path.write_text(json.dumps(fit_manifest, ensure_ascii=False))
                 fit_records_path = work / f"fit-records-r{repeat}-f{fold}.json"
-                fit_records_path.write_text(records_to_json(fit_records))
+                fit_records_path.write_text(adapter.records_to_json(fit_records))
                 worker_config = {
                     "worktree_path": config["worktree_path"],
                     "editable": config["editable"],
+                    "task": task,
                     "candidate_sha256": candidate_sha,
                     "seed": int(config.get("trainer", {}).get("seed", 0)),
                     "time_budget_seconds": budget,

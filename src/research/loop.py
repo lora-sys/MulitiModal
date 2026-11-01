@@ -40,7 +40,6 @@ from research.guard import (
     validate_source_patch,
 )
 from runtime.manifest import MANIFEST_FILE, RunManifestStore
-from runtime.tcm_eval import PRIMARY_METRIC
 
 #: Minimum score gain per net unit of complexity added to the editable file,
 #: where the unit is one AST statement/expression node (see
@@ -169,7 +168,10 @@ class SourceResearchLoop:
         seed: int = 0,
         timeout_s: float | None = None,
         max_wall_clock_s: float = 6 * 3600,
+        task: str = "constitution",
     ) -> None:
+        from research.tasks import adapter_for
+
         self.worktree = worktree
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -180,6 +182,10 @@ class SourceResearchLoop:
         self.repeats = repeats
         self.margin_sem = margin_sem
         self.seed = seed
+        # the task selects the data/scoring seams the runner and evaluator
+        # subprocesses will use, and the metric name the manifest records
+        self.task = task
+        self.primary_metric = adapter_for(task).primary_metric
         from research.frozen import TIME_BUDGET_GRACE_SECONDS, TIME_BUDGET_SECONDS
 
         self.budget = TIME_BUDGET_SECONDS
@@ -214,7 +220,7 @@ class SourceResearchLoop:
             "repeats": self.repeats,
             "margin_sem": self.margin_sem,
             "min_gain_per_added_node": MIN_GAIN_PER_ADDED_NODE,
-            "primary_metric": PRIMARY_METRIC,
+            "primary_metric": self.primary_metric,
             "primary_direction": "max",
             "champion_commit": champion.get("git_commit_sha") if champion else None,
             "best_metric": champion.get("best_so_far") if champion else None,
@@ -364,6 +370,7 @@ class SourceResearchLoop:
             "data": {"manifest_path": self.manifest_path, "dataset_path": self.dataset_path},
             "train_provider": {"batch_size": 32},
             "trainer": {"seed": self.seed},
+            "task": self.task,
             "time_budget_seconds": self.budget,
             # the runner and its evaluator subprocess bind the integrity
             # snapshot (and the candidate-file hash) to this worktree
@@ -389,7 +396,7 @@ class SourceResearchLoop:
                 "REVERT", "overran",
                 f"fold time exceeded the {self.budget:.0f}s budget "
                 f"(fold_seconds {result['fold_seconds']})",
-                metrics={"primary_metric": PRIMARY_METRIC,
+                metrics={"primary_metric": self.primary_metric,
                          "primary_value": result["primary_value"]},
             )
 
@@ -402,7 +409,7 @@ class SourceResearchLoop:
         previous_best = champion.get("best_so_far") if champion else None
         keep, reason = self.decide(value, sem, growth, previous_best, self.margin_sem)
         entry["metrics"] = {
-            "primary_metric": PRIMARY_METRIC, "primary_value": value,
+            "primary_metric": self.primary_metric, "primary_value": value,
             "primary_std": result["primary_std"], "primary_sem": sem,
             "folds": result["folds"], "fold_seconds": result["fold_seconds"],
         }
