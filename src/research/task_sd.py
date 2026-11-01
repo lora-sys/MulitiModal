@@ -18,8 +18,9 @@ What is task-owned here:
 
 * `SyndromeRecord` — one case: a real subject `user_id` (R1 F3: the manifest
   split is subject-level, hard rule 2), a frozen feature vector per feature
-  group (v0 contract: the featurizer runs OUTSIDE the loop; the candidate
-  never sees raw text) plus one integer syndrome label or None (unlabeled
+  group (float_groups modality, v0: the featurizer runs OUTSIDE the loop;
+  the candidate never sees raw text) OR the raw `input_text` (hashed_text
+  modality, below), plus one integer syndrome label or None (unlabeled
   cases are ABSTAIN, never zero-filled — AGENTS.md rule 5);
 * `build_syndrome_manifest` — the frozen manifest builder (task_type
   "syndrome_classification", label taxonomy version, n_classes); the split
@@ -30,6 +31,21 @@ What is task-owned here:
   taxonomy (issue #53's primary metric), partition-leakage refusal,
   fail-closed when nothing is observable;
 * the majority-class baseline for the holdout read.
+
+Modality "hashed_text" (the real-scale path, ~44k cases): the manifest
+freezes a STATELESS sklearn HashingVectorizer parameter set (char_wb 1-3
+grams, 2^16 buckets, alternate_sign off, L2 norm) and the provider rebuilds
+the vectorizer from those parameters and vectorizes each batch on the fly —
+inlining 65k-dim vectors in records JSON is not storable, and materializing
+them dense is not tractable. Because the vectorizer has no fitted state,
+hard rule 3 (in-fold fitting) is vacuously satisfied: no statistics are
+estimated from ANY data, train fold included, so the manifest records an
+identity scaler and derived (fold/pool) manifests carry it verbatim. This
+is the same shape as the constitution task's manifest-frozen scaler: the
+evaluator subprocess never executes candidate code, and features are
+rebuilt deterministically from manifest parameters alone. Raw case text
+lives in the records JSON (upstream, outside Git — AGENTS.md rule 4), never
+in the manifest.
 
 Evidence state: this adapter and `research/candidate_sd.py` are validated on
 synthetic fixtures only (SMOKE_ONLY — engineering validity, no scientific
@@ -64,7 +80,24 @@ DATASET_ID = "tcm-sd-v1"
 FEATURE_GROUP = "frozen_text_features"
 MODALITY_NAME = "text"
 
+#: modality kinds: "float_groups" carries frozen inline vectors (v0, the
+#: default); "hashed_text" carries raw text the provider vectorizes lazily
+MODALITY_KIND_FLOAT_GROUPS = "float_groups"
+MODALITY_KIND_HASHED_TEXT = "hashed_text"
+#: frozen stateless vectorization (mainline arbitration): exact sklearn
+#: HashingVectorizer semantics, recorded verbatim in the manifest modality
+#: params and rebuilt from them by the provider. Seed-free by construction:
+#: hashing has no fitted state and no randomness.
+HASHED_TEXT_PARAMS = {
+    "analyzer": "char_wb",
+    "ngram_range": [1, 3],
+    "n_features": 65536,
+    "alternate_sign": False,
+    "norm": "l2",
+}
+
 INPUT_SPEC_PREFIX = "tcm-sd-text-v1"
+INPUT_SPEC_VERSION_HASHED_PREFIX = "tcm-sd-text-v2"
 PRIMARY_METRIC_SD = "syndrome/macro_f1"
 EVAL_METRIC_VERSION = "tcm-sd-eval-v1"
 PREDICTION_KEY = "syndrome_probs"
@@ -78,7 +111,7 @@ SUBJECT_ID_RE = re.compile(r"^sd-r\d{5,}$")
 
 @dataclass
 class SyndromeRecord:
-    """One case: frozen features per group, one syndrome label or None.
+    """One case: frozen features OR raw text, one syndrome label or None.
 
     `label` is an index into the frozen taxonomy (0 .. n_classes-1). None
     means the case's label is unavailable — it stays unlabeled everywhere
@@ -89,6 +122,13 @@ class SyndromeRecord:
     of one user land in one partition. `norm_syndrome` feeds the same
     majority-label stratification the data layer uses; when unknown, the
     split degrades to a single stratum and stays deterministic.
+
+    `input_text` is the raw case text for the hashed_text modality (short
+    text or full clinical narrative, decided upstream; it may carry real
+    clinical content and must never be committed to Git — AGENTS.md rule 4).
+    Contract: `features` may be an empty dict if and only if `input_text` is
+    non-empty and the manifest modality is hashed_text; a record with
+    neither is refused everywhere (fail-closed).
     """
 
     subject_index: int
@@ -96,6 +136,7 @@ class SyndromeRecord:
     features: dict[str, list[float]]
     label: int | None
     norm_syndrome: str = ""
+    input_text: str = ""
     provenance: dict = field(default_factory=dict)
 
 
@@ -108,6 +149,7 @@ def records_to_json(records: list[SyndromeRecord]) -> str:
                 "features": r.features,
                 "label": r.label,
                 "norm_syndrome": r.norm_syndrome,
+                "input_text": r.input_text,
                 "provenance": r.provenance,
             }
             for r in records
@@ -127,6 +169,7 @@ def records_from_json(text: str) -> list[SyndromeRecord]:
             },
             label=None if item.get("label") is None else int(item["label"]),
             norm_syndrome=str(item.get("norm_syndrome", "")),
+            input_text=str(item.get("input_text", "")),
             provenance=dict(item.get("provenance", {})),
         )
         for item in json.loads(text)
@@ -148,6 +191,43 @@ def subject_id(row: int) -> str:
     return f"sd-r{row:05d}"
 
 
+def _modality_kind(manifest: dict) -> str:
+    """The manifest's text-modality kind ("float_groups" for v0 manifests)."""
+    return manifest["modalities"][MODALITY_NAME].get(
+        "kind", MODALITY_KIND_FLOAT_GROUPS
+    )
+
+
+def _hashing_vectorizer(params: dict):
+    """Rebuild the frozen vectorizer from manifest parameters.
+
+    Deterministic by construction: HashingVectorizer is stateless (nothing
+    fitted, nothing random), so identical parameters yield identical
+    features on every process, every run.
+    """
+    from sklearn.feature_extraction.text import HashingVectorizer
+
+    return HashingVectorizer(
+        analyzer=params["analyzer"],
+        ngram_range=tuple(params["ngram_range"]),
+        n_features=int(params["n_features"]),
+        alternate_sign=bool(params["alternate_sign"]),
+        norm=params["norm"],
+    )
+
+
+def _frozen_scaler(manifest: dict) -> dict | None:
+    """The verbatim scaler for derived manifests, or None to refit.
+
+    hashed_text features are stateless: derived (fold/pool) manifests carry
+    the parent's identity scaler instead of a refit, which would crash on
+    feature-less records and would estimate nothing anyway (hard rule 3 is
+    vacuous when no statistics are ever fitted)."""
+    if _modality_kind(manifest) != MODALITY_KIND_HASHED_TEXT:
+        return None
+    return json.loads(json.dumps(manifest["scaler"]))
+
+
 def build_syndrome_manifest(
     records: list[SyndromeRecord],
     *,
@@ -156,6 +236,7 @@ def build_syndrome_manifest(
     label_taxonomy_version: str,
     label_tier: str = "PUBLISHED",
     split_seed: int = SPLIT_SEED,
+    modality_kind: str = MODALITY_KIND_FLOAT_GROUPS,
     notes: str = "",
 ):
     """Freeze the syndrome split into a hash-identified manifest.
@@ -176,12 +257,26 @@ def build_syndrome_manifest(
     assignment is a deterministic function of (records, seed). The
     data-layer partitions name the third split "test"; the manifest exposes
     it as "holdout" (the engine's naming) with identical membership.
+
+    `modality_kind` selects the input contract: "float_groups" keeps the v0
+    frozen inline vectors with a train-fold-fitted scaler (#29); "hashed_text"
+    freezes the stateless HashingVectorizer parameter set into the modality
+    params, requires every record to carry non-empty `input_text`, and
+    records an identity scaler — the vectorizer has no fitted state, so no
+    statistics are estimated from any data and the in-fold fitting rule is
+    vacuously satisfied. Raw text never enters the manifest under either
+    kind.
     """
     from data.real_split import RealManifest, _fit_scaler
     from data.tcm_sd import DEV_RATIO, TEST_RATIO, TRAIN_RATIO, subject_partitions
 
     if n_classes < 2:
         raise ValueError(f"n_classes must be >= 2, got {n_classes}")
+    if modality_kind not in (MODALITY_KIND_FLOAT_GROUPS, MODALITY_KIND_HASHED_TEXT):
+        raise ValueError(
+            f"unknown modality_kind {modality_kind!r}; expected "
+            f"{(MODALITY_KIND_FLOAT_GROUPS, MODALITY_KIND_HASHED_TEXT)}"
+        )
     indices = [r.subject_index for r in records]
     if len(set(indices)) != len(indices):
         raise ValueError(
@@ -200,7 +295,14 @@ def build_syndrome_manifest(
                 f"record {r.subject_index} label {r.label} outside the frozen "
                 f"taxonomy of {n_classes} classes"
             )
-        if FEATURE_GROUP not in r.features:
+        if modality_kind == MODALITY_KIND_HASHED_TEXT:
+            if not r.input_text.strip():
+                raise ValueError(
+                    f"record {r.subject_index} carries neither features nor "
+                    "input_text; the hashed_text contract is fail-closed "
+                    "(empty features are admitted only against non-empty text)"
+                )
+        elif FEATURE_GROUP not in r.features:
             raise ValueError(
                 f"record {r.subject_index} carries no {FEATURE_GROUP!r} group; "
                 "the v0 contract is one frozen feature vector per case"
@@ -230,13 +332,40 @@ def build_syndrome_manifest(
                 f"{len(user_parts['train'] | user_parts['dev'] | user_parts['test'])} "
                 "users; the subject-level ratios leave nothing to score"
             )
-    # fold-only scaler: statistics from TRAIN rows exclusively (#29). The
-    # features are frozen (featurized outside the loop), so this standardizes
-    # them; any future featurization that fits statistics must go through
-    # this same train-fold-only path.
-    scaler = _fit_scaler(
-        partitions["train"], by_row, {MODALITY_NAME: (FEATURE_GROUP,)},
-    )
+    # fold-only scaler: statistics from TRAIN rows exclusively (#29) — for
+    # float_groups, whose features are frozen (featurized outside the loop),
+    # this standardizes them; any future featurization that fits statistics
+    # must go through this same train-fold-only path. hashed_text features
+    # are stateless, so nothing is fit anywhere and the scaler is identity.
+    if modality_kind == MODALITY_KIND_HASHED_TEXT:
+        scaler = {MODALITY_NAME: {"kind": "identity"}}
+        scaler_policy = (
+            "identity: hashed_text features come from the stateless "
+            "HashingVectorizer whose parameters are frozen in this manifest; "
+            "no statistics are estimated from any data (in-fold rule #29 "
+            "vacuous) and L2 normalization is built into the vectorizer"
+        )
+        scaler_fit_rows = 0
+        modality_params = {
+            "feature_groups": [FEATURE_GROUP],
+            "dim": HASHED_TEXT_PARAMS["n_features"],
+            "kind": MODALITY_KIND_HASHED_TEXT,
+            **HASHED_TEXT_PARAMS,
+        }
+    else:
+        scaler = _fit_scaler(
+            partitions["train"], by_row, {MODALITY_NAME: (FEATURE_GROUP,)},
+        )
+        scaler_policy = (
+            "per-column mean/std over finite values of TRAIN-fold rows only "
+            "(#29); degenerate columns transform to 0.0; features are frozen "
+            "vectors produced outside the loop"
+        )
+        scaler_fit_rows = len(partitions["train"])
+        modality_params = {
+            "feature_groups": [FEATURE_GROUP],
+            "dim": len(scaler[MODALITY_NAME]["mean"]),
+        }
     data = {
         "version": MANIFEST_VERSION,
         "dataset_id": DATASET_ID,
@@ -248,10 +377,7 @@ def build_syndrome_manifest(
         "label_version": f"tcm-sd-labels-v1:{label_taxonomy_version}",
         "label_taxonomy_version": label_taxonomy_version,
         "n_classes": n_classes,
-        "modalities": {
-            MODALITY_NAME: {"feature_groups": [FEATURE_GROUP],
-                            "dim": len(scaler[MODALITY_NAME]["mean"])},
-        },
+        "modalities": {MODALITY_NAME: modality_params},
         "split": {
             "seed": split_seed,
             "fractions": {"train": TRAIN_RATIO, "dev": DEV_RATIO, "holdout": TEST_RATIO},
@@ -260,12 +386,8 @@ def build_syndrome_manifest(
         },
         "subject_row_by_id": {subject_id(r): r for r in sorted(indices)},
         "scaler": scaler,
-        "scaler_policy": (
-            "per-column mean/std over finite values of TRAIN-fold rows only "
-            "(#29); degenerate columns transform to 0.0; features are frozen "
-            "vectors produced outside the loop"
-        ),
-        "scaler_fit_rows": len(partitions["train"]),
+        "scaler_policy": scaler_policy,
+        "scaler_fit_rows": scaler_fit_rows,
         "notes": notes,
     }
     digest = _manifest_digest(data)
@@ -274,13 +396,23 @@ def build_syndrome_manifest(
 
 
 def _input_spec_version(manifest: dict) -> str:
+    taxonomy = manifest["label_taxonomy_version"]
+    params = manifest["modalities"][MODALITY_NAME]
+    if params.get("kind") == MODALITY_KIND_HASHED_TEXT:
+        # v2 encodes the vectorization contract itself: kind + bucket count
+        # (the full parameter set lives frozen in the manifest)
+        return (
+            f"{INPUT_SPEC_VERSION_HASHED_PREFIX}:{taxonomy}:"
+            f"{params['kind']}:{params['n_features']}"
+        )
     dims = ",".join(
-        f"{name}={params['dim']}" for name, params in manifest["modalities"].items()
+        f"{name}={m['dim']}" for name, m in manifest["modalities"].items()
     )
-    return f"{INPUT_SPEC_PREFIX}:{manifest['label_taxonomy_version']}:{dims}"
+    return f"{INPUT_SPEC_PREFIX}:{taxonomy}:{dims}"
 
 
 def syndrome_input_spec(manifest: dict) -> InputSpecSet:
+    hashed = _modality_kind(manifest) == MODALITY_KIND_HASHED_TEXT
     return InputSpecSet(
         version=_input_spec_version(manifest),
         modalities=tuple(
@@ -288,8 +420,11 @@ def syndrome_input_spec(manifest: dict) -> InputSpecSet:
                 name=name,
                 kind="tabular",
                 dim=params["dim"],
-                units="frozen_features",
-                description="train-fold standardized frozen text features",
+                units="hashed_text_l2" if hashed else "frozen_features",
+                description=(
+                    "L2-normalized hashed char 1-3 gram text features "
+                    "(stateless, manifest-frozen; no scaler)"
+                ) if hashed else "train-fold standardized frozen text features",
             )
             for name, params in manifest["modalities"].items()
         ),
@@ -306,6 +441,10 @@ class SyndromeBatchProvider:
     manifest + partition + batch_size -> identical batches; train epochs
     shuffle under a manifest-derived seed). Unlabeled cases travel with
     mask False and are skipped by the evaluator — never zero-filled.
+
+    Under the hashed_text modality the partition is held as raw text plus
+    the manifest-frozen HashingVectorizer and each batch is vectorized on
+    the fly; determinism is unchanged because the vectorizer is stateless.
     """
 
     def __init__(
@@ -341,11 +480,24 @@ class SyndromeBatchProvider:
                    if manifest["subject_row_by_id"][s] not in self.records_by_row]
         if missing:
             raise ValueError(f"manifest cases missing from records: {missing[:3]}")
+        self._hashed = _modality_kind(manifest) == MODALITY_KIND_HASHED_TEXT
+        if self._hashed:
+            stats = manifest["scaler"][MODALITY_NAME]
+            if stats.get("kind") != "identity":
+                raise ValueError(
+                    "hashed_text manifest carries a fitted scaler; the "
+                    "stateless contract admits only the identity scaler"
+                )
+            self._vectorizer = _hashing_vectorizer(
+                manifest["modalities"][MODALITY_NAME]
+            )
         (self._features, self._availability,
          self._targets, self._target_mask) = self._materialize()
         self._epoch = 0
 
     def _materialize(self):
+        if self._hashed:
+            return self._materialize_hashed()
         modalities = self.manifest["modalities"]
         features = {name: [] for name in modalities}
         availability = {name: [] for name in modalities}
@@ -385,6 +537,45 @@ class SyndromeBatchProvider:
             {TARGET_KEY: torch.tensor(mask, dtype=torch.bool)},
         )
 
+    def _materialize_hashed(self):
+        """hashed_text rows stay as text; vectorization happens per batch.
+
+        Nothing dense is materialized here (2^16 features x ~44k rows would
+        not fit memory): `__iter__` vectorizes each batch on the fly from
+        the manifest-frozen parameters. No z-score: the identity-scaler
+        manifest was checked at build time, and L2 normalization is built
+        into the vectorizer. Availability is input_text presence — records
+        without text are refused here (fail-closed), so it is all True.
+        """
+        texts: list[str] = []
+        availability: list[bool] = []
+        labels: list[list[float]] = []
+        mask: list[list[bool]] = []
+        for sid in self.subject_ids:
+            record = self.records_by_row[self.manifest["subject_row_by_id"][sid]]
+            if not record.input_text.strip():
+                raise ValueError(
+                    f"record {record.subject_index} carries neither features "
+                    "nor input_text; refusing a fail-closed contract breach"
+                )
+            label = record.label
+            if label is not None and not 0 <= label < self.manifest["n_classes"]:
+                raise ValueError(
+                    f"record {record.subject_index} label {label} outside the "
+                    f"frozen taxonomy of {self.manifest['n_classes']} classes"
+                )
+            texts.append(record.input_text)
+            availability.append(True)
+            labels.append([0.0 if label is None else float(label)])
+            mask.append([label is not None])
+        self._texts = texts
+        return (
+            {},
+            {MODALITY_NAME: torch.tensor(availability, dtype=torch.bool)},
+            {TARGET_KEY: torch.tensor(labels, dtype=torch.float32)},
+            {TARGET_KEY: torch.tensor(mask, dtype=torch.bool)},
+        )
+
     def input_spec(self) -> InputSpecSet:
         return syndrome_input_spec(self.manifest)
 
@@ -405,9 +596,18 @@ class SyndromeBatchProvider:
         for lo in range(0, n, self.batch_size):
             hi = min(lo + self.batch_size, n)
             idx = order[lo:hi]
+            if self._hashed:
+                dense = self._vectorizer.transform(
+                    [self._texts[i] for i in idx]
+                ).toarray()
+                features = {
+                    MODALITY_NAME: torch.from_numpy(dense).to(torch.float32),
+                }
+            else:
+                features = {k: v[idx] for k, v in self._features.items()}
             yield BatchItem(
                 batch=ModelBatch(
-                    features={k: v[idx] for k, v in self._features.items()},
+                    features=features,
                     availability={k: v[idx] for k, v in self._availability.items()},
                     targets={k: v[idx] for k, v in self._targets.items()},
                     target_mask={k: v[idx] for k, v in self._target_mask.items()},
@@ -630,6 +830,7 @@ def build_fold(config: dict, manifest_path, dataset_path, fold: int,
     data = _prune_fold(
         manifest, records, train_ids, dev_ids,
         notes=f"syndrome selection fold {fold} repeat {repeat}",
+        scaler=_frozen_scaler(manifest),
     ).data
     fold_rows = set(data["subject_row_by_id"].values())
     fold_records = [r for r in records if r.subject_index in fold_rows]
@@ -740,12 +941,17 @@ class SyndromeAdapter(TaskAdapter):
     def fold_manifest(self, manifest, records, train_ids, dev_ids, notes=""):
         from data.real_split import fold_manifest
 
-        return fold_manifest(manifest, records, train_ids, dev_ids, notes=notes)
+        return fold_manifest(
+            manifest, records, train_ids, dev_ids, notes=notes,
+            scaler=_frozen_scaler(manifest),
+        )
 
     def pool_manifest(self, frozen, records, notes=""):
         from data.real_split import pool_manifest
 
-        return pool_manifest(frozen, records, notes=notes)
+        return pool_manifest(
+            frozen, records, notes=notes, scaler=_frozen_scaler(frozen)
+        )
 
     def build_fold(self, config, manifest_path, dataset_path, fold, folds,
                    repeat, records=None):

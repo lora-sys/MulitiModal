@@ -10,11 +10,20 @@ mechanical rules), for TCM-SD syndrome classification:
 2. `train(model, fold, budget_seconds, seed)` must return within
    `budget_seconds`.
 
-Input contract (v0): each case is ONE tabular modality of frozen text
-features (see research/task_sd.py — the featurizer runs outside the loop;
-this file never sees raw text). Each record also carries a real subject
-`user_id` (R1 F3): the frozen manifest split is subject-level — all cases
-of one user land in one partition — delegated to
+Input contract: each case is ONE tabular modality whose dim is read from
+`fold.input_spec` (see research/task_sd.py — the featurizer/scaler machinery
+runs outside the loop; this file never sees raw text). Two manifest
+modalities feed the same contract:
+
+* "float_groups": frozen inline text features, train-fold z-scored (#29);
+* "hashed_text": L2-normalized hashed char 1-3 gram features (2^16 buckets),
+  rebuilt per batch by the provider from the manifest-frozen stateless
+  HashingVectorizer — no scaler statistics exist or apply.
+
+Either way the input is a plain float tensor of the declared dim, so the
+model stays dim-agnostic and self-contained. Each record also carries a real
+subject `user_id` (R1 F3): the frozen manifest split is subject-level — all
+cases of one user land in one partition — delegated to
 `data.tcm_sd.subject_partitions`; the split seed and ratios come from that
 data-layer contract, not from this task. The score is computed by the frozen
 `SyndromeTrustedEvaluator` after this file returns; this file never sees it.

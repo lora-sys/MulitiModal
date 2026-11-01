@@ -261,7 +261,13 @@ def exclude_subjects_from_manifest(
     return RealManifest(data=data, sha256=digest)
 
 
-def pool_manifest(manifest: dict, records: list[SubjectRecord], notes: str = "") -> RealManifest:
+def pool_manifest(
+    manifest: dict,
+    records: list[SubjectRecord],
+    notes: str = "",
+    *,
+    scaler: dict | None = None,
+) -> RealManifest:
     """Derive the SELECTION-POOL manifest (train + dev) for the final refit.
 
     AutoResearch selects a configuration by subject-level cross-validation
@@ -294,17 +300,23 @@ def pool_manifest(manifest: dict, records: list[SubjectRecord], notes: str = "")
         "dev": [],
         "holdout": [],
     }
-    by_row = {r.subject_index: r for r in records}
-    groups = {
-        modality: tuple(params["feature_groups"])
-        for modality, params in data["modalities"].items()
-    }
-    data["scaler"] = _fit_scaler(
-        [data["subject_row_by_id"][s] for s in data["split"]["train"]],
-        by_row,
-        groups,
-    )
-    data["scaler_fit_rows"] = len(data["split"]["train"])
+    if scaler is None:
+        by_row = {r.subject_index: r for r in records}
+        groups = {
+            modality: tuple(params["feature_groups"])
+            for modality, params in data["modalities"].items()
+        }
+        data["scaler"] = _fit_scaler(
+            [data["subject_row_by_id"][s] for s in data["split"]["train"]],
+            by_row,
+            groups,
+        )
+        data["scaler_fit_rows"] = len(data["split"]["train"])
+    else:
+        # caller-frozen scaler (stateless features): nothing was ever fit,
+        # so no refit and no fit-rows update — the deep-copied parent
+        # provenance stands
+        data["scaler"] = scaler
     pool_ids = set(data["split"]["train"]) | set(data["split"]["dev"])
     data["subject_row_by_id"] = {
         k: v for k, v in data["subject_row_by_id"].items() if k in pool_ids
@@ -345,6 +357,8 @@ def fold_manifest(
     train_ids: Sequence[str],
     dev_ids: Sequence[str],
     notes: str = "",
+    *,
+    scaler: dict | None = None,
 ) -> RealManifest:
     """Derive the manifest for ONE cross-validation fold.
 
@@ -354,7 +368,9 @@ def fold_manifest(
        subject that also sits in the parent's train partition contributes to
        the mean/std used to train the fold model — a leak into the very
        number the fold exists to produce. The scaler is refit on the fold's
-       train rows only.
+       train rows only. Passing `scaler` verbatim short-circuits the refit
+       for stateless-feature manifests (nothing was ever fit, so there is
+       nothing to leak; the same applies to pool_manifest).
     2. **The holdout partition.** Emptied here, so "selection never reads the
        holdout" becomes a structural property of the fold manifest instead of
        a convention the calling code is trusted to follow.
@@ -372,15 +388,21 @@ def fold_manifest(
         "dev": list(dev_ids),
         "holdout": [],
     }
-    by_row = {r.subject_index: r for r in records}
-    groups = {
-        modality: tuple(params["feature_groups"])
-        for modality, params in data["modalities"].items()
-    }
-    data["scaler"] = _fit_scaler(
-        [data["subject_row_by_id"][s] for s in train_ids], by_row, groups
-    )
-    data["scaler_fit_rows"] = len(train_ids)
+    if scaler is None:
+        by_row = {r.subject_index: r for r in records}
+        groups = {
+            modality: tuple(params["feature_groups"])
+            for modality, params in data["modalities"].items()
+        }
+        data["scaler"] = _fit_scaler(
+            [data["subject_row_by_id"][s] for s in train_ids], by_row, groups
+        )
+        data["scaler_fit_rows"] = len(train_ids)
+    else:
+        # caller-frozen scaler (stateless features): nothing was ever fit,
+        # so no refit and no fit-rows update — the deep-copied parent
+        # provenance stands
+        data["scaler"] = scaler
     fold_ids = set(data["split"]["train"]) | set(data["split"]["dev"])
     data["subject_row_by_id"] = {
         k: v for k, v in data["subject_row_by_id"].items() if k in fold_ids

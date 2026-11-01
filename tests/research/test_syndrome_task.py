@@ -256,6 +256,210 @@ def test_provider_masks_unlabeled_and_declares_the_syndrome_spec(tmp_path):
     assert mask_seen == len(base["split"]["train"]) - n_unlabeled
 
 
+# -- hashed_text modality (real-scale path, ~44k cases) -------------------------
+
+
+def fake_sd_text_records(n=30, seed=23, n_classes=N_CLASSES, labeled=True):
+    """Synthetic text cases (SMOKE_ONLY): label-discriminative keyword
+    tokens so a learner has signal; features are empty per the hashed_text
+    contract (raw text travels in input_text, never in features)."""
+    rng = random.Random(seed)
+    records = []
+    for i in range(1, n + 1):
+        label = None if (not labeled or i % 7 == 0) else rng.randrange(n_classes)
+        tokens = " ".join(f"synd{label}kw" for _ in range(3))
+        records.append(
+            SyndromeRecord(
+                subject_index=i,
+                user_id=f"su-{i:04d}",
+                norm_syndrome=f"y{i % 3}",
+                features={},
+                label=label,
+                input_text=f"{tokens} chief complaint case {i}",
+                provenance={"source": "test-fixture"},
+            )
+        )
+    return records
+
+
+def _frozen_text(tmp_path, records, **kwargs):
+    manifest = build_syndrome_manifest(
+        records, dataset_sha256=DATASET_SHA, n_classes=N_CLASSES,
+        label_taxonomy_version=TAXONOMY, label_tier="SMOKE_ONLY",
+        modality_kind="hashed_text", **kwargs,
+    )
+    path = tmp_path / "frozen-text.json"
+    path.write_text(json.dumps(manifest.data, ensure_ascii=False))
+    return manifest.data, path
+
+
+def test_hashed_text_manifest_freezes_the_vectorization(tmp_path):
+    records = fake_sd_text_records()
+    base, _path = _frozen_text(tmp_path, records)
+    params = base["modalities"]["text"]
+    assert params["kind"] == "hashed_text"
+    assert params["analyzer"] == "char_wb"
+    assert params["ngram_range"] == [1, 3]
+    assert params["n_features"] == 65536
+    assert params["alternate_sign"] is False
+    assert params["norm"] == "l2"
+    assert params["dim"] == 65536
+    # stateless features: nothing fit anywhere, so the scaler is identity
+    assert base["scaler"] == {"text": {"kind": "identity"}}
+    assert base["scaler_fit_rows"] == 0
+    version = syndrome_input_spec(base).version
+    assert version.startswith("tcm-sd-text-v2:")
+    assert TAXONOMY in version and "hashed_text:65536" in version
+    # fail-closed: a record with neither features nor input_text is refused
+    broken = fake_sd_text_records(12)
+    broken[3].input_text = ""
+    with pytest.raises(ValueError, match="neither features nor input_text"):
+        build_syndrome_manifest(
+            broken, dataset_sha256=DATASET_SHA, n_classes=N_CLASSES,
+            label_taxonomy_version=TAXONOMY, modality_kind="hashed_text",
+        )
+    with pytest.raises(ValueError, match="unknown modality_kind"):
+        build_syndrome_manifest(
+            fake_sd_text_records(12), dataset_sha256=DATASET_SHA,
+            n_classes=N_CLASSES, label_taxonomy_version=TAXONOMY,
+            modality_kind="tfidf_idf",
+        )
+
+
+def test_hashed_text_provider_is_deterministic_exact_and_masks(tmp_path):
+    import torch
+    from sklearn.feature_extraction.text import HashingVectorizer
+
+    records = fake_sd_text_records()
+    base, _path = _frozen_text(tmp_path, records)
+    by_row = {r.subject_index: r for r in records}
+    fresh = HashingVectorizer(
+        analyzer="char_wb", ngram_range=(1, 3), n_features=65536,
+        alternate_sign=False, norm="l2",
+    )
+    p1 = SyndromeBatchProvider(base, records, "dev", batch_size=8)
+    p2 = SyndromeBatchProvider(base, records, "dev", batch_size=8)
+    seen_labeled = 0
+    for i1, i2 in zip(p1, p2, strict=True):
+        assert i1.subject_ids == i2.subject_ids
+        x1 = i1.batch.features["text"]
+        assert torch.equal(x1, i2.batch.features["text"])
+        want = torch.from_numpy(fresh.transform(
+            [by_row[base["subject_row_by_id"][s]].input_text
+             for s in i1.subject_ids]
+        ).toarray()).to(torch.float32)
+        assert torch.equal(x1, want)  # exact sklearn HashingVectorizer semantics
+        norms = x1.norm(dim=-1)
+        assert torch.allclose(norms, torch.ones_like(norms))
+        mask = i1.batch.target_mask["syndrome_labels"].squeeze(-1)
+        targets = i1.batch.targets["syndrome_labels"].squeeze(-1)
+        assert bool((targets[~mask] == 0).all())  # ABSTAIN, never guessed
+        seen_labeled += int(mask.sum())
+    dev_ids = set(base["split"]["dev"])
+    n_unlabeled = sum(
+        1 for r in records
+        if r.label is None and f"sd-r{r.subject_index:05d}" in dev_ids
+    )
+    assert seen_labeled == len(base["split"]["dev"]) - n_unlabeled
+    # train shuffle: same manifest + batch_size -> same epoch order and
+    # matching (order-dependent) features
+    t1 = SyndromeBatchProvider(base, records, "train", batch_size=8)
+    t2 = SyndromeBatchProvider(base, records, "train", batch_size=8)
+    for i1, i2 in zip(t1, t2, strict=True):
+        assert i1.subject_ids == i2.subject_ids
+        assert torch.equal(
+            i1.batch.features["text"], i2.batch.features["text"]
+        )
+    # a fitted scaler on a hashed manifest is refused (stateless contract)
+    tampered = json.loads(json.dumps(base))
+    tampered["scaler"] = {
+        "text": {"mean": [0.0], "std": [1.0], "degenerate": [False]},
+    }
+    with pytest.raises(ValueError, match="identity"):
+        SyndromeBatchProvider(tampered, records, "dev", batch_size=8)
+    # and text stripped after manifest build is a fail-closed breach
+    stripped = list(records)
+    for r in stripped:
+        r.input_text = ""
+    with pytest.raises(ValueError, match="neither features nor input_text"):
+        SyndromeBatchProvider(base, stripped, "dev", batch_size=8)
+
+
+def test_hashed_text_evaluator_refuses_a_foreign_spec(tmp_path):
+    records = fake_sd_text_records()
+    base, _path = _frozen_text(tmp_path, records)
+    evaluator = SyndromeTrustedEvaluator(base)
+    provider = SyndromeBatchProvider(base, records, "dev", batch_size=8)
+    # the float_groups spec of the same taxonomy is a DIFFERENT contract
+    float_base, _float_path = _frozen(tmp_path, fake_sd_records())
+    foreign = _ConstantModel(float_base, N_CLASSES, 0)
+    with pytest.raises(ValueError, match="input spec mismatch"):
+        evaluator.evaluate(foreign, provider, partition="dev")
+    report = evaluator.evaluate(
+        _ConstantModel(base, N_CLASSES, 0), provider, partition="dev"
+    )
+    assert report.n_subjects == len(base["split"]["dev"])
+    assert report.input_spec_version.startswith("tcm-sd-text-v2:")
+
+
+def test_hashed_text_records_json_round_trip():
+    records = fake_sd_text_records(6)
+    parsed = records_from_json(records_to_json(records))
+    assert [r.input_text for r in parsed] == [r.input_text for r in records]
+    assert all(r.features == {} for r in parsed)
+    assert [(r.subject_index, r.label) for r in parsed] == [
+        (r.subject_index, r.label) for r in records
+    ]
+
+
+def test_hashed_text_fold_pool_scaler_and_export_round_trip(tmp_path):
+    """Fold/pool derivation keeps the identity scaler (no refit over
+    feature-less records), and the skeleton model exports + rebuilds on
+    65536-dim hashed inputs through the frozen-architecture chain."""
+    import torch
+
+    import research.candidate_sd as candidate_sd
+    from research.model_export import load_eval_model, save_eval_model
+    from research.task_sd import build_fold as build_sd_fold
+
+    records = fake_sd_text_records()
+    base, path = _frozen_text(tmp_path, records)
+    config = {
+        "data": {"manifest_path": str(path), "dataset_path": "unused"},
+        "train_provider": {"batch_size": 8},
+        "trainer": {"seed": 0},
+    }
+    fold_data, fold = build_sd_fold(
+        config, str(path), "unused", fold=0, folds=4, repeat=0, records=records
+    )
+    assert fold_data.dims["modalities"]["text"] == 65536
+    assert fold["scaler"] == {"text": {"kind": "identity"}}
+    assert fold["split"]["holdout"] == []
+    identity = {"text": {"kind": "identity"}}
+    pool = adapter_for("syndrome").pool_manifest(fold, records, notes="pool")
+    assert pool.data["scaler"] == identity
+    # the pool manifest still verifies against its own hash and keeps the
+    # v2 input spec
+    assert pool.data["manifest_sha256"]
+    assert syndrome_input_spec(pool.data).version.startswith("tcm-sd-text-v2:")
+    assert set(pool.data["split"]["train"]) == (
+        set(base["split"]["train"]) | set(base["split"]["dev"])
+    )
+
+    model = candidate_sd.build_model(fold_data)
+    candidate_sd.train(model, fold_data, budget_seconds=0.05, seed=0)
+    batch = next(iter(fold_data.train)).batch
+    saved = save_eval_model(model, tmp_path, "ht0")
+    loaded = load_eval_model(saved["weights_path"], saved["architecture_path"])
+    with torch.no_grad():
+        original = model(batch)
+        copy = loaded(batch)
+    assert torch.equal(
+        original.predictions["syndrome_probs"], copy.predictions["syndrome_probs"]
+    )
+    assert loaded.input_spec.version == model.input_spec.version
+
+
 # -- trusted evaluator ------------------------------------------------------------
 
 
