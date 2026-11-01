@@ -219,3 +219,15 @@ cd $WT && git log --oneline      # 只有 KEEP 前进：dc7d67b 基线 → 09f94
 3. **扣费前置。** 解锁事件是「读权限被授予」，不是「读成功」：驱动在 spawn 拟合子进程**之前**向全局台账（`<仓库根>/runs/holdout-unlock-ledger.jsonl`，经 git common-dir 解析，不再随 `--out` 漂移）以 `fcntl.flock` 追加 intent 事件；worker 在 import 候选前校验预算未耗尽且本事件已在账（手跑 `python -m research.finalize` 不能绕过）；worker 崩溃照常计费（F-04）。
 
 其余各条：`pool_manifest` 的 holdout 列表清空并连同行映射一起裁剪（需要 holdout 的评分路径只从冻结父 manifest 重建视图，`data.real_split.holdout_view`，F-05）；guard 对 `exec`/`eval`/`compile`/`__import__` 的裸名调用零容忍拒绝、复杂度对字符串常量递归 `ast.parse` 计数（精炼简化分支只在真实 AST 删除下生效，F-07）；worker 断言工作树 HEAD 等于记录 commit 且 `git status --porcelain` 除可编辑文件外为空，记录补 `worktree_commit`（F-09）。伴随契约变更：复杂度指标名改为 `ast_statement_expr_nodes+string_payloads`（字符串负载计入），与 v10 归档的纯节点口径不可直接比较。
+
+---
+
+# 2026-11-03：第三轮隔离修复（收尾：H-01…H-08）
+
+零上下文复审对第二轮修复复核出八条残余路径，本轮收尾（6/9 上轮已 CLOSED）。威胁模型新增三条结构性决定：
+
+1. **受信子进程一律 `-I` 隔离启动。** `python -m research.<mod>` 会从环境构建 `sys.path`：PYTHONPATH 目录里一个 `sitecustomize.py` 在任何 SHA 校验之前就执行、可直接伪造结果行。现在所有受信子进程（train_worker、evaluator 两种 mode、finalize worker、runner 本身，经 `research/spawn.py`）以 `python -I -c <bootstrap> <src> <args>` 启动——bootstrap 字符串由受信父进程写死，import 路径来自父进程 config 的 worktree 而非环境；子环境是精确白名单（PATH 取最小固定集/HOME/PYTHONHASHSEED=0），不继承任何变量。已实测 `-I`/`-E` 会忽略 `PYTHONHASHSEED`，故位级复现以 `torch.manual_seed`（build_model 之前）为锚，两次 spawn 权重逐位一致有测试实证。
+2. **别名两代入禁。** guard 的零容忍从「裸名调用」扩展到数据流：`f = exec` 或 `g = f` 绑定出的目标名并入禁调集合，两代以内 `f("…")`/`g("…")` 与直接调用同样拒绝（H-01）；解析不了或超出深度/长度上限的字符串常量按长度折价计复杂度（`_STRING_CHARS_PER_NODE`，声明值 64 字符/节点，H-07）——藏在嵌套 exec 字符串深处的负载不再以 1 个节点计。
+3. **台账计数入临界区。** 计数与追加原来是两步（计数在 flock 之外），并发 driver 可以双双通过预算检查后各追加一条、超额扣费；现在 `LOCK_EX → 数行 → 超扣即拒 → 追加 → fsync → 解锁` 是同一临界区（H-03），worker 侧复检持共享锁读，`ledger_contains` 改逐行 `json.loads` 精确匹配 event_id（不再子串匹配）。
+
+其余：`model_export` 的 get_attr 判据由张量对象集合改为属性名集合，导出时记录 buffer/参数的形状与 dtype、重建侧注册占位并以 strict 载入填充（H-04，此前 forward 直接用 register_buffer 的 buffer 一律导出失败）；runner 的返回与每轮 manifest 记录 `integrity_snapshot_scope`（快照覆盖 manifest/dataset/candidate 哈希，权重与架构产物不在快照内、由评估器对照 worker 记录哈希重校，H-08）。`_child_env` 此前零测试（H-05），现为白名单精确断言。

@@ -300,4 +300,6 @@ v7 实测：**同一套权重** dev macro-F1 0.1451、holdout 0.3445。划分间
 2. **评估只信 state_dict**——`research.evaluator` 以 `torch.load(weights_only=True)` 载入权重，模型由 `research/model_export.py` 的冻结架构白名单重建，评估路径上没有任何 `torch.load` 可执行对象；
 3. **扣费前置**——holdout 解锁事件在 spawn 拟合子进程之前以 flock 追加进仓库全局台账，worker 入口复检预算与本事件，失败照常计费。
 
+**2026-11-03 第三轮修复收尾**（逐条落地位置见 `docs/reports/research-src-v9.md` 文末同名小节）：受信子进程一律 `python -I -c <bootstrap>` 隔离启动——import 路径由受信父进程的 bootstrap 字符串注入而非环境，PYTHONPATH 目录里预置的 `sitecustomize.py` 不再可能在任何 SHA 校验前执行，子环境是精确白名单（H-02/H-05）；guard 的零容忍扩到别名数据流两代（`f = exec; f(…)`、`g = f; g(…)` 同拒），解析不了的字符串负载按长度折价计复杂度（H-01/H-07）；台账的计数与追加在同一 `LOCK_EX` 临界区内完成，并发 driver 不能超额扣费，worker 侧持共享锁复检（H-03）。
+
 **度量口径同时冻结**（`docs/reports/tcm-50-real-training.md` 的 v8 结论因此被修正）：选择指标从 `macro_f1@0.5` 改为阈值无关的 `macro_ap`。理由是实测的：同一逻辑回归在 0.5 阈值下 0.215、按训练先验阈值 0.3844，而神经冠军 0.3827——v8 headline 的"0.383 vs 0.215"是阈值产物，不是模型优势。F1 仍按两种阈值上报。
