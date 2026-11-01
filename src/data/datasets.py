@@ -176,7 +176,9 @@ DATASET_NCMI_PULSE = DatasetRecord(
         "完全共享/线上共享, but the detail page returns HTTP 403 without an "
         "account and the download needs an order plus manual review. This is "
         "the only candidate that would genuinely extend the training set "
-        "(pulse features + constitution labels). Application is a human step."
+        "(pulse features + constitution labels). Application is a human step. "
+        "label_source=PUBLISHED is a metadata-level claim from the project "
+        "description; the row-level label column awaits download and audit."
     ),
 )
 

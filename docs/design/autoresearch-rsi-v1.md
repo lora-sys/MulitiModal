@@ -294,6 +294,6 @@ v7 实测：**同一套权重** dev macro-F1 0.1451、holdout 0.3445。划分间
 | 4 记录每轮源码 diff 与 commit | 每轮存 `patch`、`git_commit_sha`、`git_parent_sha`、`complexity`；KEEP 才前进分支 | `loop.run_round` |
 | 5 逐轮读上下文再提案 | v9 逐轮驱动；批量运行（`research-src-run`）在每轮显式记 `batch_supplied: true` 与 `proposal_mtime`，读者可比对「提案写作时间 vs 该轮开始时间」，不需要相信任何自述 | `loop.run_round` |
 
-**仍未解决、不得宣称已解决**：候选进程能读工作树内文件（含原始工作簿），理论上可自行关联标签；当前防线是静态检查 + 评估器进程外运行，证据等级仍是 `AGENT_ISOLATION_UNVERIFIED`（§12.3 与上游同源风险）。
+**仍未解决、不得宣称已解决**：候选进程能读工作树内文件（含原始工作簿），理论上可自行关联标签；当前防线是静态检查 + 评分在独立的评估器子进程内完成（折从冻结 manifest 重建、训练输入完整性快照、候选代码 import 被审计钩子阻断，见 `research/evaluator.py`，2026-11-01 审查修正），证据等级仍是 `AGENT_ISOLATION_UNVERIFIED`（§12.3 与上游同源风险）。
 
 **度量口径同时冻结**（`docs/reports/tcm-50-real-training.md` 的 v8 结论因此被修正）：选择指标从 `macro_f1@0.5` 改为阈值无关的 `macro_ap`。理由是实测的：同一逻辑回归在 0.5 阈值下 0.215、按训练先验阈值 0.3844，而神经冠军 0.3827——v8 headline 的"0.383 vs 0.215"是阈值产物，不是模型优势。F1 仍按两种阈值上报。

@@ -15,11 +15,13 @@
 | 超预算 | 视为 **overran → REVERT**，不是"慢一点的赢家" | `runner.py` / `loop.py` |
 | 选择指标 | `category_probs/macro_ap`（阈值无关的 PR 曲线面积） | `runtime/tcm_eval.py` |
 | 每折 scaler | 在**该折自己的 train 行**上重拟合；折 manifest 的 holdout 为空 | `data/real_split.fold_manifest` |
-| 评估器 | 在候选进程之外的 runner 中运行，候选看不到分数 | `research/runner.py` |
+| 评估器 | 在**独立的评估器子进程**中对**重建的折**评分（`research/evaluator.py`）；候选看不到分数，也碰不到评分用的对象 | `research/runner.py` + `research/evaluator.py` |
 | 选择分辨率 | 4 折 × 2 重复 = **8 折**，SEM ≈ 0.016 | `loop.state()` |
 | KEEP 门槛 | 增益 > **1×SEM**，且 ≥ **0.001 × 净增行数** | `loop.decide` |
 
 `20s` 而不是上游的 300s：本模型 ~6k 参数、每折 174 行，必须保持可交互；这是**声明的**契约，改动会同时改变所有已归档轮次的含义。
+
+**预算变更时间线（2026-11-01 审查核实，证据为 manifest 时间戳 + worktree 提交历史）**：循环首次落地时 `TIME_BUDGET_SECONDS = 60.0`（worktree 提交 `cb4c8e4`，19:32:21 +0800）；**80 秒后**、即任何轮次被打分之前，`c6ccf19`（19:33:41 +0800）就把预算改为 20s；第一个完成轮 tcm-0001 开始于 19:33:50 +0800，其 manifest `fold_seconds` 全部 ≈20.0，tcm-0003 同。主线仓库的同款修改晚至 `4d19481`（19:38:42 +0800）才合入（"judge only added lines…" 提交的一部分）。**结论：没有任何已计分轮次是在 60s 预算下测得的**，§2 表内数值同口径可比；60s 值只存在于未计分的 80 秒窗口内。
 
 ## 2. 轮次（4 轮，2 KEEP/REVERT，2 被 guard 拒收）
 
@@ -101,14 +103,14 @@ cd /home/lora/workspace/ar-v9 && git log --oneline   # 代码层：只有 KEEP �
 | tcm-0001 | 集成 3 成员（27 行实现） | REVERT | 0.3605 | 27 | +0.0181 **过了噪声门槛 0.0152**，但没过 27 行的复杂度下限 0.027 |
 | tcm-0002 | dropout 0.3 + weight decay 1e-2 | REVERT | 0.3492 | 3 | +0.0068，未过门槛 |
 | tcm-0003 | 模型内 LayerNorm | REVERT | 0.3488 | 4 | +0.0064，未过门槛 |
-| **tcm-0004** | **同样的 3 成员集成，13 行实现** | **KEEP** | **0.3595** | 17 | **+0.0171 > 门槛 0.0131，且 ≥ 17 行下限 0.0170** |
+| **tcm-0004** | **同样的 3 成员集成（manifest `complexity.growth` = 17）** | **KEEP** | **0.3595** | 17 | **+0.0171 > 门槛 0.0131，且 ≥ 17 行下限 0.0170** |
 | tcm-0005 | 集成 5 成员 | REVERT | 0.3610 | 15 | +0.0015，未过门槛 |
 | tcm-0006 | 集成 3 + weight decay | REVERT | 0.3573 | 15 | −0.0022 |
 | tcm-0007 | 集成 3 + dropout + weight decay | REVERT | **0.3648** | 16 | +0.0053，未过门槛 0.0153 |
 
 **两件必须一起读的事**：
 
-1. **复杂度判据真的起作用了**：tcm-0001 的增益（+0.0181）已经过了噪声门槛，被拒的唯一原因是 27 行没换来 0.027。下一轮把同一机制写成 13 行（tcm-0004）就通过了。这就是上游那句"a 0.001 improvement that adds 20 lines of hacky code? Probably not worth it"要的效果——**逼出更紧凑的实现，而不是否决想法**。
+1. **复杂度判据真的起作用了**：tcm-0001 的增益（+0.0181）已经过了噪声门槛，被拒的唯一原因是 27 行没换来 0.027。下一轮把同一机制写成 17 行（tcm-0004，manifest 记的净增口径）就通过了。这就是上游那句"a 0.001 improvement that adds 20 lines of hacky code? Probably not worth it"要的效果——**逼出更紧凑的实现，而不是否决想法**。
 2. **最高分不是冠军**：tcm-0007 的绝对分数（0.3648）高于冠军（0.3595），但因未过显著性门槛被拒。这是规则的诚实代价：冠军是"**可复现地**优于前一个冠军"的配置，不是"历史上最高的单次观测"。报告必须同时给出两者，否则读者会以为冠军是 0.3648。
 
 ## 2. 交付模型与 holdout（本划分仅本次解锁）
@@ -132,7 +134,7 @@ cd /home/lora/workspace/ar-v9 && git log --oneline   # 代码层：只有 KEEP �
 ## 4. 得到的可复现结论
 
 1. **空搜索空间产生不了研究**：v1–v8 的 6 个超参取值，23/23 REVERT 且冠军不动；v10 在**同一数据、同一划分**上，8 轮就把选择值抬了 0.017——差别只在可改面从"取值"变成"源码"。
-2. **集成是唯一被证明有效的代码级杠杆**（+0.017~0.018，两次独立复现：27 行版与 13 行版）。
+2. **集成是唯一被证明有效的代码级杠杆**（+0.017~0.018，两次独立复现：27 行版与 17 行版；行数一律取 manifest `complexity.growth`，不用提交信息或正文里的其它口径。）
 3. **正则化类改动（dropout / weight decay / LayerNorm）在这份数据上没有可检测收益**（+0.006 量级），与"274 行、特征噪声大"一致。
 4. **复杂度下限是有效的，但会与噪声门槛叠加**：两者都过的具体形态是"机制正确 + 实现紧凑"。
 
@@ -173,3 +175,34 @@ cd $WT && git log --oneline      # 只有 KEEP 前进：dc7d67b 基线 → 09f94
 1. **集成冠军经受住了五个方向的攻击**：模态加权（gate）、输出头结构（perdim）、批内标准化（norm）、损失加权（posweight）、深度（deep）——最好的 gate 也只是打平（−0.0003，且是加 3 行），其余全部显著更差。冠军仍是 tcm-0004（0.3595），**未产生新冠军，holdout 预算不动**（v10 已解锁一次，只剩最终交付一次）。
 2. **gate 的 −0.0003 不是"gate 无效"**：−0.0003 在 12 折 SEM（≈0.0095–0.017）之内，正确读法是"无法区分"；但判据是**加代码必须证明自己**，打平的加法被拒——这与"删代码且不更差直接 KEEP"是同一条规则的两面。
 3. **崩溃也是产物**：perdim 的文本变换产出了语法错误的补丁，runner 如实记为 crash REVERT，没有静默打分、也没有静默跳过；锚点断言保证了变换失败会显式失败，而不是变成 no-op。
+
+---
+
+# 2026-11-01：零上下文对抗审查的修正（本节为修正记录，不改写上方任何已归档数值）
+
+一轮零上下文对抗审查判定 v10 的核心完整性声称（「候选看不到、碰不到决定其命运的分数」）在实现层面不成立。逐条修正如下；**已归档 manifest 与其数值一律不改写**，修正只作用于未来轮次与报告表述。
+
+## 修正内容
+
+1. **[P0] 评估器与候选同进程（已修）**。原实现在 `research/runner.py` 内 late-import `TCMTrustedEvaluator`，与 `research.candidate` 共享解释器：候选的 `train()` 可以原地替换 `runtime.tcm_eval.TCMTrustedEvaluator`，或就地污染与评估器共享的同一个 `FoldData.dev._targets`。上方 v9/v10 轮次**确实是在该路径下评分的**——第 1 节契约表的「评估器」行已按真实机制改写。修复后评分在独立的 `research/evaluator.py` 子进程完成：折从冻结 manifest 重建（确定性，含 scaler）、训练侧输入（manifest/数据集/候选文件）做训练前后完整性快照比对、评分组件在 unpickle 导入候选代码**之前**抓取、并用 audit hook 阻断候选代码对 runtime/data/core.registry 的 import。冻结层四处声称（`frozen.py` / `guard.py` / 本报告 / 设计文档）已全部对齐为实际机制。
+2. **[P1] 折路径可推导 holdout 身份（已修）**。折 manifest 深拷贝了父 manifest 的全部 274 条 `subject_row_by_id`，且 provider 持有全量 records（含 holdout 行 scores）。现 `fold_manifest` / `pool_manifest` 把映射裁剪到自身 partition，`build_fold` / `cross_val_candidate` / `refit_champion` 传给 provider 的 records 同步裁剪（E72/E78 加了负例断言）。
+3. **[P1] finalize 在驱动进程 import 候选代码（已修）**。`research-src-finalize` 现在只在驱动进程准备池 manifest，拟合在 `python -m research.finalize` 子进程执行（PYTHONPATH 仅工作树 src）；worker 在 import 候选模块**之前**断言候选文件 SHA-256 等于记录值（代码↔SHA 绑定）。
+4. **[P2] 复杂度口径改为 AST 节点（已修，v10 冠军判定翻转）**，见下节。
+5. **[P2] E71/E74 咬合力不足（已修）**；**[P3] 报告脚本指标标签、解锁台账、数据集 notes** 一并修正。
+
+## 复杂度新口径下 tcm-0004 的重算（判定翻转，如实记录）
+
+旧口径：非空非注释文本行。新口径（`guard.editable_complexity`）：AST 语句+表达式节点计数，防止「压缩成稠密行」与「删了再加等价代码归零」两种玩法。对 v10 冠军 tcm-0004（提交 `09f9421`）与其父提交重算：
+
+| 口径 | 冠军文件 | 父（基线） | growth | 下限（0.001/单位） | 实测增益 |
+| --- | --- | --- | --- | --- | --- |
+| 旧：文本行 | 108 | 91 | 17 | 0.0170 | +0.0171 → KEEP（贴边通过） |
+| 新：AST 节点 | 379 | 301 | **78** | **0.0780** | +0.0171 → **REVERT** |
+
+**判定翻转**：在新口径下 tcm-0004 不会通过复杂度下限，v10 的有效冠军会退回 tcm-0000 基线（0.3424）。三点如实读法：(a) 已归档轮次的 KEEP 判定按当时的行口径记录，不改写；(b) 集成机制本身的效果有两次独立复现（+0.0181 / +0.0171，均过噪声门槛），**机制有效**与**17 行版是否付得起复杂度**是两个问题，新口径对后者的回答是否；(c) v10 交付模型（holdout 0.3724）与新口径下第 2 次也是最后一次解锁事件均已发生，是否需要在新口径下重选冠军属于用户的决策，不由本次修正代办。未来轮次一律按节点口径判定。
+
+## 其它修正
+
+- **[P3] holdout 解锁机械台账**：`research-src-finalize` 现在向 `<out>/holdout-unlock-ledger.jsonl` 追加解锁事件（时间、champion commit、候选 SHA、池/父 manifest 哈希），计数达 2 拒绝第三次（AGENTS.md 规则 11）。v10 的第一次解锁发生在台账机制存在之前，由本报告与治理文档记录，不追补台账条目。
+- **[P3] 报告脚本指标标签**：`scripts/tcm_real_report.py` 原把选择指标硬编码为 macro-F1（选择指标早已改为 macro AP）；现全部从 `runtime.tcm_eval.PRIMARY_METRIC / PRIMARY_DIRECTION` 渲染（E79 防回归）。
+- **[P3] 数据集 notes**：`DATASET_NCMI_PULSE` 补充「label_source 是元数据级声称，行级标签层待下载审计」，不改 eligibility。
