@@ -153,6 +153,40 @@ def test_non_whitelisted_call_target_refuses_to_export(tmp_path):
         export_architecture(Odd())
 
 
+def test_a_forward_used_registered_buffer_exports(tmp_path):
+    # H-04: the get_attr check compared attribute NAME strings against the
+    # tensor objects collected from named_parameters/named_buffers, so every
+    # get_attr node was refused — including a plain register_buffer the
+    # forward actually uses. Names must be collected, and the export must
+    # round-trip.
+    import torch
+    from torch import nn
+
+    records = fake_records()
+    fold = _fold(tmp_path, records)
+    dim = fold.input_spec.modalities[0].dim
+
+    class Gated(nn.Module):
+        input_spec = fold.input_spec
+        model_type = "test-gated"
+
+        def __init__(self):
+            super().__init__()
+            self.lin = nn.Linear(dim, dim)
+            self.register_buffer("gate", torch.full((dim,), 0.5))
+
+        def forward(self, x):
+            return self.lin(x) * self.gate
+
+    model = Gated()
+    arch = export_architecture(model)
+    rebuilt = rebuild_model(arch)
+    rebuilt.load_state_dict(model.state_dict(), strict=True)
+    x = torch.randn(2, dim)
+    with torch.no_grad():
+        assert torch.equal(model(x), rebuilt(x))
+
+
 def test_rebuild_refuses_a_non_whitelisted_class_in_the_json(tmp_path):
     records = fake_records()
     fold = _fold(tmp_path, records)

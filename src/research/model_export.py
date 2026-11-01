@@ -238,8 +238,11 @@ def export_architecture(model: nn.Module) -> dict:
         key, extract = entry
         modules[name] = {"class": key, "args": extract(mod)}
 
-    own_attrs = {p for _, p in model.named_parameters()}
-    own_attrs |= {b for _, b in model.named_buffers()}
+    # get_attr targets are attribute NAME strings; the check used to compare
+    # them against the tensor objects from named_parameters/named_buffers and
+    # refused every get_attr node (H-04)
+    own_attrs = {name for name, _ in model.named_parameters()}
+    own_attrs |= {name for name, _ in model.named_buffers()}
     graph: list[dict] = []
     for node in traced.graph.nodes:
         spec: dict = {"op": node.op, "name": node.name}
@@ -271,6 +274,18 @@ def export_architecture(model: nn.Module) -> dict:
                     f"get_attr target {node.target!r} is not a parameter or buffer"
                 )
             spec["target"] = node.target
+            # the rebuild side must be able to register a placeholder for
+            # this attribute (H-04): record its kind, shape and dtype so the
+            # strict state_dict load has a key to fill
+            value = model
+            for part in node.target.split("."):
+                value = getattr(value, part)
+            parameters = {name for name, _ in model.named_parameters()}
+            spec["attr"] = {
+                "kind": "parameter" if node.target in parameters else "buffer",
+                "shape": list(value.shape),
+                "dtype": str(value.dtype).removeprefix("torch."),
+            }
         elif node.op == "output":
             spec["target"] = None
         else:  # pragma: no cover — fx has no other node kinds today
@@ -331,6 +346,24 @@ def rebuild_model(arch: dict) -> nn.Module:
         elif op == "call_module":
             node = graph.call_module(spec["target"], args, _decode_arg(spec["kwargs"], env))
         elif op == "get_attr":
+            # register the placeholder the graph copies from at GraphModule
+            # build time; the strict load fills it with the recorded tensors
+            attr = spec.get("attr")
+            if attr is None:
+                raise ValueError(
+                    f"get_attr node {spec['name']!r} carries no attr record"
+                )
+            tensor = torch.empty(
+                attr["shape"], dtype=getattr(torch, attr["dtype"])
+            )
+            parent = root
+            parts = spec["target"].split(".")
+            for part in parts[:-1]:
+                parent = getattr(parent, part)
+            if attr["kind"] == "parameter":
+                parent.register_parameter(parts[-1], nn.Parameter(tensor))
+            else:
+                parent.register_buffer(parts[-1], tensor)
             node = graph.get_attr(spec["target"])
         elif op == "output":
             graph.output(args[0] if isinstance(args, tuple) else args)
