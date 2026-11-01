@@ -42,6 +42,14 @@ TRAIN_RATIO = 0.82
 DEV_RATIO = 0.10
 TEST_RATIO = 0.08
 
+#: Records excluded at load time (R1 F2). The audit (§5) found exactly one
+#: case whose norm_syndrome string appears verbatim in its own detection
+#: text — a label leak into the input. Keyed by user_id; loading skips these
+#: records entirely so no downstream path can train or evaluate on them.
+EXCLUDED_LEAK_RECORDS = {
+    "484293": "norm_syndrome string appears verbatim in detection (audit §5)",
+}
+
 AUDIT_CONCLUSIONS = {
     "audit_date": "2026-11-01",
     "records": 54152,
@@ -105,7 +113,12 @@ def verify_tcm_sd_hashes(raw_dir: Path, names: tuple[str, ...] = RECORD_FILES) -
 
 
 def load_tcm_sd_records(raw_dir: Path) -> list[TcmSdRecord]:
-    """Load all official-split records after hash verification (read-only)."""
+    """Load all official-split records after hash verification (read-only).
+
+    Records whose user_id is in EXCLUDED_LEAK_RECORDS are skipped at this
+    boundary (R1 F2), so every consumer downstream sees the same cleaned
+    stream; the raw files themselves stay untouched.
+    """
     raw_dir = Path(raw_dir)
     verify_tcm_sd_hashes(raw_dir, RECORD_FILES)
     records: list[TcmSdRecord] = []
@@ -116,6 +129,8 @@ def load_tcm_sd_records(raw_dir: Path) -> list[TcmSdRecord]:
                 if not line:
                     continue
                 obj = json.loads(line)
+                if str(obj["user_id"]) in EXCLUDED_LEAK_RECORDS:
+                    continue
                 records.append(
                     TcmSdRecord(
                         user_id=str(obj["user_id"]),
@@ -216,6 +231,68 @@ def build_short_text(record: TcmSdRecord) -> str:
     return record.chief_complaint
 
 
+def deduplicate_evaluation_records(
+    records: list[TcmSdRecord],
+    partitions: dict[str, frozenset[str]],
+) -> tuple[list[TcmSdRecord], dict]:
+    """One-way evaluation-set dedup against earlier partitions (R1 F1).
+
+    A dev case whose clinical full text (``build_clinical_text``, non-empty
+    segments joined — the audit's duplicate basis, §4) is byte-identical to
+    any train case is dropped from the evaluation side; a test case is dropped
+    when its text matches any train or dev case. TRAIN IS KEPT IN FULL:
+    train-side duplicates are genuine repeat visits in the source corpus and
+    removing them would discard real data, so the filter is deliberately
+    one-way — it only removes evaluation cases whose score could be inflated
+    by memorising a train copy.
+
+    Deterministic and replayable: membership is decided by the partition
+    sets alone, never by input order or by which duplicate is seen first.
+    Records whose user belongs to no partition are refused (partitions from
+    ``subject_partitions`` cover every user by construction, so this only
+    fires on a caller/records mismatch). Empty clinical texts would compare
+    equal to each other; the audited corpus has none (audit §1), so no
+    special case is made. Labels are irrelevant to matching — the 334
+    label-conflicting duplicate groups (audit §4) are filtered identically.
+
+    Returns ``(kept_records, stats)``; ``stats`` is provenance-grade:
+    ``{"policy", "text_basis", "dropped": {"dev", "test"}, "kept":
+    {"train", "dev", "test"}}``.
+    """
+    train, dev, test = (
+        [r for r in records if r.user_id in partitions[name]]
+        for name in ("train", "dev", "test")
+    )
+    known = {r.user_id for r in train} | {r.user_id for r in dev} | {
+        r.user_id for r in test
+    }
+    unknown_users = sorted({r.user_id for r in records} - known)
+    if unknown_users:
+        raise ValueError(
+            f"records with users outside every partition: {unknown_users[:3]}"
+        )
+    train_texts = {build_clinical_text(r) for r in train}
+    dev_texts = {build_clinical_text(r) for r in dev}
+    kept_train = list(train)
+    kept_dev = [r for r in dev if build_clinical_text(r) not in train_texts]
+    kept_test = [
+        r for r in test
+        if build_clinical_text(r) not in train_texts | dev_texts
+    ]
+    stats = {
+        "policy": (
+            "one-way evaluation-set dedup: dev cases byte-identical to a "
+            "train clinical text are dropped, test cases byte-identical to "
+            "any train or dev clinical text are dropped; train is kept in "
+            "full (train-side duplicates are genuine repeat visits)"
+        ),
+        "text_basis": "build_clinical_text",
+        "dropped": {"dev": len(dev) - len(kept_dev), "test": len(test) - len(kept_test)},
+        "kept": {"train": len(kept_train), "dev": len(kept_dev), "test": len(kept_test)},
+    }
+    return kept_train + kept_dev + kept_test, stats
+
+
 def build_tcm_sd_manifest(raw_dir: Path) -> dict:
     """Replayable dataset manifest: per-file provenance + audit conclusions.
 
@@ -243,6 +320,9 @@ def build_tcm_sd_manifest(raw_dir: Path) -> dict:
     vocab = load_syndrome_vocab(raw_dir)
     unknown = set(label_counts) - set(vocab)
     partitions = subject_partitions(records)
+    raw_record_lines = sum(
+        f["lines"] for f in files if f["name"] in RECORD_FILES
+    )
     return {
         "dataset_id": "tcm-sd-syndrome-v1",
         "generated_from": str(raw_dir),
@@ -253,6 +333,8 @@ def build_tcm_sd_manifest(raw_dir: Path) -> dict:
         "split_ratios": {"train": TRAIN_RATIO, "dev": DEV_RATIO, "test": TEST_RATIO},
         "files": files,
         "n_records": len(records),
+        "records_excluded_at_load": raw_record_lines - len(records),
+        "excluded_leak_user_ids": sorted(EXCLUDED_LEAK_RECORDS),
         "n_users": len(partitions["train"] | partitions["dev"] | partitions["test"]),
         "partition_users": {k: len(v) for k, v in partitions.items()},
         "n_labels": len(label_counts),

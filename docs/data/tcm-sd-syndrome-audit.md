@@ -91,7 +91,9 @@ chief_complaint 19 例（train 14 / dev 3 / test 2）、detection 4 例
 
 - **证候名直接泄漏**：norm_syndrome 字符串出现在文本中的仅 **1 例**
   （train，user 484293，`detection` 内含"辩证当属湿热瘀阻证"）；dev/test 为 0。
-  预处理时应剔除该例或从文本中剥离该句；其余 54,151 例可认为无标签词泄漏
+  **已实现剔除**（R1 F2）：加载层 `src/data/tcm_sd.py::EXCLUDED_LEAK_RECORDS`
+  在 `load_tcm_sd_records` 边界跳过该例（原始文件保持只读不动），全仓下游
+  一律看到剔除后的 54,151 例流。其余 54,151 例可认为无标签词泄漏
   （词面级，未做同义改写检测——同义改写泄漏状态记为 `UNVERIFIED`）。
 - **医生结论性辨证措辞**（证属 / 辨证为 / 诊为 / 诊断为）：**9,522 例（17.58%）**，
   几乎全部位于 description（现病史叙述中的辨证结论），chief/detection 各 1 例。

@@ -46,20 +46,11 @@ ADVERSARIAL_PROBES: tuple[str, ...] = (
 )
 
 
-def _text_builder(scenario: str):
-    """按场景取 #53 契约的文本构造函数（clinical=完整临床文本，short=仅主诉）。"""
-    from importlib import import_module
-
-    tcm_sd = import_module("data.tcm_sd")
-    if scenario == "clinical":
-        return tcm_sd.build_clinical_text
-    if scenario == "short":
-        return tcm_sd.build_short_text
-    raise ValueError(f"unknown scenario: {scenario}")
-
-
 def load_partitions(raw_dir: str) -> tuple[list, dict[str, frozenset[str]], LabelSpace, dict]:
-    """加载记录、subject partitions（官方文件边界仅作对照记录）与冻结词表。"""
+    """加载记录、subject partitions（官方文件边界仅作对照记录）与冻结词表。
+
+    记录经加载层泄漏剔除（R1 F2，EXCLUDED_LEAK_RECORDS）。
+    """
     from importlib import import_module
 
     tcm_sd = import_module("data.tcm_sd")
@@ -79,14 +70,32 @@ def scenario_data(
     label_space: LabelSpace,
     scenario: str,
 ) -> dict:
-    """构造一个文本场景的 train/dev 数据；UNKNOWN 标签如实报告并剔除（不补标签）。"""
-    text_fn = _text_builder(scenario)
+    """构造一个文本场景的 train/dev 数据；UNKNOWN 标签如实报告并剔除（不补标签）。
+
+    评估侧单向去重（R1 F1，在 partitions 计算后应用）：dev 中与任一 train
+    病例临床全文（build_clinical_text）逐字节相同的病例被剔除，test 对
+    train∪dev 同理（test partition 本阶段不构造，函数已支持，最终解锁时
+    生效）；train 侧全量保留——重复是真实再诊数据。去重按临床全文判定，
+    不随文本场景切换。见 data.tcm_sd.deduplicate_evaluation_records。
+    """
+    from importlib import import_module
+
+    tcm_sd = import_module("data.tcm_sd")
+    if scenario == "clinical":
+        text_fn = tcm_sd.build_clinical_text
+    elif scenario == "short":
+        text_fn = tcm_sd.build_short_text
+    else:
+        raise ValueError(f"unknown scenario: {scenario}")
+    kept_records, dedup_stats = tcm_sd.deduplicate_evaluation_records(
+        records, partitions
+    )
     out: dict = {}
     unknown = {"train": 0, "dev": 0}
     for split in ("train", "dev"):
         texts: list[str] = []
         labels: list[int] = []
-        for r in records:
+        for r in kept_records:
             if r.user_id not in partitions[split]:
                 continue
             idx = label_space.resolve(r.norm_syndrome)
@@ -97,6 +106,7 @@ def scenario_data(
             labels.append(idx)
         out[split] = {"texts": texts, "labels": labels}
     out["unknown_labels"] = unknown
+    out["dedup"] = dedup_stats
     return out
 
 
@@ -140,6 +150,7 @@ def run_baseline_experiment(
         )
         summary["dummy_macro_f1"] = round(macro_f1(dev["labels"], dummy_pred, len(label_space)), 6)
         summary["unknown_labels_excluded"] = data["unknown_labels"]
+        summary["evaluation_dedup"] = data["dedup"]
         summary["baseline_provenance"] = {
             "dummy": dummy.provenance(),
             "tfidf": tfidf.provenance(),
@@ -266,6 +277,7 @@ def run_bert_experiment(
     summary["model_version"] = MODEL_VERSION
     summary["fit"] = fit_info
     summary["unknown_labels_excluded"] = data["unknown_labels"]
+    summary["evaluation_dedup"] = data["dedup"]
 
     threshold_info = select_uncertainty_threshold(
         dev_scores.max(axis=1), [p == y for p, y in zip(dev_pred, dev["labels"], strict=False)]
@@ -273,6 +285,62 @@ def run_bert_experiment(
     summary["threshold"] = threshold_info
 
     with open(run_dir / "dev-evaluation.json", "w", encoding="utf-8") as fh:
+        json.dump(summary, fh, ensure_ascii=False, indent=2)
+    return summary
+
+
+def rescore_saved_bert(
+    raw_dir: str,
+    output_dir: str,
+    scenario: str = "short",
+    seed: int = 20261101,
+    n_boot: int = 1000,
+) -> dict:
+    """去重后 dev 上重评分已保存的 BERT 权重（R1 F1）：不重训、不重选阈值。
+
+    模型选择（最佳 epoch）与 UNCERTAIN 阈值都发生在去重前的 dev 上，这里
+    原样继承——选择用 dev 与评分用 dev 的差异如实入档（threshold_note），
+    去重后 dev 只用于评分。结果写入 <out>/bert-<scenario>/dev-evaluation-deduped.json。
+    """
+    from syndrome.bert_model import MODEL_VERSION, BertSyndromeClassifier
+
+    records, partitions, label_space, _aux = load_partitions(raw_dir)
+    data = scenario_data(records, partitions, label_space, scenario)
+    dev = data["dev"]
+    run_dir = Path(output_dir) / f"bert-{scenario}"
+    prev_path = run_dir / "dev-evaluation.json"
+    if not prev_path.exists():
+        raise FileNotFoundError(
+            f"no saved evaluation at {prev_path}; rescore needs the weights "
+            "and threshold of a completed bert run"
+        )
+    with open(prev_path, encoding="utf-8") as fh:
+        previous = json.load(fh)
+
+    clf = BertSyndromeClassifier.load(str(run_dir))
+    dev_scores = clf.predict_proba(dev["texts"])
+    dev_pred = [int(i) for i in dev_scores.argmax(axis=1)]
+    summary = summarize_evaluation(
+        dev["labels"],
+        dev_pred,
+        dev_scores,
+        label_space.labels,
+        n_boot=n_boot,
+        seed=seed,
+    )
+    summary["model_version"] = MODEL_VERSION
+    summary["unknown_labels_excluded"] = data["unknown_labels"]
+    summary["evaluation_dedup"] = data["dedup"]
+    summary["threshold"] = previous["threshold"]
+    summary["threshold_note"] = (
+        "threshold and best-epoch selection happened on the pre-dedup dev; "
+        "inherited unchanged here (selection dev != scoring dev, not re-selected)"
+    )
+    summary["rescore_of"] = {
+        "source_evaluation": str(prev_path),
+        "weight_sha256": previous.get("weight_sha256", "NOT_AVAILABLE"),
+    }
+    with open(run_dir / "dev-evaluation-deduped.json", "w", encoding="utf-8") as fh:
         json.dump(summary, fh, ensure_ascii=False, indent=2)
     return summary
 
@@ -347,11 +415,24 @@ def main(argv: Sequence[str] | None = None) -> None:
     p_bert.add_argument("--max-len", type=int, default=256)
     p_bert.add_argument("--seed", type=int, default=20261101)
 
+    p_rescore = sub.add_parser(
+        "bert-rescore",
+        help="去重后 dev 上重评分已保存的 BERT 权重（不重训）",
+    )
+    p_rescore.add_argument("--raw-dir", default="data/local/tcm-sd")
+    p_rescore.add_argument("--out", default="runs/tcm-sd-syndrome-v1")
+    p_rescore.add_argument("--scenario", choices=sorted(SCENARIOS), default="short")
+    p_rescore.add_argument("--seed", type=int, default=20261101)
+
     args = parser.parse_args(argv)
     if args.command == "baselines":
         report = run_baseline_experiment(args.raw_dir, args.out, seed=args.seed, solver=args.solver)
     elif args.command == "robustness":
         report = run_robustness_suite(args.raw_dir, args.out, seed=args.seed, solver=args.solver)
+    elif args.command == "bert-rescore":
+        report = rescore_saved_bert(
+            args.raw_dir, args.out, scenario=args.scenario, seed=args.seed,
+        )
     else:
         report = run_bert_experiment(
             args.raw_dir,

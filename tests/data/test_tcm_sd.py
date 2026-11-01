@@ -17,12 +17,14 @@ import pytest
 
 from data import tcm_sd
 from data.tcm_sd import (
+    EXCLUDED_LEAK_RECORDS,
     LABEL_TAXONOMY_ID,
     SPLIT_SEED,
     TcmSdRecord,
     build_clinical_text,
     build_short_text,
     build_tcm_sd_manifest,
+    deduplicate_evaluation_records,
     load_syndrome_knowledge,
     load_syndrome_vocab,
     load_tcm_sd_records,
@@ -316,12 +318,133 @@ def test_manifest_reports_out_of_vocab_labels(raw_dir, monkeypatch):
     assert manifest["labels_out_of_vocab"] == ["编造证"]
 
 
+# --- evaluation-set dedup (R1 F1: one-way, train kept in full) -------------
+
+PARTS_3 = {
+    "train": frozenset({"t1", "t2"}),
+    "dev": frozenset({"d1", "d2"}),
+    "test": frozenset({"x1"}),
+}
+
+
+def _dup_text_records() -> list[TcmSdRecord]:
+    """t1/t2 train; d1 duplicates t1 byte-for-byte (label conflict), d2 unique;
+    x1 (test) duplicates d2 (dev-side text, absent from train)."""
+    return [
+        _record(user_id="t1", norm_syndrome="气虚证", chief_complaint="咳嗽2月。",
+                description="干咳少痰。", detection="脉细。"),
+        _record(user_id="t2", norm_syndrome="血瘀证", chief_complaint="胸闷3天。",
+                description="刺痛固定。", detection="舌暗。"),
+        _record(user_id="d1", norm_syndrome="湿热证", chief_complaint="咳嗽2月。",
+                description="干咳少痰。", detection="脉细。"),
+        _record(user_id="d2", norm_syndrome="气虚证", chief_complaint="失眠2月。",
+                description="多梦易醒。", detection="舌淡。"),
+        _record(user_id="x1", norm_syndrome="气虚证", chief_complaint="失眠2月。",
+                description="多梦易醒。", detection="舌淡。"),
+    ]
+
+
+def test_dedup_drops_dev_cases_duplicating_train_text():
+    records = _dup_text_records()
+    kept, stats = deduplicate_evaluation_records(records, PARTS_3)
+    kept_users = [r.user_id for r in kept]
+    # d1 duplicates t1 byte-for-byte -> dropped from dev; train side kept full
+    assert "d1" not in kept_users and "t1" in kept_users
+    assert "d2" in kept_users
+    assert [r.user_id for r in kept if r.user_id in PARTS_3["train"]] == ["t1", "t2"]
+    assert stats["dropped"] == {"dev": 1, "test": 1}
+    assert stats["kept"] == {"train": 2, "dev": 1, "test": 0}
+
+
+def test_dedup_drops_test_cases_against_train_and_dev():
+    records = _dup_text_records()
+    kept, _stats = deduplicate_evaluation_records(records, PARTS_3)
+    # x1 duplicates d2 (a kept dev text) but not any train text -> still dropped
+    assert "x1" not in [r.user_id for r in kept]
+
+
+def test_dedup_label_conflict_group_treated_identically():
+    # same text with CONFLICTING labels across train/dev is still a duplicate:
+    # t1 气虚证 vs d1 湿热证 — the dev copy is dropped regardless of label
+    records = _dup_text_records()
+    assert records[0].norm_syndrome != records[2].norm_syndrome
+    assert build_clinical_text(records[0]) == build_clinical_text(records[2])
+    kept, _stats = deduplicate_evaluation_records(records, PARTS_3)
+    assert "d1" not in [r.user_id for r in kept]
+
+
+def test_dedup_is_deterministic_and_replayable():
+    records = _dup_text_records()
+    first, stats_first = deduplicate_evaluation_records(records, PARTS_3)
+    second, stats_second = deduplicate_evaluation_records(records, PARTS_3)
+    assert [r.user_id for r in first] == [r.user_id for r in second]
+    assert stats_first == stats_second
+    # membership is decided by the partition sets alone, not input order
+    reversed_kept, reversed_stats = deduplicate_evaluation_records(
+        list(reversed(records)), PARTS_3
+    )
+    assert {r.user_id for r in reversed_kept} == {r.user_id for r in first}
+    assert reversed_stats == stats_second
+
+
+def test_dedup_refuses_records_outside_every_partition():
+    records = _dup_text_records() + [_record(user_id="ghost")]
+    with pytest.raises(ValueError, match="outside every partition"):
+        deduplicate_evaluation_records(records, PARTS_3)
+
+
+# --- leak-record exclusion (R1 F2) ------------------------------------------
+
+def test_excluded_leak_records_constant_is_frozen():
+    assert EXCLUDED_LEAK_RECORDS == {
+        "484293": (
+            "norm_syndrome string appears verbatim in detection (audit §5)"
+        )
+    }
+
+
+def test_load_skips_excluded_leak_records(raw_dir, monkeypatch):
+    leak = dict(SYN_RECORDS[0], user_id="484293",
+                detection="辩证当属湿热瘀阻证。")
+    rows = [*SYN_RECORDS[:6], leak]
+    payload = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+    (raw_dir / "train.json").write_text(payload, encoding="utf-8")
+    monkeypatch.setitem(
+        tcm_sd.EXPECTED_SHA256,
+        "train.json",
+        hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+    )
+    records = load_tcm_sd_records(raw_dir)
+    # 9 fixture rows (6 train + 2 dev + the leak record) minus 1 skipped
+    assert len(records) == 8
+    assert "484293" not in {r.user_id for r in records}
+
+
+def test_manifest_counts_load_time_exclusions(raw_dir, monkeypatch):
+    leak = dict(SYN_RECORDS[0], user_id="484293",
+                detection="辩证当属湿热瘀阻证。")
+    rows = [*SYN_RECORDS[:6], leak]
+    payload = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+    (raw_dir / "train.json").write_text(payload, encoding="utf-8")
+    monkeypatch.setitem(
+        tcm_sd.EXPECTED_SHA256,
+        "train.json",
+        hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+    )
+    manifest = build_tcm_sd_manifest(raw_dir)
+    assert manifest["n_records"] == 8
+    assert manifest["records_excluded_at_load"] == 1
+    assert manifest["excluded_leak_user_ids"] == ["484293"]
+
+
 # --- real data (skipped without data/local/tcm-sd) ------------------------
 
 @pytest.mark.skipif(not has_real_data, reason="real dataset only under data/local/tcm-sd")
 def test_real_files_load_and_match_frozen_constants():
     records = load_tcm_sd_records(RAW_DIR)
-    assert len(records) == 54152
+    # 54,152 raw cases minus the 1 leak record excluded at load (R1 F2)
+    assert len(records) == 54151
+    assert "484293" not in {r.user_id for r in records}
     vocab = load_syndrome_vocab(RAW_DIR)
     assert len(vocab) == 148
     assert {r.norm_syndrome for r in records} == set(vocab)
@@ -352,5 +475,22 @@ def test_real_manifest_hashes_match_registry_record():
     record = DATASET_REGISTRY["tcm-sd-syndrome-v1"]
     assert all(verify_files(record).values())
     manifest = build_tcm_sd_manifest(RAW_DIR)
-    assert manifest["n_records"] == 54152
-    assert manifest["n_users"] == record.n_subjects == 52295
+    # loaded view: raw 54,152 minus the 1 leak record excluded at load
+    assert manifest["n_records"] == 54151
+    assert manifest["n_users"] == 52294
+    assert manifest["records_excluded_at_load"] == 1
+    # the registry documents the RAW dataset (before load-time exclusion)
+    assert record.n_subjects == 52295
+
+
+@pytest.mark.skipif(not has_real_data, reason="real dataset only under data/local/tcm-sd")
+def test_real_evaluation_dedup_replays_deterministically():
+    records = load_tcm_sd_records(RAW_DIR)
+    parts = subject_partitions(records)
+    kept1, stats1 = deduplicate_evaluation_records(records, parts)
+    kept2, stats2 = deduplicate_evaluation_records(records, parts)
+    assert [r.lcd_id for r in kept1] == [r.lcd_id for r in kept2]
+    assert stats1 == stats2
+    # train side is kept in full — only evaluation partitions shrink
+    assert stats1["kept"]["train"] == sum(1 for r in records if r.user_id in parts["train"])
+    assert stats1["dropped"]["dev"] > 0  # the R1 finding this fix removes

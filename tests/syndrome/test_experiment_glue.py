@@ -39,6 +39,39 @@ def _fake_record(i: int) -> types.SimpleNamespace:
     )
 
 
+def _fake_dedup(records, partitions):
+    """与 data.tcm_sd.deduplicate_evaluation_records 相同契约的最小实现：
+    dev 剔除与 train 临床全文逐字节相同者；test 对 train∪dev；train 全量保留。"""
+    def text(r):
+        return f"{r.chief_complaint}{r.description}{r.detection}"
+
+    train_texts = {text(r) for r in records if r.user_id in partitions["train"]}
+    dev_texts = {text(r) for r in records if r.user_id in partitions["dev"]}
+    kept, dropped = [], {"dev": 0, "test": 0}
+    for r in records:
+        t = text(r)
+        if r.user_id in partitions["train"]:
+            kept.append(r)
+        elif r.user_id in partitions["dev"]:
+            if t in train_texts:
+                dropped["dev"] += 1
+            else:
+                kept.append(r)
+        elif r.user_id in partitions["test"]:
+            if t in train_texts or t in dev_texts:
+                dropped["test"] += 1
+            else:
+                kept.append(r)
+        else:
+            raise ValueError("record outside every partition")
+    return kept, {
+        "policy": "one-way",
+        "text_basis": "build_clinical_text",
+        "dropped": dropped,
+        "kept": {"train": 0, "dev": 0, "test": 0},
+    }
+
+
 @pytest.fixture
 def fake_tcm_sd(monkeypatch):
     fake = types.ModuleType("data.tcm_sd")
@@ -54,6 +87,7 @@ def fake_tcm_sd(monkeypatch):
     }
     fake.build_clinical_text = lambda r: f"{r.chief_complaint}{r.description}{r.detection}"
     fake.build_short_text = lambda r: r.chief_complaint
+    fake.deduplicate_evaluation_records = _fake_dedup
     monkeypatch.setitem(sys.modules, "data.tcm_sd", fake)
     # 真实 data.tcm_sd 可能已被其他测试文件在收集期导入并挂到父包上；
     # "import data.tcm_sd as x" 优先取父包属性，必须一并替换
@@ -96,6 +130,24 @@ def test_unknown_labels_excluded_not_fabricated(fake_tcm_sd):
     data = scenario_data(records, partitions, space, "short")
     assert data["unknown_labels"] == {"train": 1, "dev": 0}
     assert len(data["train"]["texts"]) == 5
+
+
+def test_scenario_data_dedups_dev_against_train(fake_tcm_sd):
+    """R1 F1：dev 中与 train 病例临床全文逐字节相同者被剔除，train 全量保留。"""
+    from syndrome.experiment import load_partitions, scenario_data
+
+    records, partitions, space, _ = load_partitions("data/local/tcm-sd")
+    # u0 在 train，u6 在 dev：把 u6 的临床文本改成与 u0 逐字节相同（标签冲突组同理）
+    for field in ("chief_complaint", "description", "detection"):
+        setattr(records[6], field, getattr(records[0], field))
+    assert records[6].norm_syndrome != records[0].norm_syndrome  # 标签冲突组
+    data = scenario_data(records, partitions, space, "clinical")
+    assert len(data["train"]["texts"]) == 6  # train 侧不动
+    assert len(data["dev"]["texts"]) == 1
+    assert data["dedup"]["dropped"] == {"dev": 1, "test": 0}
+    # 短文本口径用同一临床全文去重判定（文本基线不随场景切换）
+    data_short = scenario_data(records, partitions, space, "short")
+    assert len(data_short["dev"]["texts"]) == 1
 
 
 def test_baseline_experiment_end_to_end(fake_tcm_sd, tmp_path):

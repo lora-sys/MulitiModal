@@ -43,7 +43,8 @@ def test_load_records_and_knowledge():
 
     d = str(raw_dir())
     records = tcm_sd.load_tcm_sd_records(d)
-    assert len(records) == 43180 + 5486 + 5486
+    # 原始 54,152 例减去加载层剔除的 1 例泄漏记录（R1 F2）
+    assert len(records) == 43180 + 5486 + 5486 - 1
     knowledge = tcm_sd.load_syndrome_knowledge(d)
     assert len(knowledge) == 1027
 
@@ -56,8 +57,9 @@ def test_subject_partitions_disjoint_and_total():
     train, dev, test = partitions["train"], partitions["dev"], partitions["test"]
     assert not (train & dev) and not (train & test) and not (dev & test)
     assert len(train) + len(dev) + len(test) == len({r.user_id for r in records})
-    # 官方文件边界仅作对照：记录对照数但分区必须与官方文件不同（user_id 跨文件重叠）
-    assert aux["official_file_counts"]["train"] == 43180
+    # 官方文件边界仅作对照：记录对照数但分区必须与官方文件不同（user_id 跨文件重叠）。
+    # 对照数按加载后记录流计（泄漏记录已在加载层剔除，train 文件 43,180→43,179）
+    assert aux["official_file_counts"]["train"] == 43179
 
 
 def test_all_norm_syndromes_in_frozen_vocab():
