@@ -325,6 +325,93 @@ def test_the_worker_refuses_a_missing_ledger_event(tmp_path):
         _worker(config, records=records)
 
 
+def test_ledger_contains_matches_parsed_event_ids(tmp_path):
+    # H-03: substring matching confused a query with any longer event_id (or
+    # any JSON field whose value embeds one); the match is on the parsed
+    # event_id field, line by line
+    from research.finalize import ledger_contains
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text(
+        json.dumps({"event_id": "abcdef"}) + "\n"
+        # a hand-written/corrupt line embeds the query as text: substring
+        # matching reports it, per-line json parsing must skip it
+        + '{"event_id": "abc", broken\n'
+        + json.dumps({"note": "unrelated"}) + "\n"
+    )
+    assert ledger_contains(ledger, "abcdef")
+    assert not ledger_contains(ledger, "abc")
+    assert not ledger_contains(ledger, "zzzz")
+
+
+def test_concurrent_drivers_cannot_overspend_the_ledger(tmp_path):
+    """H-03: counting and appending must be ONE exclusive critical section.
+    Two concurrent drivers with one unlock left may consume exactly it — the
+    second is refused before spawning. A json.dumps hook widens the
+    count→write window so the race is deterministic, not lucky."""
+    import textwrap
+
+    from data.mendeley import records_to_json
+    from research import finalize as finalize_mod
+
+    records = fake_records(40)
+    worktree, _candidate, manifest_path, _frozen, _head = _worktree(
+        tmp_path, records
+    )
+    records_path = tmp_path / "records.json"
+    records_path.write_text(records_to_json(records))
+    ledger = finalize_mod.global_ledger_path(worktree)
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    # one unlock already spent: exactly ONE more charge fits the budget
+    ledger.write_text(json.dumps({"event_id": "d" * 32}) + "\n")
+
+    child = textwrap.dedent("""
+        import json as json_mod, sys, time
+        from pathlib import Path
+        _orig = json_mod.dumps
+        def slow(*a, **k):
+            time.sleep(0.6)  # widen the count->append window for BOTH drivers
+            return _orig(*a, **k)
+        json_mod.dumps = slow
+        sys.path.insert(0, sys.argv[1])
+        from research import finalize as F
+        from data.mendeley import records_from_json
+        records = records_from_json(Path(sys.argv[2]).read_text())
+        try:
+            F.refit_and_score(
+                worktree=Path(sys.argv[3]), out_dir=Path(sys.argv[4]),
+                manifest_path=Path(sys.argv[5]), dataset_path="unused",
+                editable="src/research/candidate.py",
+                commit="0123456789abcdef", records=records,
+                spawn=lambda c, p: (_ for _ in ()).throw(
+                    RuntimeError("worker crashed mid-fit")),
+            )
+            print("CHARGED")
+        except RuntimeError as exc:
+            print("REFUSED:", exc)
+    """)
+    script_path = tmp_path / "driver-child.py"
+    script_path.write_text(child)
+    src_root = str(Path(__file__).resolve().parents[2] / "src")
+    procs = []
+    for run in range(2):
+        out_dir = tmp_path / f"out-{run}"
+        procs.append(subprocess.Popen(
+            [sys.executable, str(script_path), src_root, str(records_path),
+             str(worktree), str(out_dir), str(manifest_path)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        ))
+    outputs = [proc.communicate(timeout=180)[0] for proc in procs]
+    events = [
+        json.loads(line)
+        for line in ledger.read_text().splitlines() if line.strip()
+    ]
+    assert len(events) == 2, outputs
+    # exactly one driver fits under the budget; the other is refused before
+    # its worker spawns
+    assert sum("unlock budget" in out for out in outputs) == 1, outputs
+
+
 def test_the_worker_binds_the_git_state_to_the_record(tmp_path):
     """F-09: HEAD must be the recorded commit and the tree clean beyond the
     editable file, or the fitted code is not the committed, recorded one."""

@@ -81,6 +81,9 @@ def fit(config: dict, records=None) -> dict:
         )
     seed = int(config.get("seed", 0))
     budget = float(config.get("time_budget_seconds", TIME_BUDGET_SECONDS))
+    import torch
+
+    torch.manual_seed(seed)  # before training_fold_data and build_model (H-06)
     fold = training_fold_data(fit_manifest, records, config)
 
     started = time.monotonic()

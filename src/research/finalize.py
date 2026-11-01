@@ -74,45 +74,77 @@ def global_ledger_path(worktree: Path) -> Path:
         return worktree / UNLOCK_LEDGER_DIR / UNLOCK_LEDGER_FILE
 
 
-def unlock_count(ledger_path: Path) -> int:
+def _read_ledger_lines(ledger_path: Path) -> list[str]:
+    """Read the ledger under a SHARED lock: readers see a consistent prefix
+    even while a driver is inside its count-and-append critical section."""
     path = Path(ledger_path)
     if not path.exists():
-        return 0
-    return sum(1 for line in path.read_text().splitlines() if line.strip())
+        return []
+    with path.open("r") as fh:
+        fcntl.flock(fh, fcntl.LOCK_SH)
+        try:
+            lines = fh.read().splitlines()
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+    return [line for line in lines if line.strip()]
+
+
+def unlock_count(ledger_path: Path) -> int:
+    return len(_read_ledger_lines(ledger_path))
 
 
 def ledger_contains(ledger_path: Path, event_id: str) -> bool:
-    path = Path(ledger_path)
-    if not path.exists():
-        return False
-    return any(
-        f'"event_id": "{event_id}"' in line
-        for line in path.read_text().splitlines() if line.strip()
-    )
+    """Exact match on the parsed event_id, line by line — not a substring
+    scan, which any longer id (or a corrupt line embedding the query) could
+    satisfy."""
+    for line in _read_ledger_lines(ledger_path):
+        try:
+            if json.loads(line).get("event_id") == event_id:
+                return True
+        except json.JSONDecodeError:
+            continue
+    return False
 
 
 def _assert_unlock_budget(ledger_path: Path) -> int:
     used = unlock_count(ledger_path)
     if used >= MAX_UNLOCKS:
-        raise RuntimeError(
-            f"holdout unlock budget exhausted: {used} of {MAX_UNLOCKS} events "
-            f"recorded in {ledger_path}; a further unlock needs a new data "
-            "milestone or explicit user authorisation (AGENTS.md rule 11)"
-        )
+        raise _unlock_budget_error(ledger_path, used)
     return used
 
 
-def _append_unlock_event(ledger_path: Path, event: dict) -> None:
-    """Append one intent event under an exclusive flock (concurrent drivers
-    must not both slip under the budget between count and append)."""
+def _unlock_budget_error(ledger_path: Path, used: int) -> RuntimeError:
+    return RuntimeError(
+        f"holdout unlock budget exhausted: {used} of {MAX_UNLOCKS} events "
+        f"recorded in {ledger_path}; a further unlock needs a new data "
+        "milestone or explicit user authorisation (AGENTS.md rule 11)"
+    )
+
+
+def _charge_unlock_event(ledger_path: Path, event: dict) -> None:
+    """Count and append in ONE exclusive critical section (H-03).
+
+    The count used to happen outside the lock, so two concurrent drivers
+    could both see room in the budget and both append — overspending the
+    Phase-1 unlock budget the ledger exists to enforce. Now: LOCK_EX → count
+    → refuse if exhausted → append → fsync → unlock, atomically. The unlock
+    event is the GRANT of read permission, not a successful read: a worker
+    that crashes after this has still consumed the event.
+    """
     ledger_path = Path(ledger_path)
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    with ledger_path.open("a") as fh:
+    with ledger_path.open("a+") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
-        fh.write(json.dumps(event, sort_keys=True) + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-        fcntl.flock(fh, fcntl.LOCK_UN)
+        try:
+            fh.seek(0)
+            used = sum(1 for line in fh if line.strip())
+            if used >= MAX_UNLOCKS:
+                raise _unlock_budget_error(ledger_path, used)
+            fh.write(json.dumps(event, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
 
 
 def refit_and_score(
@@ -167,9 +199,10 @@ def refit_and_score(
     ))
 
     # ---- pay BEFORE spawning: the unlock event is the grant of read access,
-    # not a successful read — a crashed worker has still consumed it
+    # not a successful read — a crashed worker has still consumed it. Count
+    # and append happen inside one exclusive critical section, so concurrent
+    # drivers cannot both slip under the budget (H-03).
     ledger = global_ledger_path(worktree)
-    _assert_unlock_budget(ledger)
     event = {
         "event_id": uuid.uuid4().hex,
         "event": "holdout_unlock_intent",
@@ -179,7 +212,7 @@ def refit_and_score(
         "pool_manifest_sha256": pool["manifest_sha256"],
         "selection_parent_manifest_sha256": frozen["manifest_sha256"],
     }
-    _append_unlock_event(ledger, event)
+    _charge_unlock_event(ledger, event)
 
     config = {
         "worktree_path": str(worktree),
@@ -235,21 +268,24 @@ def refit_and_score(
 
 
 def _child_env(worktree: str) -> dict:
-    return {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "PYTHONPATH": str(Path(worktree) / "src"),
-    }
+    """Minimal whitelist env for every child (H-02/H-05): no PYTHONPATH — the
+    isolated bootstrap injects the import path; PATH is a minimal fixed set
+    because this worker itself needs `git`."""
+    from research.spawn import child_env
+
+    return child_env(worktree)
 
 
 def _spawn_worker(config: dict, config_path: Path) -> dict:
-    """Run the finalize fit worker: sanitized env, worktree src only."""
+    """Run the finalize fit worker: isolated one-shot start, whitelist env."""
+    from research.spawn import bootstrap_command
+
     worktree = config["worktree_path"]
     budget = float(config["time_budget_seconds"])
     timeout = budget + 600.0
-    command = [
-        sys.executable, "-m", "research.finalize", "--config", str(config_path),
-    ]
+    command = bootstrap_command(
+        worktree, "research.finalize", "--config", str(config_path),
+    )
     try:
         result = subprocess.run(
             command, cwd=worktree, text=True, capture_output=True,
@@ -265,6 +301,8 @@ def _spawn_worker(config: dict, config_path: Path) -> dict:
 def _spawn_holdout_evaluator(config: dict, request: dict) -> dict:
     """Score the holdout in an isolated evaluator subprocess (state_dict
     only, holdout rebuilt from the frozen parent manifest)."""
+    from research.spawn import bootstrap_command
+
     worktree = config["worktree_path"]
     with tempfile.TemporaryDirectory(prefix="research-holdout-io-") as io_dir:
         io = Path(io_dir)
@@ -272,10 +310,10 @@ def _spawn_holdout_evaluator(config: dict, request: dict) -> dict:
         config_path.write_text(json.dumps(config))
         request_path = io / "holdout-request.json"
         request_path.write_text(json.dumps(request))
-        command = [
-            sys.executable, "-m", "research.evaluator", "--mode", "holdout",
+        command = bootstrap_command(
+            worktree, "research.evaluator", "--mode", "holdout",
             "--config", str(config_path), "--request", str(request_path),
-        ]
+        )
         try:
             result = subprocess.run(
                 command, cwd=worktree, text=True, capture_output=True,
@@ -405,6 +443,9 @@ def _worker(config: dict, records=None) -> dict:
             f"pool records contain rows outside the pool manifest: {leaked[:3]} "
             "— refusing to fit on data the pool contract did not trim"
         )
+    import torch
+
+    torch.manual_seed(seed)  # before training_fold_data and build_model (H-06)
     fold = training_fold_data(pool, records, config)
     started = time.monotonic()
     model = candidate.build_model(fold)

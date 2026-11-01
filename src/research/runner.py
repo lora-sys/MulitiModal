@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -134,17 +133,26 @@ def run(config: dict, folds: int, repeats: int, records=None,
         "overran": overran,
         "fold_seconds": fold_seconds,
         "budget_seconds": budget,
+        # H-08, recorded so a reader knows what the snapshot does NOT cover:
+        # the pre-training snapshot hashes the manifest, the dataset and the
+        # candidate file; the saved weights/architecture outputs are outside
+        # it — the evaluator re-hashes those against the worker-recorded
+        # hashes instead
+        "integrity_snapshot_scope": (
+            "pre-training snapshot: manifest_sha256, dataset_sha256, "
+            "candidate_sha256; saved weights/architecture outputs are "
+            "re-hashed by the evaluator against the worker-recorded hashes"
+        ),
     }
 
 
 def _child_env(worktree: str) -> dict:
     """Whitelist environment for every child: no inherited secrets, no other
-    checkout's modules — only this worktree's src on the import path."""
-    return {
-        "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", ""),
-        "PYTHONPATH": str(Path(worktree) / "src"),
-    }
+    checkout's modules — see research.spawn (H-02: no PYTHONPATH at all, the
+    isolated bootstrap injects the import path instead)."""
+    from research.spawn import child_env
+
+    return child_env(worktree)
 
 
 def _spawn(config: dict, command: list[str], timeout: float) -> dict:
@@ -171,17 +179,23 @@ def _spawn(config: dict, command: list[str], timeout: float) -> dict:
 def _spawn_training(config: dict, worker_config_path: Path) -> dict:
     """Fit one fold in a one-shot training subprocess; hard-killed at
     budget + grace (a candidate that hangs is a crash, not a slow winner)."""
+    from research.spawn import bootstrap_command
+
     budget = float(config["time_budget_seconds"])
     return _spawn(
         config,
-        [sys.executable, "-m", "research.train_worker",
-         "--config", str(worker_config_path)],
+        bootstrap_command(
+            config["worktree_path"], "research.train_worker",
+            "--config", str(worker_config_path),
+        ),
         timeout=budget + TIME_BUDGET_GRACE_SECONDS,
     )
 
 
 def _spawn_evaluator(config: dict, request: dict) -> dict:
     """Score one fold in a fresh, environment-restricted subprocess."""
+    from research.spawn import bootstrap_command
+
     with tempfile.TemporaryDirectory(prefix="research-eval-io-") as io_dir:
         io = Path(io_dir)
         config_path = io / "config.json"
@@ -190,8 +204,10 @@ def _spawn_evaluator(config: dict, request: dict) -> dict:
         request_path.write_text(json.dumps(request))
         return _spawn(
             config,
-            [sys.executable, "-m", "research.evaluator",
-             "--config", str(config_path), "--request", str(request_path)],
+            bootstrap_command(
+                config["worktree_path"], "research.evaluator",
+                "--config", str(config_path), "--request", str(request_path),
+            ),
             timeout=float(config.get("evaluator_timeout_s", 300.0)),
         )
 

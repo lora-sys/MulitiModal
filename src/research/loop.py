@@ -395,6 +395,10 @@ class SourceResearchLoop:
 
         value = float(result["primary_value"])
         sem = float(result["primary_sem"])
+        entry["integrity_snapshot_scope"] = result.get(
+            "integrity_snapshot_scope",
+            "unrecorded — the runner did not report its snapshot coverage",
+        )
         previous_best = champion.get("best_so_far") if champion else None
         keep, reason = self.decide(value, sem, growth, previous_best, self.margin_sem)
         entry["metrics"] = {
@@ -416,21 +420,17 @@ class SourceResearchLoop:
         )
 
     def _run_runner(self, config_path: Path) -> dict:
-        import os
-        import sys
+        from research.spawn import bootstrap_command, child_env
 
-        command = [
-            sys.executable, "-m", "research.runner", "--config", str(config_path),
+        command = bootstrap_command(
+            str(self.worktree.path), "research.runner",
+            "--config", str(config_path),
             "--folds", str(self.folds), "--repeats", str(self.repeats),
-        ]
-        # the same interpreter that runs the loop, and only this worktree's src
-        # on the import path: a candidate must not be able to reach the loop's
-        # environment or another checkout's modules
-        env = {
-            "PATH": os.environ.get("PATH", ""),
-            "HOME": os.environ.get("HOME", ""),
-            "PYTHONPATH": str(self.worktree.path / "src"),
-        }
+        )
+        # the same interpreter that runs the loop; the child starts isolated
+        # (no env injection, no user site, no cwd on sys.path) with the same
+        # whitelist every other trusted child gets (H-02)
+        env = child_env(str(self.worktree.path))
         try:
             result = subprocess.run(
                 command, cwd=self.worktree.path, text=True, capture_output=True,

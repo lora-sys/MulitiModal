@@ -200,6 +200,93 @@ def test_subprocess_chain_trains_and_scores_state_dict_only(tmp_path):
     assert isinstance(score["primary_value"], float)
 
 
+def test_poisoned_pythonpath_cannot_run_startup_code(tmp_path):
+    """H-02: a PYTHONPATH directory must be dead to a trusted child. A planted
+    sitecustomize.py executes BEFORE any SHA check — with the old `-m` launch
+    and inherited PYTHONPATH it ran in every worker and could forge the result
+    line. The isolated bootstrap launch must leave it unimported."""
+    probe_dir = tmp_path / "probe"
+    probe_dir.mkdir()
+    (probe_dir / "sitecustomize.py").write_text(
+        "print('SITECUSTOMIZE-RAN')\n"
+    )
+    records = fake_records()
+    _fit_manifest, fit_manifest_path, fit_records_path = _fit_inputs(
+        tmp_path, records
+    )
+    worktree = tmp_path / "wt"
+    _link_src(worktree)
+    candidate_sha = _file_sha(worktree / "src" / "research" / "candidate.py")
+    config = {
+        "worktree_path": str(worktree),
+        "editable": "src/research/candidate.py",
+        "candidate_sha256": candidate_sha,
+        "seed": 0,
+        "time_budget_seconds": 0.05,
+        "train_batch_size": 8,
+        "fit_manifest_path": str(fit_manifest_path),
+        "fit_records_path": str(fit_records_path),
+        "output_dir": str(tmp_path / "out"),
+        "output_stem": "m0",
+    }
+    config_path = tmp_path / "worker-config.json"
+    config_path.write_text(json.dumps(config))
+    from research.spawn import bootstrap_command
+
+    result = subprocess.run(
+        bootstrap_command(str(worktree), "research.train_worker",
+                          "--config", str(config_path)),
+        cwd=worktree, text=True, capture_output=True, timeout=120,
+        env={"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path),
+             "PYTHONPATH": str(probe_dir)},
+    )
+    assert "SITECUSTOMIZE-RAN" not in result.stdout
+    assert "SITECUSTOMIZE-RAN" not in result.stderr
+    payload = _last_json(result)
+    assert payload["ok"], payload
+
+
+def test_same_config_spawns_bitwise_identical_weights(tmp_path):
+    """H-06: two one-shot workers from the same config must produce identical
+    weights — the seed is applied before the model is built, so the run is
+    reproducible bit for bit."""
+    records = fake_records()
+    _fit_manifest, fit_manifest_path, fit_records_path = _fit_inputs(
+        tmp_path, records
+    )
+    worktree = tmp_path / "wt"
+    _link_src(worktree)
+    candidate_sha = _file_sha(worktree / "src" / "research" / "candidate.py")
+    hashes = []
+    for run in range(2):
+        config = {
+            "worktree_path": str(worktree),
+            "editable": "src/research/candidate.py",
+            "candidate_sha256": candidate_sha,
+            "seed": 0,
+            "time_budget_seconds": 0.05,
+            "train_batch_size": 8,
+            "fit_manifest_path": str(fit_manifest_path),
+            "fit_records_path": str(fit_records_path),
+            "output_dir": str(tmp_path / f"out-{run}"),
+            "output_stem": "m0",
+        }
+        config_path = tmp_path / f"worker-config-{run}.json"
+        config_path.write_text(json.dumps(config))
+        from research.spawn import bootstrap_command
+
+        result = subprocess.run(
+            bootstrap_command(str(worktree), "research.train_worker",
+                              "--config", str(config_path)),
+            cwd=worktree, text=True, capture_output=True, timeout=120,
+            env={"PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(tmp_path)},
+        )
+        payload = _last_json(result)
+        assert payload["ok"], payload
+        hashes.append(payload["weights_sha256"])
+    assert hashes[0] == hashes[1]
+
+
 def test_runner_source_never_imports_the_candidate():
     runner_src = (SRC_ROOT / "research" / "runner.py").read_text()
     # F-02: the runner is an orchestrator — candidate code never runs there,
