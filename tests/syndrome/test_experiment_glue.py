@@ -39,11 +39,15 @@ def _fake_record(i: int) -> types.SimpleNamespace:
     )
 
 
-def _fake_dedup(records, partitions):
+def _fake_dedup(records, partitions, text_basis=None):
     """与 data.tcm_sd.deduplicate_evaluation_records 相同契约的最小实现：
-    dev 剔除与 train 临床全文逐字节相同者；test 对 train∪dev；train 全量保留。"""
-    def text(r):
-        return f"{r.chief_complaint}{r.description}{r.detection}"
+    dev 剔除与 train 在 text_basis 下逐字节相同者；test 对 train∪dev；train
+    全量保留。text_basis 缺省退化为拼接全文（真实默认是 build_clinical_text）。"""
+    if text_basis is None:
+        def text(r):
+            return f"{r.chief_complaint}{r.description}{r.detection}"
+    else:
+        text = text_basis
 
     train_texts = {text(r) for r in records if r.user_id in partitions["train"]}
     dev_texts = {text(r) for r in records if r.user_id in partitions["dev"]}

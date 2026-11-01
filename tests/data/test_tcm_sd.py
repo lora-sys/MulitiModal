@@ -363,6 +363,33 @@ def test_dedup_drops_test_cases_against_train_and_dev():
     assert "x1" not in [r.user_id for r in kept]
 
 
+def test_dedup_text_basis_is_scenario_selectable():
+    """Mainline arbitration 2026-11-02: the basis must be the scenario's own
+    input text. d3 shares t1's chief complaint but has a different history —
+    leak-free for the clinical scenario, memorisable in the short one."""
+    records = _dup_text_records() + [
+        _record(user_id="d3", norm_syndrome="气虚证", chief_complaint="咳嗽2月。",
+                description="病程中曾发热。", detection="苔黄。"),
+    ]
+    parts = {
+        "train": PARTS_3["train"],
+        "dev": PARTS_3["dev"] | frozenset({"d3"}),
+        "test": PARTS_3["test"],
+    }
+    # default (clinical) basis: d3's full text differs from every train case
+    kept, stats = deduplicate_evaluation_records(records, parts)
+    assert "d3" in [r.user_id for r in kept]
+    assert stats["text_basis"] == "build_clinical_text"
+    # short basis: d3's chief complaint byte-matches t1 -> dropped from dev
+    kept_short, stats_short = deduplicate_evaluation_records(
+        records, parts, text_basis=build_short_text
+    )
+    assert "d3" not in [r.user_id for r in kept_short]
+    assert "t1" in [r.user_id for r in kept_short]  # train stays full
+    assert stats_short["text_basis"] == "build_short_text"
+    assert stats_short["dropped"]["dev"] == stats["dropped"]["dev"] + 1
+
+
 def test_dedup_label_conflict_group_treated_identically():
     # same text with CONFLICTING labels across train/dev is still a duplicate:
     # t1 气虚证 vs d1 湿热证 — the dev copy is dropped regardless of label

@@ -73,10 +73,12 @@ def scenario_data(
     """构造一个文本场景的 train/dev 数据；UNKNOWN 标签如实报告并剔除（不补标签）。
 
     评估侧单向去重（R1 F1，在 partitions 计算后应用）：dev 中与任一 train
-    病例临床全文（build_clinical_text）逐字节相同的病例被剔除，test 对
+    病例在**本场景输入文本**（text_fn）下逐字节相同的病例被剔除，test 对
     train∪dev 同理（test partition 本阶段不构造，函数已支持，最终解锁时
-    生效）；train 侧全量保留——重复是真实再诊数据。去重按临床全文判定，
-    不随文本场景切换。见 data.tcm_sd.deduplicate_evaluation_records。
+    生效）；train 侧全量保留——重复是真实再诊数据。去重基准必须随场景切换
+    （主线仲裁 2026-11-02）：short 场景按主诉判定（真实语料剔 2,065 条，
+    LR 0.3835→0.3497），临床全文基准会漏掉主诉相同但现病史不同的可记忆
+    副本。见 data.tcm_sd.deduplicate_evaluation_records。
     """
     from importlib import import_module
 
@@ -88,7 +90,7 @@ def scenario_data(
     else:
         raise ValueError(f"unknown scenario: {scenario}")
     kept_records, dedup_stats = tcm_sd.deduplicate_evaluation_records(
-        records, partitions
+        records, partitions, text_basis=text_fn
     )
     out: dict = {}
     unknown = {"train": 0, "dev": 0}

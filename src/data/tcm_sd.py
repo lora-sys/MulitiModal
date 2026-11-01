@@ -14,6 +14,7 @@ import hashlib
 import json
 import random
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -234,26 +235,34 @@ def build_short_text(record: TcmSdRecord) -> str:
 def deduplicate_evaluation_records(
     records: list[TcmSdRecord],
     partitions: dict[str, frozenset[str]],
+    text_basis: Callable[[TcmSdRecord], str] = build_clinical_text,
 ) -> tuple[list[TcmSdRecord], dict]:
     """One-way evaluation-set dedup against earlier partitions (R1 F1).
 
-    A dev case whose clinical full text (``build_clinical_text``, non-empty
-    segments joined — the audit's duplicate basis, §4) is byte-identical to
-    any train case is dropped from the evaluation side; a test case is dropped
-    when its text matches any train or dev case. TRAIN IS KEPT IN FULL:
-    train-side duplicates are genuine repeat visits in the source corpus and
-    removing them would discard real data, so the filter is deliberately
-    one-way — it only removes evaluation cases whose score could be inflated
-    by memorising a train copy.
+    A dev case whose text under ``text_basis`` is byte-identical to any train
+    case is dropped from the evaluation side; a test case is dropped when its
+    text matches any train or dev case. TRAIN IS KEPT IN FULL: train-side
+    duplicates are genuine repeat visits in the source corpus and removing
+    them would discard real data, so the filter is deliberately one-way — it
+    only removes evaluation cases whose score could be inflated by
+    memorising a train copy.
+
+    The basis must be the scenario's own input text (mainline arbitration
+    2026-11-02): a case whose chief complaint matches a train case but whose
+    history differs is leak-free for the clinical scenario yet memorisable
+    in the short scenario, so ``scenario_data`` passes its own builder.
+    Measured on the real corpus (short basis): 2,065/5,412 dev cases drop
+    and the LR baseline moves 0.3835 → 0.3497; the clinical-text default
+    (audit §4 duplicate basis) drops 595 and under-corrects short.
 
     Deterministic and replayable: membership is decided by the partition
     sets alone, never by input order or by which duplicate is seen first.
     Records whose user belongs to no partition are refused (partitions from
     ``subject_partitions`` cover every user by construction, so this only
-    fires on a caller/records mismatch). Empty clinical texts would compare
-    equal to each other; the audited corpus has none (audit §1), so no
-    special case is made. Labels are irrelevant to matching — the 334
-    label-conflicting duplicate groups (audit §4) are filtered identically.
+    fires on a caller/records mismatch). Empty texts would compare equal to
+    each other; the audited corpus has none (audit §1), so no special case
+    is made. Labels are irrelevant to matching — the 334 label-conflicting
+    duplicate groups (audit §4) are filtered identically.
 
     Returns ``(kept_records, stats)``; ``stats`` is provenance-grade:
     ``{"policy", "text_basis", "dropped": {"dev", "test"}, "kept":
@@ -271,22 +280,23 @@ def deduplicate_evaluation_records(
         raise ValueError(
             f"records with users outside every partition: {unknown_users[:3]}"
         )
-    train_texts = {build_clinical_text(r) for r in train}
-    dev_texts = {build_clinical_text(r) for r in dev}
+    train_texts = {text_basis(r) for r in train}
+    dev_texts = {text_basis(r) for r in dev}
     kept_train = list(train)
-    kept_dev = [r for r in dev if build_clinical_text(r) not in train_texts]
+    kept_dev = [r for r in dev if text_basis(r) not in train_texts]
     kept_test = [
         r for r in test
-        if build_clinical_text(r) not in train_texts | dev_texts
+        if text_basis(r) not in train_texts | dev_texts
     ]
     stats = {
         "policy": (
             "one-way evaluation-set dedup: dev cases byte-identical to a "
-            "train clinical text are dropped, test cases byte-identical to "
-            "any train or dev clinical text are dropped; train is kept in "
-            "full (train-side duplicates are genuine repeat visits)"
+            "train text under the scenario's text basis are dropped, test "
+            "cases byte-identical to any train or dev text are dropped; "
+            "train is kept in full (train-side duplicates are genuine "
+            "repeat visits)"
         ),
-        "text_basis": "build_clinical_text",
+        "text_basis": getattr(text_basis, "__name__", str(text_basis)),
         "dropped": {"dev": len(dev) - len(kept_dev), "test": len(test) - len(kept_test)},
         "kept": {"train": len(kept_train), "dev": len(kept_dev), "test": len(kept_test)},
     }
