@@ -96,6 +96,49 @@ def t_class_weights(text):
     return replace(text, old_loss, new_loss, "class-weight loss")
 
 
+def t_linear(text):
+    init_old = """        self.encoders = nn.ModuleDict({
+            name: nn.Sequential(
+                nn.Linear(spec.dim + 1, width), nn.GELU(), nn.Linear(width, width)
+            )
+            for name, spec in ((m.name, m) for m in input_spec.modalities)
+        })
+        self.fusion = nn.Sequential(
+            nn.Linear(width * len(input_spec.modalities), fusion), nn.GELU()
+        )
+        self.head = nn.Linear(fusion, n_targets)"""
+    init_new = """        dims = sum(m.dim + 1 for m in input_spec.modalities)
+        self.head = nn.Linear(dims, n_targets)"""
+    text = replace(text, init_old, init_new, "linear init")
+    fwd_old = """        parts = []
+        for name, encoder in self.encoders.items():
+            x = batch.features[name]
+            # the availability flag travels with the values as a feature;
+            # unavailable rows are already zeroed by the frozen provider
+            flag = batch.availability[name].float().unsqueeze(-1)
+            parts.append(encoder(torch.cat([x, flag], dim=-1)))
+        hidden = self.fusion(torch.cat(parts, dim=-1))
+        logits = self.head(hidden)"""
+    fwd_new = """        parts = []
+        for m in self.input_spec.modalities:
+            x = batch.features[m.name]
+            # the availability flag travels with the values as a feature;
+            # unavailable rows are already zeroed by the frozen provider
+            flag = batch.availability[m.name].float().unsqueeze(-1)
+            parts.append(torch.cat([x, flag], dim=-1))
+        logits = self.head(torch.cat(parts, dim=-1))"""
+    return replace(text, fwd_old, fwd_new, "linear forward")
+
+
+def t_width(text):
+    text = replace(text, "WIDTH = 32", "WIDTH = 128", "width")
+    return replace(text, "FUSION = 32", "FUSION = 128", "fusion")
+
+
+def t_lr_down(text):
+    return replace(text, "LEARNING_RATE = 3e-3", "LEARNING_RATE = 1e-3", "lr down")
+
+
 def patch_for(transform, name):
     original = TARGET.read_text()
     TARGET.write_text(transform(original))
@@ -140,16 +183,22 @@ def run_round(name, patch_path, intent):
 
 def main() -> int:
     rounds = [
-        # round 0 (cuda) already landed as the KEEP baseline; the transforms
-        # below anchor on the CURRENT committed file (which has the cuda
-        # changes), never re-applying an already-landed patch
-        ("cuda_lr1e2", t_lr,
-         "lr 3e-3 -> 1e-2 on the CUDA baseline: 148-way softmax over a wide "
-         "input usually wants larger steps than the small-skeleton default"),
-        ("cuda_classw", t_class_weights,
-         "inverse-frequency class weights: the train distribution spans 7,566 "
-         "to 9 cases per class, so unweighted CE under-ranks the 100+ tail "
-         "classes that macro-F1 averages over"),
+        # batch 3: transforms anchor on the CURRENT committed file (cuda
+        # baseline is the KEEP champion at 0.2794; lr1e2 and classw REVERTed)
+        ("linear_head", t_linear,
+         "drop the narrow encoder-fusion bottleneck and read the 65,536 hashed "
+         "columns directly with a linear softmax head: the frozen TF-IDF+LR "
+         "reference (0.3449 dev macro-F1) shows this feature space is linearly "
+         "separable enough that the 32-wide MLP may only be throwing away "
+         "signal"),
+        ("width_128", t_width,
+         "widen the encoder and fusion to 128: the CUDA baseline trains for "
+         "only a fraction of its 90 s budget per fold, so extra width is free "
+         "capacity if the bottleneck was representational"),
+        ("lr_1e3", t_lr_down,
+         "lr 3e-3 -> 1e-3: the failed 1e-2 shows the skeleton is past its "
+         "stable step range; test the other direction before concluding the "
+         "default is optimal"),
     ]
     plateau = 0
     for name, transform, intent in rounds:
