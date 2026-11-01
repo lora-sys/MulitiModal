@@ -1,6 +1,6 @@
 # TCM-SD 证候倾向模型 v1（模型卡草稿）
 
-状态：**草稿（#53 阶段 1）** · 最后更新：2026-11-01 · 分支 `feature/tcm-sd-syndrome-v1`
+状态：**草稿（#53 阶段 1）** · 最后更新：2026-11-02 · 分支 `feature/tcm-sd-syndrome-v1`
 
 ## 一句话
 
@@ -25,15 +25,28 @@
 | 项 | 值 |
 | --- | --- |
 | 来源 | TCM-SD（https://github.com/Borororo/ZY-BERT ） |
-| 规模 | 43,180 训练 / 5,486 dev / 5,486 test 临床病例 |
+| 原始规模 | 54,152 例（官方文件 43,180/5,486/5,486），52,295 用户 |
+| 加载后规模 | 54,151 例 / 52,294 用户：泄漏记录剔除（见下）后经 subject-level 重划分的实际输入 |
 | 标签 | 单标签 `norm_syndrome`，148 类（taxonomy `tcm-sd-syndrome-vocab-v1`） |
 | 许可 | CC BY-NC-SA 4.0（非商业） |
 | 划分 | subject-level：同一 `user_id` 全部病例只属一个 partition（seed 20261101）|
 | 佐证知识 | syndrome_knowledge.json 1,027 条（148 条与本任务词表同名） |
 
-类别高度不平衡（训练集最大类 7,380 / 最小 7），因此**macro-F1 为主口径**。
+类别高度不平衡（去重后训练集最大类 7,566 / 最小 9），因此**macro-F1 为主口径**。
 官方 train/dev/test 文件边界仅作对照记录；实际划分按 `subject_partitions`
 （user_id 跨官方文件重叠）。
+
+**泄漏记录剔除（R1 F2）**：审计发现 1 例 train 记录的 norm_syndrome 字符串
+逐字出现在自身 detection 文本（user 484293）。加载层
+（`src/data/tcm_sd.py::EXCLUDED_LEAK_RECORDS`）在数据边界跳过该例，原始文件
+保持只读；全部下游（训练/评估/清单）一律看到剔除后的 54,151 例流。
+
+**评估集单向去重（R1 F1）**：dev 中与任一 train 病例临床全文
+（`build_clinical_text`）逐字节相同的病例被剔除，test 对 train∪dev 同理；
+**train 侧全量保留**（train 侧重复是真实再诊数据）。subject-level 重划分
+后实际病例数：train 44,407 / dev 5,412（泄漏记录剔除后 train 44,406）；
+去重后 train 44,406 / dev **4,817**（剔 595）/ test（封存）3,838（剔 495）。
+去重策略与理由见 `data.tcm_sd.deduplicate_evaluation_records`。
 
 ## 模型与训练
 
@@ -47,18 +60,31 @@
 `short`（仅主诉）。训练/模型选择/阈值选择只使用 train/dev partition；
 test partition 封存，最终解锁测试由主线按 AGENTS.md 硬规则 11 执行。
 
-## 指标（dev partition，真实数据，n=5,412 病例 / 148 类全部出现）
+## 指标（dev partition，真实数据，去重后 n=4,817 病例 / 148 类全部出现）
+
+主表为**去重后**数字（R1 F1：dev 中与任一 train 病例临床全文逐字节相同的
+595 例已剔除；与多数类 Dummy 的配对差值 bootstrap 同口径重跑，n_boot=1000,
+seed 20261101）：
 
 | 场景 | 模型 | macro-F1（95% CI） | accuracy | Top-3 | Top-5 |
 | --- | --- | --- | --- | --- | --- |
-| clinical | dummy-most-frequent | 0.00197 | — | — | — |
-| clinical | tfidf-char-1-3-logreg | **0.5895**（0.5143–0.5811） | 0.8503 | 0.9573 | 0.9728 |
-| clinical | bert-base-chinese（6 ep） | 0.3262（0.2921–0.3318） | 0.7984 | 0.9172 | 0.9462 |
-| short | tfidf-char-1-3-logreg | **0.3971**（0.3403–0.3957） | 0.6742 | 0.8830 | 0.9278 |
-| short | bert-base-chinese（6 ep） | 0.2454（0.2234–0.2537） | 0.7284 | 0.8934 | 0.9274 |
+| clinical | dummy-most-frequent | 0.00203 | — | — | — |
+| clinical | tfidf-char-1-3-logreg | **0.5754**（0.5007–0.5631） | 0.8360 | 0.9520 | 0.9695 |
+| clinical | bert-base-chinese（6 ep，重评分） | 0.3197（0.2856–0.3256） | 0.7804 | 0.9082 | 0.9402 |
+| short | tfidf-char-1-3-logreg | **0.3835**（0.3262–0.3805） | 0.6431 | 0.8703 | 0.9197 |
+| short | bert-base-chinese（6 ep，重评分） | 0.2359（0.2139–0.2445） | 0.7046 | 0.8829 | 0.9197 |
 
-与多数类 Dummy 的配对差值（n_boot=1000, seed 20261101）：clinical
-+0.5876（CI [0.5123, 0.5791]，p≈0）；short +0.3952（CI [0.3383, 0.3937]，p≈0）。
+与多数类 Dummy 的配对差值：clinical +0.5734（CI [0.4988, 0.5611]，p≈0）；
+short +0.3815（CI [0.3241, 0.3785]，p≈0）。
+
+**去重前（含记忆效应，short dev 38.1% 病例有 train 同文本副本，R1 审计口径
+预估影响 −0.0525）**：clinical TF-IDF 0.5895 / BERT 0.3262（n=5,412）；
+short TF-IDF 0.3971 / BERT 0.2454。实测去重降幅：clinical −0.0141、
+short −0.0136——记忆副本的膨胀量级低于 R1 逐组预估，方向一致，如实记录。
+**通道披露**：BERT 的最佳 epoch 选择与 UNCERTAIN 阈值选择都发生在去重前的
+dev 上，重评分原样继承（选择用 dev ≠ 评分用 dev，未重选）；TF-IDF 无选择
+通道（配置冻结，seed 相同重跑），其前后差是纯去重效应。
+
 **字符 n-gram TF-IDF 基线在两个场景都大幅优于 BERT 微调**——主因是训练文本
 高度模板化（病历套话含强判别性字符 n-gram），以及尾部类别支持度过低限制
 BERT 逐类表现。工程结论：以 TF-IDF 为冻结基线模型，BERT 结果如实记录为
@@ -68,23 +94,26 @@ Bootstrap 区间上界低于点估计（如 clinical 0.5895 vs CI high 0.5811）
 会抽空部分支持度=1 的尾部类，重采样 macro-F1 系统性偏低，属于极小类
 bootstrap 已知偏差，如实记录，不视为 bug。
 
-详细数字（逐类 P/R/F1、环境 provenance）见远程
-`runs/tcm-sd-syndrome-v1/baselines-report.json`、
-`runs/tcm-sd-syndrome-v1-e6/bert-*/dev-evaluation.json`（git-ignored，acam-lab 留存）。
+详细数字（逐类 P/R/F1、环境 provenance、去重统计）见远程
+`runs/tcm-sd-syndrome-v1/baselines-report-deduped.json`（去重前版本在
+`runs/tcm-sd-syndrome-v1-prededup-backup/`）、
+`runs/tcm-sd-syndrome-v1-e6/bert-*/dev-evaluation-deduped.json`
+（git-ignored，acam-lab 留存）。
 
 推理分数语义：模型原始 softmax 概率，**未经校准**（结果内 `calibrated: false`
-显式声明）。UNCERTAIN 阈值在 dev 上以 ≥90% 覆盖率约束下选最大过滤后准确率：
-BERT clinical 阈值 0.4392（覆盖率 0.900，过滤后 accuracy 0.8487）、BERT short
-阈值 0.4036（覆盖率 0.900，过滤后 accuracy 0.7768）。
+显式声明）。UNCERTAIN 阈值在**去重前** dev 上以 ≥90% 覆盖率约束下选最大过滤后
+准确率（选择通道见上）：BERT clinical 阈值 0.4392（覆盖率 0.900，过滤后
+accuracy 0.8487）、BERT short 阈值 0.4036（覆盖率 0.900，过滤后 accuracy
+0.7768）。
 
 ## 鲁棒性
 
 - 合成套件（`tests/syndrome/test_robustness.py`）：短输入、否定症状（「无发热」）、
   口语化、越界（英文/乱码/证候名当输入）、缺失字段——接口不崩、状态合法、
   拒判路径不给候选。
-- 真实数据数字（dev partition，TF-IDF 短文本场景，阈值 0.2068）：文本截断到
-  20 字符后 macro-F1 0.3971 → 0.3953（下降 0.0018，短文本场景天然对截断不
-  敏感）；7 个对抗探针拒判 6 个（85.7%）：空输入 ABSTAIN ×2、英文/乱码/
+- 真实数据数字（去重后 dev partition，TF-IDF 短文本场景，阈值 0.2024）：文本
+  截断到 20 字符后 macro-F1 0.3835 → 0.3817（下降 0.0018，短文本场景天然对
+  截断不敏感）；7 个对抗探针拒判 6 个（85.7%）：空输入 ABSTAIN ×2、英文/乱码/
   证候名（「气虚血瘀证」）OUT_OF_DOMAIN ×4。
 - 已知盲点：「脾肾阳虚」（词表内名称为「脾肾阳虚证」，无「证」字）未被
   证候名拒判逻辑捕获，按常规输入返回 OK——拒判仅匹配词表精确同名，
@@ -113,6 +142,9 @@ python -m syndrome.experiment baselines --raw-dir data/local/tcm-sd --out runs/t
 python -m syndrome.experiment robustness --raw-dir data/local/tcm-sd --out runs/tcm-sd-syndrome-v1
 python -m syndrome.experiment bert --raw-dir data/local/tcm-sd \
     --weights data/local/models/bert-base-chinese --out runs/tcm-sd-syndrome-v1 --scenario short
+# 已保存 BERT 权重在去重后 dev 上的重评分（不重训、不重选阈值，R1 F1）
+python -m syndrome.experiment bert-rescore --raw-dir data/local/tcm-sd \
+    --out runs/tcm-sd-syndrome-v1-e6 --scenario short
 pytest tests/syndrome
 ```
 
