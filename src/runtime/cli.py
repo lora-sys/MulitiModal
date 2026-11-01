@@ -320,6 +320,12 @@ def _add_src_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--repeats", type=int, default=2)
     p.add_argument("--margin-sem", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--task", default="constitution",
+                   help="research task (constitution | syndrome)")
+    p.add_argument("--editable", default=None,
+                   help="candidate file the loop may edit (default per task)")
+    p.add_argument("--budget-s", type=float, default=None,
+                   help="per-fold wall-clock budget (default: task constant)")
 
 
 def cmd_research_src_state(args: argparse.Namespace) -> int:
@@ -395,6 +401,7 @@ def _src_loop(args: argparse.Namespace, worktree):
         manifest_path=args.data_manifest, dataset_path=args.dataset,
         folds=args.folds, repeats=args.repeats,
         margin_sem=args.margin_sem, seed=args.seed,
+        task=args.task, editable=args.editable, budget_s=args.budget_s,
     )
 
 

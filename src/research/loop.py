@@ -169,6 +169,8 @@ class SourceResearchLoop:
         timeout_s: float | None = None,
         max_wall_clock_s: float = 6 * 3600,
         task: str = "constitution",
+        budget_s: float | None = None,
+        editable: str | None = None,
     ) -> None:
         from research.tasks import adapter_for
 
@@ -177,7 +179,7 @@ class SourceResearchLoop:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_path = str(manifest_path)
         self.dataset_path = str(dataset_path)
-        self.editable = editable
+        self.editable = editable if editable is not None else DEFAULT_EDITABLE
         self.folds = folds
         self.repeats = repeats
         self.margin_sem = margin_sem
@@ -188,12 +190,15 @@ class SourceResearchLoop:
         self.primary_metric = adapter_for(task).primary_metric
         from research.frozen import TIME_BUDGET_GRACE_SECONDS, TIME_BUDGET_SECONDS
 
-        self.budget = TIME_BUDGET_SECONDS
+        # campaign-level choice, never a per-round fitted value: every
+        # candidate in the campaign gets the SAME budget, so relative ranking
+        # stays fair; the default keeps the constitution task's frozen 20 s
+        self.budget = TIME_BUDGET_SECONDS if budget_s is None else float(budget_s)
         # a candidate that hangs is killed here: folds*repeats*(budget+grace)
         # plus room for data loading; the runner's own check is the honest
         # record, this is the enforcement
         self.timeout_s = timeout_s if timeout_s is not None else (
-            folds * repeats * (TIME_BUDGET_SECONDS + TIME_BUDGET_GRACE_SECONDS) + 120
+            folds * repeats * (self.budget + TIME_BUDGET_GRACE_SECONDS) + 120
         )
         self.max_wall_clock_s = max_wall_clock_s
         self.store = RunManifestStore(self.out_dir / MANIFEST_FILE)
