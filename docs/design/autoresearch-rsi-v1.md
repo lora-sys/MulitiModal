@@ -294,6 +294,10 @@ v7 实测：**同一套权重** dev macro-F1 0.1451、holdout 0.3445。划分间
 | 4 记录每轮源码 diff 与 commit | 每轮存 `patch`、`git_commit_sha`、`git_parent_sha`、`complexity`；KEEP 才前进分支 | `loop.run_round` |
 | 5 逐轮读上下文再提案 | v9 逐轮驱动；批量运行（`research-src-run`）在每轮显式记 `batch_supplied: true` 与 `proposal_mtime`，读者可比对「提案写作时间 vs 该轮开始时间」，不需要相信任何自述 | `loop.run_round` |
 
-**仍未解决、不得宣称已解决**：候选进程能读工作树内文件（含原始工作簿），理论上可自行关联标签；当前防线是静态检查 + 评分在独立的评估器子进程内完成（折从冻结 manifest 重建、训练输入完整性快照、候选代码 import 被审计钩子阻断，见 `research/evaluator.py`，2026-11-01 审查修正），证据等级仍是 `AGENT_ISOLATION_UNVERIFIED`（§12.3 与上游同源风险）。
+**仍未解决、不得宣称已解决**：候选进程能读工作树内文件（含原始工作簿），理论上可自行关联标签；OS 级隔离仍属 `AGENT_ISOLATION_UNVERIFIED`（§12.3 与上游同源风险）。2026-11-01 审查修正把评分移入独立评估器子进程（折从冻结 manifest 重建、训练输入完整性快照）；**2026-11-02 第二轮修复把三条结构性决定落死**（逐条落地位置见 `docs/reports/research-src-v9.md` 文末同名小节）：
+
+1. **候选代码只在一次性训练子进程执行**——`research/train_worker` 是唯一 import `research.candidate` 的模块，输入裁剪（无 dev、无 holdout、无全集路径），runner/driver/finalize-worker/evaluator 一律不执行候选代码；
+2. **评估只信 state_dict**——`research.evaluator` 以 `torch.load(weights_only=True)` 载入权重，模型由 `research/model_export.py` 的冻结架构白名单重建，评估路径上没有任何 `torch.load` 可执行对象；
+3. **扣费前置**——holdout 解锁事件在 spawn 拟合子进程之前以 flock 追加进仓库全局台账，worker 入口复检预算与本事件，失败照常计费。
 
 **度量口径同时冻结**（`docs/reports/tcm-50-real-training.md` 的 v8 结论因此被修正）：选择指标从 `macro_f1@0.5` 改为阈值无关的 `macro_ap`。理由是实测的：同一逻辑回归在 0.5 阈值下 0.215、按训练先验阈值 0.3844，而神经冠军 0.3827——v8 headline 的"0.383 vs 0.215"是阈值产物，不是模型优势。F1 仍按两种阈值上报。

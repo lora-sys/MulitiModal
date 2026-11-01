@@ -15,7 +15,8 @@
 | 超预算 | 视为 **overran → REVERT**，不是"慢一点的赢家" | `runner.py` / `loop.py` |
 | 选择指标 | `category_probs/macro_ap`（阈值无关的 PR 曲线面积） | `runtime/tcm_eval.py` |
 | 每折 scaler | 在**该折自己的 train 行**上重拟合；折 manifest 的 holdout 为空 | `data/real_split.fold_manifest` |
-| 评估器 | 在**独立的评估器子进程**中对**重建的折**评分（`research/evaluator.py`）；候选看不到分数，也碰不到评分用的对象 | `research/runner.py` + `research/evaluator.py` |
+| 评估器 | 在**独立的评估器子进程**中对**重建的折**评分（`research/evaluator.py`）；模型只以 **state_dict + 冻结架构白名单** 进入评估（`torch.load(weights_only=True)`，不执行任何候选代码）；候选看不到分数，也碰不到评分用的对象 | `research/runner.py` + `research/evaluator.py` + `research/model_export.py` |
+| 训练子进程 | 候选代码**只在**一次性 `research/train_worker` 子进程执行：输入是裁剪后的折文件（无 dev、无 holdout、无全集路径），输出是磁盘上的权重与架构文件 | `research/train_worker.py` |
 | 选择分辨率 | 4 折 × 2 重复 = **8 折**，SEM ≈ 0.016 | `loop.state()` |
 | KEEP 门槛 | 增益 > **1×SEM**，且 ≥ **0.001 × 净增行数** | `loop.decide` |
 
@@ -84,7 +85,7 @@ cd /home/lora/workspace/ar-v9 && git log --oneline   # 代码层：只有 KEEP �
 ## 5. 证据状态与限制
 
 - **搜索空间已经非空**：架构、损失、优化器、调度、批处理全部可改（这是 v1–v8 缺失的核心）；可改面仍被限制在**一个文件**内。
-- 候选进程内可读工作树内的任何文件，包括 `data/local/` 下的原始工作簿。理论上一个候选可以把 `batch.subject_ids` 与工作簿行做关联、直接构造标签来刷分。这与上游同源的残留风险（其 `train.py` 也能读被 pin 的验证分片）**同等级**，当前防线是 guard 静态检查 + 评分在独立评估器子进程内完成（折重建 + 完整性快照，见文末 2026-11-01 修正节），状态记为 `AGENT_ISOLATION_UNVERIFIED`。
+- 候选进程内可读工作树内的任何文件，包括 `data/local/` 下的原始工作簿。理论上一个候选可以把 `batch.subject_ids` 与工作簿行做关联、直接构造标签来刷分。这与上游同源的残留风险（其 `train.py` 也能读被 pin 的验证分片）**同等级**，当前防线是 2026-11-02 第二轮隔离修复（见文末）：候选代码只在一次性、输入裁剪的训练子进程执行，评估只信 state_dict + 冻结架构白名单，扣费（解锁事件）在 spawn 之前落账；OS 级隔离仍属 `AGENT_ISOLATION_UNVERIFIED`。
 - `proposer` 由驱动方写入，属**自报归属**；本轮所有提案来自 `pi:deepseek-v4.1-flash`（操作者本人），不是独立 agent。轮次写入是按轮进行，未使用批量预写。
 - 选择值 0.3491 是**8 折池内交叉验证**的均值，不是 holdout 成绩；v9 尚未解锁 holdout，也没有交付检查点（交付需在冠军配置上对选择池重训再用 holdout 评一次）。
 - 训练标签仍是 RULE 派生（≥40=YES），受试者身份仍是行序（数据无 ID 列）；**GO_RESEARCH_CLAIMS 仍被独立参考数据阻塞**。
@@ -206,3 +207,15 @@ cd $WT && git log --oneline      # 只有 KEEP 前进：dc7d67b 基线 → 09f94
 - **[P3] holdout 解锁机械台账**：`research-src-finalize` 现在向 `<out>/holdout-unlock-ledger.jsonl` 追加解锁事件（时间、champion commit、候选 SHA、池/父 manifest 哈希），计数达 2 拒绝第三次（AGENTS.md 规则 11）。v10 的第一次解锁发生在台账机制存在之前，由本报告与治理文档记录，不追补台账条目。
 - **[P3] 报告脚本指标标签**：`scripts/tcm_real_report.py` 原把选择指标硬编码为 macro-F1（选择指标早已改为 macro AP）；现全部从 `runtime.tcm_eval.PRIMARY_METRIC / PRIMARY_DIRECTION` 渲染（E79 防回归）。
 - **[P3] 数据集 notes**：`DATASET_NCMI_PULSE` 补充「label_source 是元数据级声称，行级标签层待下载审计」，不改 eligibility。
+
+---
+
+# 2026-11-02：第二轮隔离修复（结构性决定：候选代码与评分彻底分离）
+
+零上下文复审在第一轮修复之后仍找到九条可绕过路径（F-01…F-09）。本轮把一条结构性决定写死在进程拓扑里，三条核心落地位置如下：
+
+1. **候选代码只在一次性训练子进程执行。** `research.train_worker`（新增）是唯一 import `research.candidate` 的模块：一次性、环境白名单（PATH/HOME/PYTHONPATH）、输入裁剪（fit manifest 无 dev 无 holdout、records 裁剪到训练行、config 里没有全集数据路径）。runner 从此只做编排，逐折 spawn train_worker 与 evaluator，自己不 import 候选（F-02/F-08）；finalize 的拟合同样只产出权重，holdout 评分移交给评估器子进程（F-03）；候选可见的 `FoldData.dev = None`（F-06）。
+2. **评估只信 state_dict。** `research.evaluator` 不再 `torch.load` 任何可执行对象：训练子进程经 `research/model_export.py` 把模型导出为 state_dict（`weights_only=True` 可加载）+ 用 `torch.fx` 追踪、按冻结词汇表（模块类/函数/方法白名单，越界即拒绝导出）序列化的架构描述；评估器用冻结代码重建架构后 `strict=True` 载入权重（F-01）。audit hook 保留为纵深防御。影响面：已交付 v10 bundle 的 `champion/weights.pt` 只有权重、没有架构描述文件，如需用新评估路径重评分须先补一次导出——已归档数值与本报告不改写。
+3. **扣费前置。** 解锁事件是「读权限被授予」，不是「读成功」：驱动在 spawn 拟合子进程**之前**向全局台账（`<仓库根>/runs/holdout-unlock-ledger.jsonl`，经 git common-dir 解析，不再随 `--out` 漂移）以 `fcntl.flock` 追加 intent 事件；worker 在 import 候选前校验预算未耗尽且本事件已在账（手跑 `python -m research.finalize` 不能绕过）；worker 崩溃照常计费（F-04）。
+
+其余各条：`pool_manifest` 的 holdout 列表清空并连同行映射一起裁剪（需要 holdout 的评分路径只从冻结父 manifest 重建视图，`data.real_split.holdout_view`，F-05）；guard 对 `exec`/`eval`/`compile`/`__import__` 的裸名调用零容忍拒绝、复杂度对字符串常量递归 `ast.parse` 计数（精炼简化分支只在真实 AST 删除下生效，F-07）；worker 断言工作树 HEAD 等于记录 commit 且 `git status --porcelain` 除可编辑文件外为空，记录补 `worktree_commit`（F-09）。伴随契约变更：复杂度指标名改为 `ast_statement_expr_nodes+string_payloads`（字符串负载计入），与 v10 归档的纯节点口径不可直接比较。
