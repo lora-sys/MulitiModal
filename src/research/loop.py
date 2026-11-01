@@ -34,28 +34,37 @@ from pathlib import Path
 from research.guard import (
     PatchRejected,
     apply_patch,
-    editable_lines,
+    editable_complexity,
     validate_frozen_imports,
     validate_source_patch,
 )
 from runtime.manifest import MANIFEST_FILE, RunManifestStore
 from runtime.tcm_eval import PRIMARY_METRIC
 
-#: Minimum score gain per net line added to the editable file.
+#: Minimum score gain per net unit of complexity added to the editable file,
+#: where the unit is one AST statement/expression node (see
+#: `guard.editable_complexity`).
 #:
 #: Upstream's rule is qualitative ("a 0.001 improvement that adds 20 lines of
 #: hacky code? Probably not worth it; a 0.001 improvement from deleting code?
-#: Definitely keep"). A search needs a number, and 0.001-per-line is that rule
+#: Definitely keep"). A search needs a number, and 0.001-per-unit is that rule
 #: read literally — so it is declared here rather than fitted to a result.
 #:
-#: It is a FLOOR on the gain, not a price added to the margin. Pricing lines at
-#: a fixed absolute rate instead (the first cut used 0.002/line) makes any real
-#: change unaffordable: a 15-line architecture edit would have needed +0.03 on
-#: a selection whose standard error is 0.016, i.e. the rule would have vetoed
-#: everything except micro-edits while looking like a complexity criterion.
-#: As a floor it does what upstream means: a big sloppy patch must show a big
-#: gain, while a targeted small one only has to clear the noise margin.
-MIN_GAIN_PER_ADDED_LINE = 0.001
+#: The unit was the non-blank text line until the adversarial review of the
+#: v10 run showed lines are gameable in both directions (densifying many
+#: statements onto one line, or deleting and re-adding equivalent code to
+#: reset a per-line floor). Nodes price the semantics: the rate stays 0.001,
+#: declared, not fitted — raising it would re-price every archived round.
+#:
+#: It is a FLOOR on the gain, not a price added to the margin. Pricing
+#: complexity at a fixed absolute rate instead (the first cut used 0.002/line)
+#: makes any real change unaffordable: a 15-line architecture edit would have
+#: needed +0.03 on a selection whose standard error is 0.016, i.e. the rule
+#: would have vetoed everything except micro-edits while looking like a
+#: complexity criterion. As a floor it does what upstream means: a big sloppy
+#: patch must show a big gain, while a targeted small one only has to clear
+#: the noise margin.
+MIN_GAIN_PER_ADDED_NODE = 0.001
 
 DEFAULT_EDITABLE = "src/research/candidate.py"
 
@@ -177,8 +186,8 @@ class SourceResearchLoop:
 
     # -- driver-facing state ------------------------------------------------
 
-    def loc(self) -> int:
-        return editable_lines(self.worktree.path, self.editable)
+    def complexity(self) -> int:
+        return editable_complexity(self.worktree.path, self.editable)
 
     def champion(self) -> dict | None:
         return self.store.champion()
@@ -191,12 +200,12 @@ class SourceResearchLoop:
         return {
             "round_index": len(entries),
             "editable_file": self.editable,
-            "editable_lines": self.loc(),
+            "editable_complexity": self.complexity(),
             "time_budget_seconds": self.budget,
             "folds": self.folds,
             "repeats": self.repeats,
             "margin_sem": self.margin_sem,
-            "min_gain_per_added_line": MIN_GAIN_PER_ADDED_LINE,
+            "min_gain_per_added_node": MIN_GAIN_PER_ADDED_NODE,
             "primary_metric": PRIMARY_METRIC,
             "primary_direction": "max",
             "champion_commit": champion.get("git_commit_sha") if champion else None,
@@ -228,27 +237,28 @@ class SourceResearchLoop:
         * A candidate must beat the champion by more than `margin_sem` standard
           errors of the measured mean — the margin is about the quantity being
           compared, so more folds sharpen it instead of leaving it fixed.
-        * It must ALSO pay for the net code it adds. Upstream weighs a gain
-          against the complexity that bought it, and a rule that ignores
-          complexity will happily accept an unreadable patch for noise.
-        * Removing code while scoring at least as well is kept outright: that is
-          upstream's "removing something and getting equal or better results is
-          a great outcome".
+        * It must ALSO pay for the net complexity it adds, in AST
+          statement/expression nodes (see guard.editable_complexity). Upstream
+          weighs a gain against the complexity that bought it, and a rule that
+          ignores complexity will happily accept an unreadable patch for noise.
+        * Removing constructs while scoring at least as well is kept outright:
+          that is upstream's "removing something and getting equal or better
+          results is a great outcome".
         """
         margin = margin_sem * sem
         if best is None:
             return True, f"baseline {value:.6f}"
         gain = value - best
-        if grow_floor := MIN_GAIN_PER_ADDED_LINE * max(0, growth):
+        if grow_floor := MIN_GAIN_PER_ADDED_NODE * max(0, growth):
             pass
         if gain > margin and gain >= grow_floor:
             return True, (
                 f"{value:.6f} beats {best:.6f}: +{gain:.4f} over a {margin:.4f} "
-                f"margin, and >= {grow_floor:.4f} for {max(0, growth)} added lines"
+                f"margin, and >= {grow_floor:.4f} for {max(0, growth)} added nodes"
             )
         if growth < 0 and value >= best - margin:
             return True, (
-                f"simpler ({growth:+d} net lines) at {value:.6f} vs {best:.6f}, "
+                f"simpler ({growth:+d} net nodes) at {value:.6f} vs {best:.6f}, "
                 f"inside the {margin:.4f} margin"
             )
         if gain <= margin:
@@ -258,7 +268,7 @@ class SourceResearchLoop:
             )
         return False, (
             f"{value:.6f} vs best {best:.6f}: +{gain:.4f} clears the {margin:.4f} "
-            f"margin but not {grow_floor:.4f} for {max(0, growth)} added lines"
+            f"margin but not {grow_floor:.4f} for {max(0, growth)} added nodes"
         )
 
     # -- one round ----------------------------------------------------------
@@ -278,7 +288,7 @@ class SourceResearchLoop:
         run_id = f"tcm-{index:04d}"
         champion = self.champion()
         parent_sha = champion.get("git_commit_sha") if champion else self.worktree.head()
-        loc_before = self.loc()
+        complexity_before = self.complexity()
         entry: dict = {
             "run_id": run_id,
             "round_index": index,
@@ -292,7 +302,8 @@ class SourceResearchLoop:
             "proposal_mtime": proposal_mtime,
             "batch_supplied": batch_supplied,
             "editable_file": self.editable,
-            "complexity": {"lines_before": loc_before},
+            "complexity": {"metric": "ast_statement_expr_nodes",
+                           "nodes_before": complexity_before},
             "started_at": _iso(),
         }
 
@@ -321,11 +332,13 @@ class SourceResearchLoop:
             self.worktree.reset_to(parent_sha)
             return finish("REVERT", "rejected", f"guard: {exc}")
 
-        loc_after = self.loc()
-        growth = loc_after - loc_before
+        complexity_after = self.complexity()
+        growth = complexity_after - complexity_before
         entry["complexity"] = {
-            "lines_before": loc_before, "lines_after": loc_after, "growth": growth,
-            "min_gain_required": MIN_GAIN_PER_ADDED_LINE * max(0, growth),
+            "metric": "ast_statement_expr_nodes",
+            "nodes_before": complexity_before, "nodes_after": complexity_after,
+            "growth": growth,
+            "min_gain_required": MIN_GAIN_PER_ADDED_NODE * max(0, growth),
         }
         entry["patch"] = patch
 

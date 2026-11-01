@@ -112,11 +112,19 @@ def apply_patch(worktree: Path, patch: str, editable: str) -> None:
         )
 
 
-def editable_lines(worktree: Path, editable: str) -> int:
-    """Non-blank, non-comment lines in the editable file: the complexity proxy
-    the simplicity criterion is priced against."""
-    text = (worktree / editable).read_text(encoding="utf-8")
-    return sum(
-        1 for line in text.splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    )
+def editable_complexity(worktree: Path, editable: str) -> int:
+    """AST statement+expression node count: the proxy the simplicity criterion
+    is priced against.
+
+    The first implementation counted non-blank, non-comment text lines, which
+    is gameable in both directions: a patch can compress many statements onto
+    one dense line (fewer lines, same code — growth goes negative without
+    anything being removed) or delete code and re-add an equivalent rewrite to
+    reset a per-line floor. Counting AST statements plus expressions prices
+    the semantics the file carries: densifying cannot reduce it, and only
+    genuinely removing constructs reads as negative growth.
+    """
+    import ast
+
+    tree = ast.parse((worktree / editable).read_text(encoding="utf-8"))
+    return sum(isinstance(node, (ast.stmt, ast.expr)) for node in ast.walk(tree))

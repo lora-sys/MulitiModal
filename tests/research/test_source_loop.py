@@ -13,12 +13,12 @@ import pytest
 
 from research.guard import (
     PatchRejected,
-    editable_lines,
+    editable_complexity,
     touched_paths,
     validate_frozen_imports,
     validate_source_patch,
 )
-from research.loop import MIN_GAIN_PER_ADDED_LINE, GitWorktree, SourceResearchLoop
+from research.loop import MIN_GAIN_PER_ADDED_NODE, GitWorktree, SourceResearchLoop
 
 pytestmark = pytest.mark.synthetic
 
@@ -102,6 +102,29 @@ def test_candidate_may_not_import_beyond_the_public_api():
             validate_frozen_imports(f"from research.frozen import {bad}")
 
 
+def test_complexity_metric_prices_semantics_not_lines(tmp_path):
+    # the first implementation counted non-blank text lines, so a patch could
+    # compress twenty statements onto one dense line and score as a
+    # "simplification" while adding constructs. The metric counts AST
+    # statement+expression nodes: densifying cannot reduce it.
+    (tmp_path / "spread.py").write_text("WIDTH = 32\nFUSION = 32\n")
+    (tmp_path / "dense.py").write_text("WIDTH = 32; FUSION = 32\n")
+    spread = editable_complexity(tmp_path, "spread.py")
+    dense = editable_complexity(tmp_path, "dense.py")
+    assert dense == spread > 0
+
+
+def test_complexity_metric_counts_removed_constructs_as_negative_growth(tmp_path):
+    # deleting statements and re-adding an equivalent rewrite must not reset
+    # the complexity floor: the metric is a before/after node delta, so only
+    # genuinely removing constructs reads as negative growth
+    (tmp_path / "a.py").write_text("x = 1\ny = 2\nz = x + y\n")
+    (tmp_path / "b.py").write_text("x = 1\nz = x + 2\n")
+    before = editable_complexity(tmp_path, "a.py")
+    after = editable_complexity(tmp_path, "b.py")
+    assert after < before
+
+
 def test_simplicity_criterion_matches_upstream_intent():
     # the margin is in standard errors of the mean, so more folds sharpen it
     assert SourceResearchLoop.decide(0.30, 0.01, 0, None) == (True, "baseline 0.300000")
@@ -111,19 +134,19 @@ def test_simplicity_criterion_matches_upstream_intent():
     assert keep and "simpler" in reason, reason
     # a large gain clears margin and the per-line floor
     assert SourceResearchLoop.decide(0.36, 0.01, 8, 0.30)[0]
-    # The per-line floor is a FLOOR ON THE GAIN, not a price added to the
-    # margin. With 20 lines the floor (0.02) exceeds the margin (0.01), so a
-    # gain of +0.015 clears the noise margin and is still refused: 20 lines of
+    # The per-node floor is a FLOOR ON THE GAIN, not a price added to the
+    # margin. With 20 nodes the floor (0.02) exceeds the margin (0.01), so a
+    # gain of +0.015 clears the noise margin and is still refused: 20 nodes of
     # hack must buy more than 0.015.
     keep, reason = SourceResearchLoop.decide(0.315, 0.01, 20, 0.30)
-    assert not keep and "added lines" in reason, reason
+    assert not keep and "added nodes" in reason, reason
     assert SourceResearchLoop.decide(0.325, 0.01, 20, 0.30)[0]
     # a small targeted edit only has to clear the noise margin
     assert SourceResearchLoop.decide(0.32, 0.01, 2, 0.30)[0]
     # a big sloppy patch must show a big gain
     assert not SourceResearchLoop.decide(0.35, 0.01, 400, 0.30)[0]
     assert SourceResearchLoop.decide(0.75, 0.01, 400, 0.30)[0]
-    assert MIN_GAIN_PER_ADDED_LINE == 0.001
+    assert MIN_GAIN_PER_ADDED_NODE == 0.001
 
 
 def _git_repo(tmp_path: Path) -> Path:
@@ -149,11 +172,11 @@ def test_worktree_applies_commits_and_resets(tmp_path):
     wt = GitWorktree(repo, "autoresearch/t")
     base = wt.ensure_branch()
     editable = repo / EDITABLE
-    assert editable_lines(repo, EDITABLE) == 1
+    assert editable_complexity(repo, EDITABLE) == 3
 
     wt.apply(GOOD_PATCH, EDITABLE)
     assert "WIDTH = 64" in editable.read_text()
-    assert editable_lines(repo, EDITABLE) == 2
+    assert editable_complexity(repo, EDITABLE) == 6
     kept = wt.commit("tcm-0000: widen")
     assert kept != base
     assert wt.head() == kept
@@ -198,4 +221,4 @@ def test_loop_refuses_to_start_without_frozen_data(tmp_path):
     )
     assert loop.state()["best_metric"] is None
     assert loop.state()["history"] == []
-    assert loop.state()["editable_lines"] == 1
+    assert loop.state()["editable_complexity"] == 3
