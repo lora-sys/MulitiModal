@@ -27,6 +27,7 @@
 8. **三层放行**（#47）：`GO_ENGINEERING`（代码/合成测试）、`GO_REAL_DATA_TRAINING`（真实标签过 QC）、`GO_RESEARCH_CLAIMS`（独立参考数据 + 未动用最终测试）独立判定，不得由 smoke 分数推导。
 9. **AutoResearch 边界**（#45）：Agent 只能修改白名单内 train / model / config；数据、标签、规则、评估器、split、holdout 冻结；Trusted Evaluator 在 Agent 不可写的隔离环境运行；不可信代码必须 OS / 容器级隔离，仅审查 diff 不算隔离。
 10. **Provenance**（#37/#40/#49）：数据 DOI / 哈希、规则与标准版本、标签 tier、模型配置、种子、依赖、代码 commit 全部入档，可独立重算。
+11. **Holdout 解锁预算**（#47 + 2026-10-31 审计）：Phase 1 生命周期内 holdout 解锁事件最多 2 次——v10 交付（seed `20261107`）已用第 1 次，最终交付用第 2 次也是最后一次；再评估必须换新数据里程碑或经用户明确授权，任何选择 / 比较轮次不得触碰 holdout。
 
 ## 提交与协作
 
