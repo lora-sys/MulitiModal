@@ -69,6 +69,12 @@ FORBIDDEN_SYMBOLS = (
     "exec(",
     "compile(",
     "__import__",
+    # R1 F4: the syndrome task's frozen scoring/split machinery is equally
+    # out of reach for a candidate patch (candidate_sd.py's editable scope).
+    "SyndromeTrustedEvaluator",
+    "build_syndrome_manifest",
+    "task_sd",
+    "subject_partitions",
 )
 #: `eval(` is deliberately NOT a text symbol: the substring matches the
 #: legitimate `model.eval()` training idiom. Dynamic-eval calls are rejected

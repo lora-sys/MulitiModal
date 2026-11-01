@@ -104,7 +104,10 @@ def install_candidate_import_guard(candidate_path: Path | None = None) -> None:
         if not isinstance(name, str):
             return
         root = name.split(".")[0]
-        if root not in ("runtime", "data") and name != "core.registry":
+        # "research" is blocked too (R1 F4): the syndrome editable lives under
+        # src/research/, so its frozen machinery (task_sd, evaluator, frozen)
+        # is importable by root name from candidate code.
+        if root not in ("runtime", "data", "research") and name != "core.registry":
             return
         frame = sys._getframe(1)
         while frame is not None:

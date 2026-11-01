@@ -40,11 +40,15 @@ def environment_record(seed: int, extra: dict | None = None) -> dict:
 
 
 class MostFrequentBaseline:
-    """多数类 Dummy：对任何输入预测训练集最频类。无随机性。"""
+    """多数类 Dummy：对任何输入预测训练集最频类。无随机性。
+
+    seed 仅入档（provenance 复现记录），不参与任何计算（R1 F4：不得
+    硬编码 0 冒充真实 seed）。"""
 
     name = MAJORITY_BASELINE_NAME
 
-    def __init__(self) -> None:
+    def __init__(self, seed: int = 20261101) -> None:
+        self.seed = seed
         self.majority_: int | None = None
         self.n_classes_: int | None = None
 
@@ -69,7 +73,11 @@ class MostFrequentBaseline:
         return probs
 
     def provenance(self) -> dict:
-        return {"name": self.name, "params": {}, "environment": environment_record(seed=0)}
+        return {
+            "name": self.name,
+            "params": {},
+            "environment": environment_record(seed=self.seed),
+        }
 
 
 @dataclass
