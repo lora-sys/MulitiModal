@@ -24,10 +24,10 @@ the same process may legitimately hold research.candidate in their cache.
 from __future__ import annotations
 
 import json
-import tempfile
 import random
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
