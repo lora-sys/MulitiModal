@@ -50,6 +50,8 @@ def fake_sd_records(n=30, seed=17, n_classes=N_CLASSES, labeled=True):
         records.append(
             SyndromeRecord(
                 subject_index=i,
+                user_id=f"su-{i:04d}",
+                norm_syndrome=f"y{i % 3}",
                 features={FEATURE_GROUP: [rng.random() for _ in range(12)]},
                 label=label,
                 provenance={"source": "test-fixture"},
@@ -140,8 +142,13 @@ def test_manifest_round_trips_through_the_hash_check(tmp_path):
 def test_manifest_builder_refuses_bad_labels_and_tiny_datasets(tmp_path):
     good = fake_sd_records(12)
     with pytest.raises(ValueError, match="outside the frozen taxonomy"):
-        bad_label = [SyndromeRecord(i, {FEATURE_GROUP: [0.0]}, 0, {})
-                     for i in range(1, 12)]
+        bad_label = [
+            SyndromeRecord(
+                subject_index=i, user_id=f"su-{i:04d}", norm_syndrome="y0",
+                features={FEATURE_GROUP: [0.0]}, label=0, provenance={},
+            )
+            for i in range(1, 12)
+        ]
         bad_label[3].label = 99
         build_syndrome_manifest(
             bad_label,
@@ -150,7 +157,13 @@ def test_manifest_builder_refuses_bad_labels_and_tiny_datasets(tmp_path):
         )
     with pytest.raises(ValueError, match="duplicate subject_index"):
         build_syndrome_manifest(
-            [SyndromeRecord(1, {FEATURE_GROUP: [0.0]}, 0, {})] * 2,
+            [
+                SyndromeRecord(
+                    subject_index=1, user_id="su-0001", norm_syndrome="y0",
+                    features={FEATURE_GROUP: [0.0]}, label=0, provenance={},
+                )
+            ]
+            * 2,
             dataset_sha256=DATASET_SHA, n_classes=N_CLASSES,
             label_taxonomy_version=TAXONOMY,
         )
@@ -169,6 +182,53 @@ def test_records_json_round_trip():
     ]
     assert parsed[0].features == records[0].features
     assert parsed[0].provenance == records[0].provenance
+    assert [r.user_id for r in parsed] == [r.user_id for r in records]
+    assert [r.norm_syndrome for r in parsed] == [r.norm_syndrome for r in records]
+
+
+# -- subject-level manifest split (R1 F3: data.tcm_sd is the single source) ----
+
+
+def test_manifest_keeps_every_case_of_a_user_in_one_partition(tmp_path):
+    records = fake_sd_records()
+    # one user owns three cases (repeat visits): they must not be split
+    shared_rows = [3, 11, 27]
+    for row in shared_rows:
+        records[row - 1].user_id = "su-shared"
+    base, _path = _frozen(tmp_path, records)
+    parts = {p: set(base["split"][p]) for p in ("train", "dev", "holdout")}
+    for a in parts:
+        for b in parts:
+            if a < b:
+                assert not parts[a] & parts[b]
+    owners = {
+        p for p, ids in parts.items()
+        if {f"sd-r{row:05d}" for row in shared_rows} & ids
+    }
+    assert len(owners) == 1
+
+
+def test_manifest_split_matches_subject_partitions_single_source(tmp_path):
+    from data.tcm_sd import subject_partitions
+
+    records = fake_sd_records()
+    base, _path = _frozen(tmp_path, records)
+    expected = subject_partitions(records, seed=20261101)
+    for part_name, users in (
+        ("train", expected["train"]),
+        ("dev", expected["dev"]),
+        ("holdout", expected["test"]),
+    ):
+        want_rows = sorted(
+            f"sd-r{r.subject_index:05d}"
+            for r in records if r.user_id in users
+        )
+        assert base["split"][part_name] == want_rows
+    # the internal 0.70/0.15/0.15 draw is gone; ratios come from the frozen
+    # data-layer contract
+    assert base["split"]["fractions"] == {
+        "train": 0.82, "dev": 0.10, "holdout": 0.08,
+    }
 
 
 def test_provider_masks_unlabeled_and_declares_the_syndrome_spec(tmp_path):

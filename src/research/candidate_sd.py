@@ -12,7 +12,11 @@ mechanical rules), for TCM-SD syndrome classification:
 
 Input contract (v0): each case is ONE tabular modality of frozen text
 features (see research/task_sd.py — the featurizer runs outside the loop;
-this file never sees raw text). The score is computed by the frozen
+this file never sees raw text). Each record also carries a real subject
+`user_id` (R1 F3): the frozen manifest split is subject-level — all cases
+of one user land in one partition — delegated to
+`data.tcm_sd.subject_partitions`; the split seed and ratios come from that
+data-layer contract, not from this task. The score is computed by the frozen
 `SyndromeTrustedEvaluator` after this file returns; this file never sees it.
 
 This v0 skeleton is the smallest self-contained model that survives the full

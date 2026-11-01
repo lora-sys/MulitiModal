@@ -16,12 +16,14 @@ re-promised.
 
 What is task-owned here:
 
-* `SyndromeRecord` — one case: a frozen feature vector per feature group
-  (v0 contract: the featurizer runs OUTSIDE the loop; the candidate never
-  sees raw text) plus one integer syndrome label or None (unlabeled cases
-  are ABSTAIN, never zero-filled — AGENTS.md rule 5);
+* `SyndromeRecord` — one case: a real subject `user_id` (R1 F3: the manifest
+  split is subject-level, hard rule 2), a frozen feature vector per feature
+  group (v0 contract: the featurizer runs OUTSIDE the loop; the candidate
+  never sees raw text) plus one integer syndrome label or None (unlabeled
+  cases are ABSTAIN, never zero-filled — AGENTS.md rule 5);
 * `build_syndrome_manifest` — the frozen manifest builder (task_type
-  "syndrome_classification", label taxonomy version, n_classes);
+  "syndrome_classification", label taxonomy version, n_classes); the split
+  reuses `data.tcm_sd.subject_partitions` as the single source of truth;
 * `SyndromeBatchProvider` — batches in the core ModelBatch contract,
   targets `syndrome_labels` [B, 1] class indices with an observation mask;
 * `SyndromeTrustedEvaluator` — the trusted scorer: macro-F1 over the frozen
@@ -51,10 +53,11 @@ import torch
 
 from core.batch import ModelBatch
 from core.specs import InputSpecSet, ModalitySpec
+from data.tcm_sd import SPLIT_SEED
 from research.frozen import FoldData, selection_fold_ids
 from research.tasks import TaskAdapter
 
-MANIFEST_VERSION = "tcm-sd-manifest-v1"
+MANIFEST_VERSION = "tcm-sd-manifest-v2"
 TASK_TYPE = "syndrome_classification"
 DATASET_ID = "tcm-sd-v1"
 #: v0 record contract: one feature group holding the frozen text features
@@ -80,11 +83,19 @@ class SyndromeRecord:
     `label` is an index into the frozen taxonomy (0 .. n_classes-1). None
     means the case's label is unavailable — it stays unlabeled everywhere
     (provider mask, evaluator denominator); it is never guessed.
+
+    `user_id` identifies the real subject behind the case (R1 F3): the
+    manifest split is subject-level (AGENTS.md hard rule 2), and all cases
+    of one user land in one partition. `norm_syndrome` feeds the same
+    majority-label stratification the data layer uses; when unknown, the
+    split degrades to a single stratum and stays deterministic.
     """
 
     subject_index: int
+    user_id: str
     features: dict[str, list[float]]
     label: int | None
+    norm_syndrome: str = ""
     provenance: dict = field(default_factory=dict)
 
 
@@ -93,8 +104,10 @@ def records_to_json(records: list[SyndromeRecord]) -> str:
         [
             {
                 "subject_index": r.subject_index,
+                "user_id": r.user_id,
                 "features": r.features,
                 "label": r.label,
+                "norm_syndrome": r.norm_syndrome,
                 "provenance": r.provenance,
             }
             for r in records
@@ -107,11 +120,13 @@ def records_from_json(text: str) -> list[SyndromeRecord]:
     return [
         SyndromeRecord(
             subject_index=int(item["subject_index"]),
+            user_id=str(item["user_id"]),
             features={
                 group: [float(v) for v in values]
                 for group, values in item["features"].items()
             },
             label=None if item.get("label") is None else int(item["label"]),
+            norm_syndrome=str(item.get("norm_syndrome", "")),
             provenance=dict(item.get("provenance", {})),
         )
         for item in json.loads(text)
@@ -140,25 +155,33 @@ def build_syndrome_manifest(
     n_classes: int,
     label_taxonomy_version: str,
     label_tier: str = "PUBLISHED",
-    split_seed: int = 20261101,
-    fractions: tuple[float, float, float] = (0.70, 0.15, 0.15),
+    split_seed: int = SPLIT_SEED,
     notes: str = "",
 ):
     """Freeze the syndrome split into a hash-identified manifest.
 
     Mirrors data.real_split.build_real_manifest's structure and guarantees:
-    subject-level partition (#27), the scaler fit on TRAIN rows only (#29),
-    no raw text in the manifest — only row indices, split assignment, scaler
-    statistics and contract versions. `label_tier` records where labels came
-    from ("PUBLISHED" for author-provided TCM-SD answers; "SMOKE_ONLY" for
+    the scaler is fit on TRAIN rows only (#29), and no raw text enters the
+    manifest — only row indices, split assignment, scaler statistics and
+    contract versions. `label_tier` records where labels came from
+    ("PUBLISHED" for author-provided TCM-SD answers; "SMOKE_ONLY" for
     synthetic fixtures).
+
+    The split itself is NOT drawn here (R1 F3): the internal 0.70/0.15/0.15
+    case-level shuffle is gone, and the partition of the records' deduplicated
+    user set is delegated to the single source of truth
+    `data.tcm_sd.subject_partitions(records, seed=split_seed)`. That is the
+    AGENTS.md hard rule 2 semantics: every case of one user_id lands in
+    exactly one partition, partitions are pairwise disjoint by user, and the
+    assignment is a deterministic function of (records, seed). The
+    data-layer partitions name the third split "test"; the manifest exposes
+    it as "holdout" (the engine's naming) with identical membership.
     """
     from data.real_split import RealManifest, _fit_scaler
+    from data.tcm_sd import DEV_RATIO, TEST_RATIO, TRAIN_RATIO, subject_partitions
 
     if n_classes < 2:
         raise ValueError(f"n_classes must be >= 2, got {n_classes}")
-    if abs(sum(fractions) - 1.0) > 1e-9:
-        raise ValueError("split fractions must sum to 1")
     indices = [r.subject_index for r in records]
     if len(set(indices)) != len(indices):
         raise ValueError(
@@ -166,6 +189,11 @@ def build_syndrome_manifest(
         )
     if len(indices) < 10:
         raise ValueError(f"too few cases for a split: {len(indices)}")
+    if any(not r.user_id for r in records):
+        raise ValueError(
+            "record without user_id; the subject-level split (hard rule 2) "
+            "cannot be built from anonymous cases"
+        )
     for r in records:
         if r.label is not None and not 0 <= r.label < n_classes:
             raise ValueError(
@@ -178,23 +206,29 @@ def build_syndrome_manifest(
                 "the v0 contract is one frozen feature vector per case"
             )
 
+    user_parts = subject_partitions(records, seed=split_seed)
+    for a in ("train", "dev", "test"):
+        for b in ("train", "dev", "test"):
+            if a < b and user_parts[a] & user_parts[b]:
+                raise ValueError(
+                    f"subject_partitions returned overlapping users for "
+                    f"{a!r}/{b!r}; refusing a leaky manifest"
+                )
     by_row = {r.subject_index: r for r in records}
-    rng = random.Random(split_seed)
-    order = list(indices)
-    rng.shuffle(order)
-    n = len(order)
-    n_train = int(n * fractions[0])
-    n_dev = int(n * fractions[1])
     partitions = {
-        "train": order[:n_train],
-        "dev": order[n_train : n_train + n_dev],
-        "holdout": order[n_train + n_dev :],
+        part: sorted(
+            r.subject_index
+            for r in records
+            if r.user_id in user_parts[source]
+        )
+        for part, source in (("train", "train"), ("dev", "dev"), ("holdout", "test"))
     }
     for name, members in partitions.items():
         if not members:
             raise ValueError(
-                f"empty {name!r} partition for {n} cases with fractions "
-                f"{list(fractions)}; adjust the fractions"
+                f"empty {name!r} partition for {len(records)} cases over "
+                f"{len(user_parts['train'] | user_parts['dev'] | user_parts['test'])} "
+                "users; the subject-level ratios leave nothing to score"
             )
     # fold-only scaler: statistics from TRAIN rows exclusively (#29). The
     # features are frozen (featurized outside the loop), so this standardizes
@@ -220,7 +254,7 @@ def build_syndrome_manifest(
         },
         "split": {
             "seed": split_seed,
-            "fractions": list(fractions),
+            "fractions": {"train": TRAIN_RATIO, "dev": DEV_RATIO, "holdout": TEST_RATIO},
             **{p: [subject_id(r) for r in sorted(rows)]
                for p, rows in partitions.items()},
         },
@@ -390,7 +424,13 @@ def _macro_f1(pairs: list[tuple[int, int]]) -> float | None:
 
     A class with no true and no predicted occurrence cannot appear; a class
     with an empty F1 denominator scores 0.0 (the sklearn convention), so the
-    macro is always defined when at least one labeled pair exists."""
+    macro is always defined when at least one labeled pair exists.
+
+    NOTE (R1 F4): this is an OBSERVED-CLASS average — its denominator is
+    only the classes that actually occur in the pairs. It is deliberately
+    different from `syndrome.metrics.macro_f1`, which averages over ALL 148
+    frozen classes with zero F1 for absent ones. The two numbers must never
+    be compared side by side (this one is >= the full-taxonomy number)."""
     if not pairs:
         return None
     classes = sorted({p for p, _ in pairs} | {lbl for _, lbl in pairs})
