@@ -1181,8 +1181,14 @@ def e71_keep_requires_the_noise_margin():
     # v7 measured the same weights at dev macro-F1 0.145 and holdout 0.345:
     # between-split spread dwarfs between-candidate spread, so a candidate
     # that is merely noise-different from the champion must not be promoted.
-    # First round sets the baseline; second is +0.02 with fold std 0.10
-    # (margin 0.05) -> REVERT; third is +0.15 -> KEEP.
+    #
+    # The margin must derive from the SEM, not the raw fold std. The review
+    # found the canned numbers could not tell the two apart: gain 0.02 sat
+    # below BOTH the sem margin (0.025) and a degenerate std margin (0.10),
+    # so a std-based implementation passed the same check. The second round
+    # now gains +0.04 — above the sem margin, below the std — the only band
+    # that discriminates the two margin bases; the third round is back inside
+    # the noise and must REVERT.
     import runtime.harness as harness_mod
     from runtime.agent import Proposal
     from runtime.harness import AutoResearchHarness, default_tcm_runspec
@@ -1190,7 +1196,8 @@ def e71_keep_requires_the_noise_margin():
     # fold std 0.10 over 16 folds -> sem 0.025; margin = 1.0 x sem = 0.025
     canned = iter([
         {"primary_value": 0.50, "primary_std": 0.10, "primary_sem": 0.025},
-        {"primary_value": 0.52, "primary_std": 0.10, "primary_sem": 0.025},
+        {"primary_value": 0.54, "primary_std": 0.10, "primary_sem": 0.025},
+        {"primary_value": 0.55, "primary_std": 0.10, "primary_sem": 0.025},
         {"primary_value": 0.65, "primary_std": 0.10, "primary_sem": 0.025},
     ])
     original = harness_mod._worker
@@ -1200,7 +1207,7 @@ def e71_keep_requires_the_noise_margin():
         return next(canned)
 
     with tempfile.TemporaryDirectory() as tmp:
-        runspec = default_tcm_runspec(rounds=3, timeout_s=120.0)
+        runspec = default_tcm_runspec(rounds=4, timeout_s=120.0)
         runspec["base_config"]["data"] = {
             "manifest_path": "unused", "dataset_path": "unused",
             "task_type": "derived_multilabel_classification",
@@ -1212,18 +1219,24 @@ def e71_keep_requires_the_noise_margin():
         harness_mod._worker = fake_worker
         try:
             first = harness.step(Proposal(intent="baseline", config_patch={}))
-            second = harness.step(Proposal(intent="within noise",
-                                          config_patch={"trainer.epochs": 3}))
-            third = harness.step(Proposal(intent="real gain",
-                                         config_patch={"trainer.epochs": 4}))
+            second = harness.step(Proposal(intent="gain above the sem margin",
+                                           config_patch={"trainer.epochs": 3}))
+            third = harness.step(Proposal(intent="within noise",
+                                          config_patch={"trainer.epochs": 5}))
+            fourth = harness.step(Proposal(intent="real gain",
+                                           config_patch={"trainer.epochs": 4}))
         finally:
             harness_mod._worker = original
         assert first["decision"] == "KEEP" and first["primary_std"] == 0.10, first
         assert first["selection"]["margin_basis"] == "sem", first["selection"]
-        assert second["decision"] == "REVERT", second
-        assert second["best_so_far"] == 0.50, second
-        assert "margin" in second["reason"], second["reason"]
-        assert third["decision"] == "KEEP" and third["best_so_far"] == 0.65, third
+        # +0.04 clears the sem margin (0.025) but not a degenerate std margin
+        # (0.10): a std-based implementation would REVERT this round
+        assert second["decision"] == "KEEP", second
+        assert abs(second["selection"]["margin"] - 0.025) < 1e-12, second["selection"]
+        assert third["decision"] == "REVERT", third
+        assert third["best_so_far"] == 0.54, third
+        assert "margin" in third["reason"], third["reason"]
+        assert fourth["decision"] == "KEEP" and fourth["best_so_far"] == 0.65, fourth
 
 
 @check
@@ -1749,6 +1762,127 @@ def e77_fold_manifest_refits_the_scaler_and_hides_the_holdout():
     ev = real_eval_manifest(fold)
     assert len(ev.dev_subjects) == len(dev_ids)
     assert ev.holdout_subjects == ()
+
+
+@check
+def e78_refit_champion_trains_on_the_pool_only():
+    # E74 stubs the "refit" worker command entirely, so the deliverable's
+    # data contract had no direct test — the review found refit_champion had
+    # none. This runs the REAL refit_champion with stub trainer/provider and
+    # real fixture records, and pins what the deliverable is fitted on.
+    import runtime.protocols as protocols
+    import runtime.real_data as real_data
+
+    records = fake_records()
+    base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
+    holdout_rows = {base["subject_row_by_id"][s] for s in base["split"]["holdout"]}
+    seen: dict = {}
+
+    class StubTrainer:
+        def __init__(self, model, cfg):
+            pass
+
+        def fit(self, provider):
+            return SimpleNamespace(epochs_run=1)
+
+        def save_checkpoint(self, out_dir, smoke_only=False, extra_state=None):
+            seen["extra_state"] = extra_state
+            return Path("unused")
+
+    class StubModel:
+        model_type = "stub"
+
+    class StubProvider:
+        def __init__(self, m, recs, partition, batch_size=32):
+            seen["partition"] = partition
+            seen["records"] = list(recs)
+            seen["train_ids"] = list(m["split"][partition])
+
+    originals = (
+        real_data.manifest_from_path, real_data.build_real_model,
+        real_data.RealBatchProvider, protocols.Trainer,
+        protocols._load_records,
+    )
+    real_data.manifest_from_path = lambda _p: base
+    real_data.build_real_model = lambda _m, _c: StubModel()
+    real_data.RealBatchProvider = StubProvider
+    protocols.Trainer = StubTrainer
+    protocols._load_records = lambda _p: records
+    try:
+        out = protocols.refit_champion(
+            {"data": {"manifest_path": "m", "dataset_path": "d"},
+             "model": {}, "trainer": {"seed": 1}},
+            selection={"rounds": 1},
+        )
+    finally:
+        (real_data.manifest_from_path, real_data.build_real_model,
+         real_data.RealBatchProvider, protocols.Trainer,
+         protocols._load_records) = originals
+
+    assert out["refit_partition"] == "train+dev", out
+    assert out["holdout_rows_untouched"] == len(base["split"]["holdout"]), out
+    assert out["selection_parent_manifest_sha256"] == base["manifest_sha256"], out
+    # the deliverable is fitted on train+dev, exactly
+    assert sorted(seen["train_ids"]) == sorted(
+        base["split"]["train"] + base["split"]["dev"])
+    assert seen["partition"] == "train"
+    # and the fitting code cannot reach holdout scores through the provider:
+    # the records must be pruned to the pool the way the manifest is
+    assert seen["records"] and not any(
+        r.subject_index in holdout_rows for r in seen["records"])
+    extra = seen["extra_state"]
+    assert extra["selection_parent_manifest_sha256"] == base["manifest_sha256"], extra
+    assert extra["refit_partition"] == "train+dev", extra
+    assert extra["refit_rows"] == len(base["split"]["train"]) + len(base["split"]["dev"]), extra
+
+
+def _report_metric_label_problems(source_text: str) -> list[str]:
+    """E79 core: the report script must render its metric labels from
+    runtime.tcm_eval, never from hardcoded strings that can silently drift
+    from the frozen selection metric (which moved from macro-F1 to macro AP
+    without the report noticing)."""
+    import ast
+
+    tree = ast.parse(source_text)
+    problems: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values):
+                if (isinstance(key, ast.Constant) and key.value == "name"
+                        and isinstance(value, ast.Constant)
+                        and isinstance(value.value, str)
+                        and value.value.startswith("category_probs/")):
+                    problems.append(
+                        "primary_metric.name is hardcoded "
+                        f"({value.value!r}); render it from runtime.tcm_eval."
+                        "PRIMARY_METRIC"
+                    )
+    forbidden_fragments = (
+        "selection macro-F1, k-fold",
+        "dev macro-F1 (selection metric)",
+        "选择 macro-F1",
+        "选择指标是 macro-F1",
+    )
+    literals = [n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    hits = sorted({f for f in forbidden_fragments if any(f in t for t in literals)})
+    if hits:
+        problems.append(f"hardcoded selection-metric labels: {hits}")
+    return problems
+
+
+@check
+def e79_report_metric_labels_come_from_the_frozen_constants():
+    from runtime.tcm_eval import PRIMARY_METRIC
+
+    source = (Path(__file__).resolve().parent / "tcm_real_report.py").read_text()
+    problems = _report_metric_label_problems(source)
+    assert not problems, problems
+    assert "PRIMARY_METRIC" in source and "PRIMARY_DIRECTION" in source, (
+        "the report script must import the metric constants it renders"
+    )
+    # and the constants it renders must still be the frozen ones
+    assert PRIMARY_METRIC == "category_probs/macro_ap"
 
 
 if __name__ == "__main__":

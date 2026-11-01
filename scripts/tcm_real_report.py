@@ -52,7 +52,11 @@ from runtime.real_data import (  # noqa: E402
     real_eval_manifest,
     real_input_spec,
 )
-from runtime.tcm_eval import TCMTrustedEvaluator  # noqa: E402
+from runtime.tcm_eval import (  # noqa: E402
+    PRIMARY_DIRECTION,
+    PRIMARY_METRIC,
+    TCMTrustedEvaluator,
+)
 from runtime.trainer import Trainer, TrainerConfig  # noqa: E402
 
 KEEP_COLOR, REVERT_COLOR = "#2a9d8f", "#e76f51"
@@ -382,7 +386,7 @@ def chart_rounds(entries: list[dict], out: Path) -> None:
     # candidate that did not clear the noise margin and was rolled back.
     accepted = [e["best_so_far"] for e in rounds if e.get("best_so_far") is not None]
     champion = max(accepted) if accepted else None
-    observed = max(ys)  # the primary metric is maximised (macro-F1)
+    observed = max(ys)  # the primary metric is maximised (PRIMARY_DIRECTION = "max")
     if champion is not None:
         ax.axhline(champion, color="#264653", linestyle="--", linewidth=1,
                    label=f"champion, accepted {champion:.4f}")
@@ -400,8 +404,8 @@ def chart_rounds(entries: list[dict], out: Path) -> None:
     ax.set_xticklabels([e["run_id"] for e in rounds], fontsize=7, rotation=90)
     ax.set_xlabel("AutoResearch round")
     metric_label = (
-        "selection macro-F1, k-fold over train+dev (mean ± fold std)"
-        if folded else "dev macro-F1 (selection metric)"
+        f"selection {PRIMARY_METRIC}, k-fold over train+dev (mean ± fold std)"
+        if folded else f"dev {PRIMARY_METRIC} (selection metric)"
     )
     ax.set_ylabel(metric_label, fontsize=9)
     ax.set_title("AutoResearch rounds — selection metric")
@@ -711,15 +715,15 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
     })
     if folds == [1]:
         selection_line = (
-            f"dev macro-F1（单划分，{split_sizes['dev']} 人）——该划分的划分间波动"
+            f"dev {PRIMARY_METRIC}（单划分，{split_sizes['dev']} 人）——该划分的划分间波动"
             "大于候选间差异，排序不可信"
         )
     else:
         k = folds[-1]
         selection_line = (
-            f"subject 级 {k} 折交叉验证的 macro-F1 均值（池 = train+dev 共 "
+            f"subject 级 {k} 折交叉验证的 {PRIMARY_METRIC} 均值（池 = train+dev 共 "
             f"{split_sizes['train'] + split_sizes['dev']} 人，holdout 从不进入）；"
-            "KEEP 需超过冠军一个由折间 std 派生的余量，避免把噪声当改进"
+            "KEEP 需超过冠军一个由均值标准误（SEM）派生的余量，避免把噪声当改进"
         )
     dev_label = (
         f"dev（{split_sizes['dev']} 人）**已并入选择池、不再单独评分**"
@@ -743,7 +747,7 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
             f"（macro 对全部可观测维度平均，未定义 F1 计 0，分母不随模型漂移；"
             f"未定义维度 {neural['holdout']['n_undefined_f1']} 个）",
             f"- 神经冠军 holdout subject MAE {_fmt(neural['holdout']['subject_mae'], 4)}"
-            "（诊断口径；选择指标是 macro-F1，即上方口径）",
+            f"（诊断口径；选择指标是 {PRIMARY_METRIC}）",
             f"- 神经冠军 holdout subject RMSE（Brier 诊断，非选择指标）"
             f"{_fmt(neural['holdout']['subject_rmse'], 4)}；Dummy（多数类）holdout "
             f"subject RMSE {_fmt(base['dummy_majority']['holdout']['subject_rmse'], 4)}",
@@ -757,15 +761,15 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
             f"{neural['holdout']['n_undefined_f1']} 个）",
             f"- 神经冠军 subject MAE：dev（同上口径）{_fmt(neural['dev']['subject_mae'], 4)}，"
             f"holdout {_fmt(neural['holdout']['subject_mae'], 4)}"
-            "（诊断口径；选择指标是 macro-F1，即上方口径）",
+            f"（诊断口径；选择指标是 {PRIMARY_METRIC}）",
             f"- 神经冠军 subject RMSE（Brier 诊断，非选择指标）：dev "
             f"{_fmt(neural['dev']['subject_rmse'], 4)}，holdout "
             f"{_fmt(neural['holdout']['subject_rmse'], 4)}；Dummy（多数类）holdout "
             f"subject RMSE {_fmt(base['dummy_majority']['holdout']['subject_rmse'], 4)}",
         ]
     selection_header = (
-        "选择 macro-F1（dev 单划分）" if folds == [1]
-        else f"选择 macro-F1（{folds[-1]} 折均值 ± 折间 std）"
+        f"选择 {PRIMARY_METRIC}（dev 单划分）" if folds == [1]
+        else f"选择 {PRIMARY_METRIC}（{folds[-1]} 折均值 ± 折间 std）"
     )
 
     def holdout_macro_f1(entry: dict) -> str:
@@ -834,8 +838,9 @@ def write_reports(out: Path, summary: dict, manifest: dict, records_count: int) 
         + "。"
         + _seed_verdict(seeds, base["feature_logistic"]["holdout"]["macro_f1"],
                         neural["holdout"]["macro_f1"]),
-        "- **口径说明（必读）**：AutoResearch 的选择指标就是这里报告的 "
-        "macro-F1（0.5 阈值、固定观测维分母），保证爬山的落点和交付指标一致。"
+        "- **口径说明（必读）**：AutoResearch 的选择指标是 "
+        f"{PRIMARY_METRIC}（阈值无关的 macro 平均精确率，固定观测维分母），"
+        "macro-F1（0.5 阈值）作为交付诊断同时报告。"
         "两个概率损失代理都被实测否决：subject MAE 是 L1，二值标签下的最优常数是"
         f"中位数 0（本数据正类率 ≈{_fmt(pos_rate, 2)} < 0.5），按它爬山永远赢不过"
         "全零预测器；subject RMSE（Brier）虽是 proper scoring rule，但对没有可用信号的"
@@ -1056,13 +1061,13 @@ def main(argv=None) -> int:
             "identity assumed from row position)"
         ),
         "primary_metric": {
-            "name": "category_probs/macro_f1",
-            "direction": "max",
-            "why": "the deliverable metric (nine-dim classification at 0.5, "
-                   "macro over the fixed observed-dimension denominator). "
-                   "subject_mae is minimised by the median (=0 for a binary "
-                   "label under 50% prevalence) and subject_rmse by the "
-                   "base-rate constant, so neither can select a classifier",
+            "name": PRIMARY_METRIC,
+            "direction": PRIMARY_DIRECTION,
+            "why": "the selection metric declared by runtime.tcm_eval "
+                   "(threshold-free macro average precision over the fixed "
+                   "observed-dimension denominator — see the metric history "
+                   "there for why MAE, RMSE and F1@0.5 were each rejected by "
+                   "measurement)",
         },
         "metric_params": {
             "classification_threshold": 0.5,
