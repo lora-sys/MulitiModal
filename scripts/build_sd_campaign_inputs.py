@@ -37,7 +37,6 @@ from data.tcm_sd import (
     load_tcm_sd_records,
     subject_partitions,
 )
-from data.tcm_sd import build_short_text as build_text
 from research.task_sd import (
     SyndromeRecord,
     build_syndrome_manifest,
