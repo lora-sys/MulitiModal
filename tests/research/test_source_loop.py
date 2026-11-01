@@ -159,6 +159,22 @@ def test_dynamic_execution_calls_are_refused_zero_tolerance():
             validate_source_ast(call)
 
 
+def test_dynamic_execution_aliases_are_refused_two_generations():
+    # H-01: binding the builtin to a name (`f = exec`) and calling the name
+    # dodged the bare-call check — the alias targets join the refused set,
+    # and the refusal propagates one more hop (`g = f`)
+    from research.guard import validate_source_ast
+
+    validate_source_ast("model.eval()\n")  # the training idiom is still fine
+    for source in (
+        'f = exec\nf("x = 1")',
+        'f = exec\ng = f\ng("x = 1")',
+        "f = eval\nscore = f(payload)",
+    ):
+        with pytest.raises(PatchRejected, match="dynamic code execution"):
+            validate_source_ast(source)
+
+
 def test_forbidden_symbols_cover_the_dynamic_execution_text():
     # the text-level scan still catches the quoted name in added lines where
     # no AST exists yet (patch validation runs before the patch is applied)
@@ -166,6 +182,33 @@ def test_forbidden_symbols_cover_the_dynamic_execution_text():
         patch = GOOD_PATCH + f"+x = {symbol}('payload')\n"
         with pytest.raises(PatchRejected):
             validate_source_patch(patch, EDITABLE)
+
+
+def test_unparseable_and_over_depth_string_payloads_price_by_length(tmp_path):
+    # H-07: a string constant that cannot be parsed (or sits beyond the
+    # string-recursion depth cap) used to cost one node while carrying
+    # arbitrary payload — hiding code behind exec nesting had to stop paying.
+    # The declared price: every _STRING_CHARS_PER_NODE chars is one node.
+    from research.guard import _STRING_CHARS_PER_NODE
+
+    # an unparseable blob is priced by length, not skipped
+    (tmp_path / "blob.py").write_text("BLOB = " + repr("((((" * 500) + "\n")
+    blob = editable_complexity(tmp_path, "blob.py")
+    assert blob >= 2000 // _STRING_CHARS_PER_NODE
+
+    # three exec levels of nesting hide a large payload past the parse-depth
+    # cap: the growth over a trivial baseline must be clearly positive (the
+    # priced string value is the payload itself, wrapper levels parse cheaply)
+    payload = "v = 1\n" * 4000
+    hidden = "data = " + repr(payload)
+    wrapped = "exec(" + repr("exec(" + repr("exec(" + repr(hidden) + ")") + ")") + ")"
+    (tmp_path / "before.py").write_text("WIDTH = 32\n")
+    (tmp_path / "wrapped.py").write_text(wrapped + "\n")
+    growth = (
+        editable_complexity(tmp_path, "wrapped.py")
+        - editable_complexity(tmp_path, "before.py")
+    )
+    assert growth >= len(payload) // _STRING_CHARS_PER_NODE
 
 
 def test_simplicity_criterion_matches_upstream_intent():

@@ -131,6 +131,10 @@ def editable_complexity(worktree: Path, editable: str) -> int:
     (bounded depth/size): otherwise a patch could delete real constructs and
     re-add them wrapped in a string (`exec("...")`), buying the negative
     growth the simplification criterion rewards while actually hiding code.
+    A constant that CANNOT be parsed — or that sits beyond the depth/length
+    caps — is priced by length instead (`_STRING_CHARS_PER_NODE` chars per
+    node): that is the declared cost of hiding payload where the parser
+    cannot follow, not a semantic count (H-07).
     Together with `validate_source_ast`'s zero tolerance for exec/eval/
     compile/__import__ calls, the "simpler is better" branch is only
     reachable by genuinely removing AST constructs.
@@ -146,22 +150,35 @@ def editable_complexity(worktree: Path, editable: str) -> int:
 _MAX_STRING_PARSE_DEPTH = 3
 _MAX_STRING_PARSE_LENGTH = 100_000
 
+#: the declared price of unpriceable string payload: a constant that cannot
+#: be parsed (or sits beyond the depth/length caps above) costs one node per
+#: this many characters instead of the single node it used to cost
+_STRING_CHARS_PER_NODE = 64
+
+
+def _string_price(text: str) -> int:
+    """The declared cost of string payload the parser cannot follow."""
+    return max(1, len(text) // _STRING_CHARS_PER_NODE)
+
 
 def _ast_node_count(tree: ast.AST, depth: int = 0) -> int:
     total = sum(isinstance(node, (ast.stmt, ast.expr)) for node in ast.walk(tree))
-    if depth >= _MAX_STRING_PARSE_DEPTH:
-        return total
+    parse_children = depth < _MAX_STRING_PARSE_DEPTH
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Constant)
             and isinstance(node.value, str)
-            and len(node.value) <= _MAX_STRING_PARSE_LENGTH
         ):
-            try:
-                inner = ast.parse(node.value)
-            except (SyntaxError, ValueError, RecursionError):
-                continue
-            total += _ast_node_count(inner, depth + 1)
+            text = node.value
+            if parse_children and len(text) <= _MAX_STRING_PARSE_LENGTH:
+                try:
+                    inner = ast.parse(text)
+                except (SyntaxError, ValueError, RecursionError):
+                    total += _string_price(text)
+                    continue
+                total += _ast_node_count(inner, depth + 1)
+            else:
+                total += _string_price(text)
     return total
 
 
@@ -183,13 +200,31 @@ def validate_source_ast(source: str) -> None:
     call to one of these builtins is refused unconditionally — zero
     tolerance, not a complexity price. `model.eval()` (an Attribute call) is
     the legitimate training idiom and is not touched.
+
+    Aliasing is refused too, two generations deep (H-01): a target bound to a
+    dynamic-execution builtin (`f = exec`) or to such a target (`g = f`)
+    joins the refused call-name set, so `f("…")` and `g("…")` are refused
+    like the direct call they are.
     """
     tree = ast.parse(source)
+    banned = set(DYNAMIC_EXECUTION_CALLS)
+    # two passes: the first binds names to the builtins themselves (`f = exec`
+    # — a Name value, not a Call), the second binds names to those names
+    for _generation in range(2):
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in banned
+            ):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        banned.add(target.id)
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
-            and node.func.id in DYNAMIC_EXECUTION_CALLS
+            and node.func.id in banned
         ):
             raise PatchRejected(
                 f"patch calls {node.func.id}(): dynamic code execution is "
