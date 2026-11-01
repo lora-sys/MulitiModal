@@ -442,7 +442,9 @@ class SourceResearchLoop:
                 "(a candidate that hangs is a crash, not a slow winner)"
             ) from exc
         if result.returncode != 0:
-            detail = (result.stdout or result.stderr).strip().splitlines()
+            # stderr-first: a failed child's stdout may carry candidate
+            # noise; the traceback is on stderr (round-4 review finding 3)
+            detail = (result.stderr or result.stdout).strip().splitlines()
             last = detail[-1][:400] if detail else "no output"
             raise RuntimeError(f"runner failed ({result.returncode}): {last}")
         try:
