@@ -13,7 +13,7 @@
 | 选择协议 | folds=4 × repeats=3（12 折），margin_sem=1.0，seed=0 |
 | 决策规则 | 增益 > 1×SEM **且** ≥ 0.001×净增 AST 节点；纯删代码在 SEM 带内直接 KEEP |
 | 预算 | ≤14 轮 / PLATEAU=5 连续 REVERT 早停 / 4h 墙钟（实际 6 轮 + 1 冒烟，PLATEAU 触发） |
-| holdout | 全程未触碰，未调用 finalize；解锁预算仍为「已用 1 / 上限 2」 |
+| holdout | 搜索阶段全程未触碰；交付阶段按预算解锁 #2/2（见文末「最终交付」小节） |
 | 可编辑面 | `src/research/candidate.py` 单文件，guard + 冻结导入 + AST 校验全程生效 |
 
 ## 与 v10 引擎的两处硬差异（本轮的主要发现）
@@ -65,3 +65,49 @@ v10 结束后合入的隔离加固改变了搜索空间的边界，这两点是 
 - 无临床/科研有效性声明；以上全部为工程/统计层陈述，数据为真实数据但标签仍是 RULE 派生，**GO_RESEARCH_CLAIMS 未放行**。
 - 真实数据、checkpoint、runs/ 工件均未入 Git；holdout 未触碰；历史 manifest 未改写。
 - 本次为真实数据上的 AutoResearch 轮次，结果表述仅限「12 折选择协议下的统计陈述」。
+
+## 最终交付（holdout 解锁 #2/2）
+
+日期：2026-11-01。`research-src-finalize` 对 v11 冠军（`autoresearch/v11` @ `2454fda3`，单模型 lr 1e-2）执行 refit_and_score：在选择池 232 行（train+dev）上以 seed 0、20 s 预算重训（实际拟合 20.5 s），随后 holdout 42 行在隔离 evaluator 子进程评分一次。台账事件 `c20de889347c4241aa80d2e844f64cd9`（`2026-11-01T07:12:16Z`，扣费前置）——**Phase 1 的 holdout 解锁预算 2/2 已用满**：本划分上的任何再评估需要新数据里程碑或用户明确授权（AGENTS.md 规则 11）。
+
+### 交付工件（acam-lab `runs/research-v11/champion/`，不入 Git）
+
+| 工件 | SHA-256（前 16 位…） |
+| --- | --- |
+| `weights.pt`（state_dict，12 张量，`weights_only=True` 加载已核验） | `1f4d9f37eddd132c` |
+| `weights-architecture.json`（torch.fx 重放描述：graph / modules / input_spec / version；`load_eval_model` 严格重建已核验） | `e8ceaf699e811a2b` |
+| `finalize.json`（candidate SHA `7fded075a91ef0b0`，pool manifest SHA `045270fa6ede9051`，父 manifest SHA `96137c20f5bcbb4a`，seed 0，refit_rows 232，holdout_rows_untouched 42） | `0db414a07bfd1a62` |
+
+同目录 `pool-manifest.json` / `pool-records.json` 记录池契约（无 holdout 行）；交付包留在 acam-lab `runs/`，沿用 v10 惯例不复制回本机 `artifacts/`。
+
+### holdout 逐维可观测性（42 人）
+
+| | 维度 0 | 维度 1–8 |
+| --- | --- | --- |
+| 观测数 | 0（42/42 缺失，规则 ABSTAIN） | 各 42 |
+| 正例率 | —（不可判） | 0.2566 |
+
+全部汇总指标在观测维度分母（8 维）上计算；维度 0 全缺不进任何均值、不补零。
+
+### holdout 汇总与基线对比（同一 42 人，基线同池拟合）
+
+| 模型（均在 232 行池上拟合） | holdout macro-AP（主口径） | holdout macro-F1@0.5 | holdout subject MAE |
+| --- | --- | --- | --- |
+| Dummy（多数类） | 0.2887 | 0.000 | 0.2887 |
+| **BMI-only 逻辑回归（2 个特征）** | **0.3761** | 0.014 | 0.4032 |
+| 全特征逻辑回归 | 0.3502 | 0.210 | 0.3981 |
+| 神经交付模型（v11 冠军，lr 1e-2） | 0.3702 | 0.322 | 0.3871 |
+
+基线由隔离 evaluator 内的 `runtime.baselines` 在同一 holdout 视图上计算，三条数字与 v10 交付逐位一致（确定性路径，同池同拟合）——这同时是对口径连续性的交叉核对。
+
+### 如实读法（v10 教训的直接延续）
+
+- **主口径（阈值无关 macro-AP）下，神经交付模型没有胜过 BMI-only 逻辑回归**：0.3702 vs 0.3761，差 −0.006，42 人上属噪声级。这与 v10 的独立测量（0.3724 vs 0.3761）方向一致：两次独立交付都未超过 2 特征基线。
+- 神经模型高于 Dummy（0.2887）与全特征逻辑回归（0.3502）；这两处差距同样只是 42 人上的单次观测，不引申。
+- macro-F1（0.322）与 subject MAE（0.3871）上神经模型数字最好，但 F1 依赖 0.5 阈值（v8 的「0.383 vs 0.215」伪优势正是阈值产物），MAE 不是 EFRI 主口径——两者仅作并列诊断记录，不构成「优于基线」的依据。
+- **不得宣称本表「验证」了交付模型**：v11 冠军本身对起点是噪声级 KEEP（0.3475 vs 0.3424），holdout 数字是这次噪声级冠军的一次性测量，不是任何改进的证实。
+- 42 人、无置信区间、RULE 派生标签、受试者身份为行序（UNVERIFIED）——**GO_RESEARCH_CLAIMS 仍为 NOT_AVAILABLE**（缺 independent-reference-data）。以上全部为工程层陈述，无临床/科研有效性声明。
+
+### 交付验证
+
+acam-lab：ruff 全过，pytest 270/270，冻结 eval 52/52（E01–E79）全绿；权重 `weights_only=True` 加载与 `load_eval_model` 严格重建通过。提交：docs 一笔（报告 + README 状态句）。
