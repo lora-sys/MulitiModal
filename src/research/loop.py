@@ -347,6 +347,10 @@ class SourceResearchLoop:
             "train_provider": {"batch_size": 32},
             "trainer": {"seed": self.seed},
             "time_budget_seconds": self.budget,
+            # the runner and its evaluator subprocess bind the integrity
+            # snapshot (and the candidate-file hash) to this worktree
+            "worktree_path": str(self.worktree.path),
+            "editable": self.editable,
         }
         config_path = self.out_dir / f"{run_id}-config.json"
         config_path.write_text(json.dumps(config, indent=2))

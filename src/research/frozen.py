@@ -1,9 +1,10 @@
 """THE FROZEN BOUNDARY of the source-level AutoResearch loop.
 
 Mirrors the role of `prepare.py` in karpathy/autoresearch: everything the search
-must not be able to touch lives here — the data, the frozen split and its
-scaler, the label contract, the evaluator, the metric, and the training time
-budget. A candidate imports from this module and nothing else.
+must not be able to touch lives here or beside it — the data, the frozen split
+and its scaler, the label contract, the evaluator (`research/evaluator.py`,
+which runs in its own process on a rebuilt fold), the metric, and the training
+time budget. A candidate imports from this module and nothing else.
 
 The agent edits exactly one file: `research/candidate.py`. The loop rejects any
 patch that touches another path, and rejects any patch whose text mentions a
@@ -50,8 +51,10 @@ FROZEN_PUBLIC_API = (
 #: choosing. The loop always reads the score from the frozen evaluator and never
 #: from the candidate; these symbol checks are what make that number mean
 #: something. (They catch the careless and the accidental — a determined
-#: candidate could obfuscate the name — so they are one layer, not the wall; the
-#: wall is that the evaluator runs outside the candidate's process.)
+#: candidate could obfuscate the name — so they are one layer, not the wall;
+#: the wall is that scoring happens in a separate `research.evaluator` process
+#: that rebuilds the fold from the frozen manifest and never sees the objects
+#: the candidate trained against.)
 FORBIDDEN_SYMBOLS = (
     "TCMTrustedEvaluator",
     "EvalManifest",
@@ -160,20 +163,6 @@ def build_fold(
         seed=int(config.get("trainer", {}).get("seed", 0)),
     )
     return fold_data, data
-
-
-def evaluate_model(model, fold_data: FoldData, fold_manifest: dict):
-    """Score a fitted model with the FROZEN evaluator.
-
-    Called by the runner AFTER the candidate has returned, so the candidate
-    never sees the number that decides its fate, and so the number cannot be
-    computed by candidate code.
-    """
-    from runtime.real_data import real_eval_manifest
-    from runtime.tcm_eval import TCMTrustedEvaluator
-
-    evaluator = TCMTrustedEvaluator(real_eval_manifest(fold_manifest))
-    return evaluator.evaluate(model, fold_data.dev, partition="dev")
 
 
 def assert_api_is_closed() -> None:

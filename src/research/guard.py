@@ -14,8 +14,10 @@ The agent may change one file. `validate_source_patch` refuses:
    score as a spectacular simplification.
 
 Same evidence grade as the rest of the harness: it stops the careless and the
-accidental. The structural protection is that the evaluator is imported and run
-by the runner, in a different process, after the candidate has returned.
+accidental. The structural protection is that the score is computed by
+`research.evaluator` in its own process, on a fold rebuilt from the frozen
+manifest, after the interpreter that ran the candidate's code is done with
+the model.
 """
 
 from __future__ import annotations
