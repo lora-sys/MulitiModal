@@ -139,6 +139,27 @@ def t_lr_down(text):
     return replace(text, "LEARNING_RATE = 3e-3", "LEARNING_RATE = 1e-3", "lr down")
 
 
+def t_head2(text):
+    init_old = """        dims = sum(m.dim + 1 for m in input_spec.modalities)
+        self.head = nn.Linear(dims, n_targets)"""
+    init_new = """        dims = sum(m.dim + 1 for m in input_spec.modalities)
+        self.head = nn.Sequential(
+            nn.Linear(dims, 256), nn.GELU(), nn.Linear(256, n_targets)
+        )"""
+    return replace(text, init_old, init_new, "2-layer head")
+
+
+def t_lr_up(text):
+    return replace(text, "LEARNING_RATE = 3e-3", "LEARNING_RATE = 1e-2", "lr up")
+
+
+def t_wd(text):
+    old = "    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)"
+    new = ("    optimizer = torch.optim.AdamW(model.parameters(), lr=LEARNING_RATE,\n"
+           "                                    weight_decay=1e-4)")
+    return replace(text, old, new, "weight decay")
+
+
 def patch_for(transform, name):
     original = TARGET.read_text()
     TARGET.write_text(transform(original))
@@ -183,22 +204,22 @@ def run_round(name, patch_path, intent):
 
 def main() -> int:
     rounds = [
-        # batch 3: transforms anchor on the CURRENT committed file (cuda
-        # baseline is the KEEP champion at 0.2794; lr1e2 and classw REVERTed)
-        ("linear_head", t_linear,
-         "drop the narrow encoder-fusion bottleneck and read the 65,536 hashed "
-         "columns directly with a linear softmax head: the frozen TF-IDF+LR "
-         "reference (0.3449 dev macro-F1) shows this feature space is linearly "
-         "separable enough that the 32-wide MLP may only be throwing away "
-         "signal"),
-        ("width_128", t_width,
-         "widen the encoder and fusion to 128: the CUDA baseline trains for "
-         "only a fraction of its 90 s budget per fold, so extra width is free "
-         "capacity if the bottleneck was representational"),
-        ("lr_1e3", t_lr_down,
-         "lr 3e-3 -> 1e-3: the failed 1e-2 shows the skeleton is past its "
-         "stable step range; test the other direction before concluding the "
-         "default is optimal"),
+        # batch 4: the linear head is the KEEP champion at 0.3260; width/lr
+        # transforms above are stale (their targets REVERTed) so anchors still
+        # hold against the committed file
+        ("head_2layer_256", t_head2,
+         "one wide hidden layer (65536 -> 256 -> 148) instead of the pure "
+         "linear head: mild nonlinearity without re-creating the 32-wide "
+         "bottleneck that just cost 0.047 macro-F1"),
+        ("linear_lr1e2", t_lr_up,
+         "lr 3e-3 -> 1e-2 on the LINEAR head: the earlier 1e-2 failure was "
+         "measured on the encoder-fusion path, and a single dense layer "
+         "tolerates larger steps; the liblinear reference also implies a "
+         "different optimization geometry"),
+        ("linear_wd1e4", t_wd,
+         "AdamW weight decay 1e-4: the liblinear reference trains an L2-"
+         "penalized objective (C=4), while the champion head has no "
+         "regularization at all"),
     ]
     plateau = 0
     for name, transform, intent in rounds:
