@@ -132,5 +132,7 @@ print(result.to_dict())
 环境缺陷记录（acam-lab，sklearn 1.9.1 / scipy 1.18.1 / numpy 2.5.4）：多项式
 lbfgs 走有限差分梯度（真实规模不可用）、OvR n_jobs>1 触发 joblib
 `WRITEBACKIFCOPY` 崩溃、OpenBLAS 多线程空转——因此冻结 `ovr-liblinear`
-（n_jobs=1，单线程 BLAS）。`--solver multinomial-saga` 备选口径已实现；其
-dev 对比结果见交付报告（若未完成则如实标注 `NOT_AVAILABLE` 并注明原因）。
+（n_jobs=1，单线程 BLAS）。`--solver multinomial-saga` 备选口径已实现：
+真实规模训练（43k 文档 × 148 类，max_iter=2000）运行 ~96 CPU 分钟仍未收敛、
+无任何产出，已终止；**saga vs liblinear 的 dev 对比为 NOT_AVAILABLE**（原因：
+saga 在该规模收敛预算不可行），基线求解器以 ovr-liblinear 冻结。
