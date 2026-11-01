@@ -384,7 +384,9 @@ def cmd_research_src_finalize(args: argparse.Namespace) -> int:
     result = refit_and_score(
         worktree=worktree.path, out_dir=Path(args.out),
         manifest_path=args.data_manifest, dataset_path=args.dataset,
-        editable="src/research/candidate.py", commit=commit, seed=args.seed,
+        editable=args.editable or "src/research/candidate.py",
+        commit=commit, seed=args.seed, budget_seconds=args.budget_s,
+        task=args.task,
     )
     (Path(args.out) / "finalize-result.json").write_text(
         json.dumps(result, indent=2, ensure_ascii=False)
