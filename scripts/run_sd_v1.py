@@ -140,14 +140,13 @@ def run_round(name, patch_path, intent):
 
 def main() -> int:
     rounds = [
-        ("cuda", t_cuda,
-         "train on CUDA when available: 65,536 hashed-feature columns make CPU "
-         "matmuls the binding constraint, so the skeleton cannot use its wall "
-         "clock; device enablement is the campaign's engineering baseline"),
-        ("cuda_lr1e2", lambda t: t_lr(t_cuda(t)),
+        # round 0 (cuda) already landed as the KEEP baseline; the transforms
+        # below anchor on the CURRENT committed file (which has the cuda
+        # changes), never re-applying an already-landed patch
+        ("cuda_lr1e2", t_lr,
          "lr 3e-3 -> 1e-2 on the CUDA baseline: 148-way softmax over a wide "
          "input usually wants larger steps than the small-skeleton default"),
-        ("cuda_classw", lambda t: t_class_weights(t_cuda(t)),
+        ("cuda_classw", t_class_weights,
          "inverse-frequency class weights: the train distribution spans 7,566 "
          "to 9 cases per class, so unweighted CE under-ranks the 100+ tail "
          "classes that macro-F1 averages over"),
