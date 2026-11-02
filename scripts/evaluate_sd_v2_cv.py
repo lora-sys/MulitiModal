@@ -256,15 +256,19 @@ def evaluate_cv(
             ]
             if not train_rows or not dev_rows:
                 raise ValueError("CV fold has no train rows or no deduplicated dev rows")
+            train_labeled = [record for record in train_rows if record.label is not None]
+            dev_labeled = [record for record in dev_rows if record.label is not None]
+            if not train_labeled or not dev_labeled:
+                raise ValueError("CV fold has no labeled train or deduplicated dev rows")
             model = model_factory()
             model.fit(
-                [record.input_text for record in train_rows],
-                [int(record.label) for record in train_rows],
+                [record.input_text for record in train_labeled],
+                [int(record.label) for record in train_labeled],
             )
-            y_true = [int(record.label) for record in dev_rows]
+            y_true = [int(record.label) for record in dev_labeled]
             y_pred = [
                 int(value)
-                for value in model.predict([record.input_text for record in dev_rows])
+                for value in model.predict([record.input_text for record in dev_labeled])
             ]
             if len(y_true) != len(y_pred):
                 raise ValueError("baseline prediction count does not match CV dev")
@@ -278,9 +282,11 @@ def evaluate_cv(
                     "n_train_records": len(train_rows),
                     "n_train_users": len(train_users),
                     "n_dev_records_before_dedup": dedup["n_before"],
-                    "n_dev_records_scored": len(dev_rows),
+                    "n_dev_records_scored": len(dev_labeled),
                     "n_dev_text_duplicates_dropped": dedup["n_dropped"],
-                    "n_dev_users_scored": len({record.user_id for record in dev_rows}),
+                    "n_dev_users_scored": len(
+                        {record.user_id for record in dev_labeled}
+                    ),
                     "metrics": metric,
                 }
             )
