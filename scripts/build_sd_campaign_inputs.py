@@ -3,14 +3,13 @@
 This builder loads records only through
 ``load_tcm_sd_development_records``. That loader verifies and opens exactly
 ``train.json`` and ``dev.json``; it never hashes or opens the consumed final
-``test.json`` split. The builder freezes user-level partitions across the
-complete loaded train+dev population and preserves all non-empty scenario
-rows in the hashed-text selection pool. The evaluator removes exact-text
-duplicates from the evaluation side of each frozen dev split or CV fold.
-
-The manifest's ``holdout`` partition is an internal development partition
-derived only from train+dev. This builder does not score or unlock it. Issue
-#56 results use development data and user-grouped cross-validation only.
+``test.json`` split. The exact sd-v1 unblinded user set is loaded from a
+static ``--exposed-users-file`` (produced once from the unlock delivery
+artifacts) and excluded from the pool; the remaining users get a fresh
+internal train/dev split over the clean population. The manifest's
+``holdout`` partition is that internal development partition. This builder
+does not score or unlock it. Issue #56 results use development data and
+user-grouped cross-validation only.
 
 Default output directory is runs/sd-v2/<scenario>. The builder emits the
 development bundle plus selection_records.json and selection_manifest.json.
@@ -46,11 +45,52 @@ from research.task_sd import (
 )
 
 
+def load_exposed_users(path: Path) -> tuple[frozenset[str], dict]:
+    """Load the static sd-v1 exposed-user set from the unlock artifacts.
+
+    The file is produced once from the sd-v1 unlocked delivery artifacts
+    (``runs/sd-campaign/manifest.json`` ``split.holdout`` row ids mapped
+    through ``records.json`` user ids); this builder never opens the final
+    test split. Fail closed on schema drift so a stale or hand-edited file
+    cannot silently narrow the exclusion.
+    """
+    payload = path.read_bytes()
+    data = json.loads(payload)
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: exposed-users file must be a JSON object")
+    users = data.get("users")
+    if (
+        not isinstance(users, list)
+        or not all(isinstance(u, str) and u for u in users)
+        or users != sorted(set(users))
+    ):
+        raise ValueError(f"{path}: users must be a sorted list of unique ids")
+    if data.get("n_users") != len(users):
+        raise ValueError(f"{path}: n_users does not match the users list")
+    for key in ("source", "n_rows"):
+        if not isinstance(data.get(key), (str, int)) or not data.get(key):
+            raise ValueError(f"{path}: missing {key!r} provenance field")
+    return frozenset(users), {
+        "source": data["source"],
+        "n_users": len(users),
+        "n_rows": data["n_rows"],
+        "file_sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--raw-dir", default="data/local/tcm-sd")
     parser.add_argument("--out", default=None)
     parser.add_argument("--scenario", choices=("short", "clinical"), default="short")
+    parser.add_argument(
+        "--exposed-users-file",
+        required=True,
+        help=(
+            "JSON with the exact sd-v1 unblinded user set (from the unlock "
+            "delivery artifacts); required, fail-closed"
+        ),
+    )
     args = parser.parse_args(argv)
     out = Path(args.out) if args.out else Path("runs/sd-v2") / args.scenario
     if out.exists() or out.is_symlink():
@@ -65,19 +105,41 @@ def main(argv: list[str] | None = None) -> int:
     records = load_tcm_sd_development_records(raw_dir)
     vocab = load_syndrome_vocab(raw_dir)
     label_index = {name: i for i, name in enumerate(vocab)}
+    unknown = sorted({r.norm_syndrome for r in records} - set(label_index))
+    if unknown:
+        raise ValueError(
+            f"{len(unknown)} norm_syndrome values outside the frozen "
+            f"taxonomy {LABEL_TAXONOMY_ID}: {unknown[:5]}"
+        )
 
-    # Freeze strata and partitions over all loaded users before scenario text
-    # filtering. Keep duplicate text rows here: each dev/CV evaluator must
-    # deduplicate only its frozen evaluation side after the fold is assigned.
+    # Freeze strata over all loaded users before scenario text filtering.
+    # Keep duplicate text rows here: each dev/CV evaluator must deduplicate
+    # only its frozen evaluation side after the fold is assigned.
     user_strata = user_majority_strata(records)
-    partitions = subject_partitions(records, seed=SPLIT_SEED)
 
-    # The sd-v1 delivery already unblinded a test assignment over this
-    # population, replayed deterministically here from the frozen seed. Those
-    # users form this builder's internal holdout: they are excluded from the
-    # selection pool and never scored in #56. No holdout or test file is read.
-    exposed_users = partitions["test"]
-    exposed_rows = sum(1 for record in records if record.user_id in exposed_users)
+    # The sd-v1 delivery unblinded an exact set of users (its scored holdout
+    # rows, recorded in the unlock delivery artifacts). Those users are
+    # excluded from this protocol's pool by loading the static exposed-user
+    # file — NOT by a seed replay, which would permute differently over this
+    # reduced train+dev population and leave exposed users in the pool.
+    # The remaining users get a fresh internal train/dev split over the clean
+    # population; no holdout or test file is read.
+    exposed_users, exclusion_provenance = load_exposed_users(
+        Path(args.exposed_users_file)
+    )
+    loaded_users = {r.user_id for r in records}
+    exposed_in_population = exposed_users & loaded_users
+    clean_records = [r for r in records if r.user_id not in exposed_in_population]
+    internal = subject_partitions(clean_records, seed=SPLIT_SEED)
+    partitions = {
+        # the internal replay's own test slice folds back into train: it is a
+        # development-split device, not a holdout — the only sealed users here
+        # are the exact sd-v1 exposed set.
+        "train": frozenset(internal["train"] | internal["test"]),
+        "dev": frozenset(internal["dev"]),
+        "test": exposed_in_population,
+    }
+    exposed_rows = sum(1 for record in records if record.user_id in exposed_in_population)
 
     # Empty scenario text (e.g. 19 cases with an empty chief complaint) has no
     # input for this scenario and the hashed_text contract is fail-closed;
@@ -149,11 +211,12 @@ def main(argv: list[str] | None = None) -> int:
                 "user_partition_sha256": manifest.data["user_partition_sha256"],
                 "sd_v1_exposed_user_exclusion": {
                     "policy": (
-                        "sd-v1 unblinded test users, replayed deterministically "
-                        "from the frozen split seed over the loaded train+dev "
-                        "population; excluded from the selection pool"
+                        "exact sd-v1 unblinded user set loaded from the unlock "
+                        "delivery artifacts file; excluded from the selection "
+                        "pool; not a seed replay"
                     ),
-                    "n_users": len(exposed_users),
+                    **exclusion_provenance,
+                    "n_users_in_population": len(exposed_in_population),
                     "n_rows": exposed_rows,
                 },
                 "split_seed": SPLIT_SEED,

@@ -1608,14 +1608,16 @@ def test_sd_v2_builder_published_manifest_is_one_based_and_validates(
                 source_file="train.json",
             )
         )
-    partitions = subject_partitions(records)
+    exposed_user = "builder-user-000"
+    clean_records = [r for r in records if r.user_id != exposed_user]
+    internal = subject_partitions(clean_records)
     train_record = next(
-        record for record in records
-        if record.user_id in partitions["train"]
+        record for record in clean_records
+        if record.user_id in internal["train"]
     )
     dev_record = next(
-        record for record in records
-        if record.user_id in partitions["dev"]
+        record for record in clean_records
+        if record.user_id in internal["dev"]
     )
     dev_user = dev_record.user_id
     records[records.index(dev_record)] = replace(
@@ -1623,6 +1625,17 @@ def test_sd_v2_builder_published_manifest_is_one_based_and_validates(
         chief_complaint=train_record.chief_complaint,
     )
     frozen_strata = user_majority_strata(records)
+    exposed_payload = json.dumps(
+        {
+            "source": "synthetic sd-v1 unlock delivery artifacts",
+            "n_rows": 1,
+            "n_users": 1,
+            "users": [exposed_user],
+        },
+        indent=1,
+    )
+    exposed_file = tmp_path / "sd-v1-exposed-users.json"
+    exposed_file.write_text(exposed_payload, encoding="utf-8")
     monkeypatch.setattr(
         builder,
         "load_tcm_sd_development_records",
@@ -1639,12 +1652,15 @@ def test_sd_v2_builder_published_manifest_is_one_based_and_validates(
         str(tmp_path / "unused-raw"),
         "--out",
         str(out_dir),
+        "--exposed-users-file",
+        str(exposed_file),
     ]) == 0
 
     manifest = json.loads((out_dir / "manifest.json").read_text(encoding="utf-8"))
     assert min(manifest["subject_row_by_id"].values()) == 1
     assert manifest["user_stratum_by_id"] == frozen_strata
     assert manifest["user_partition_by_id"][dev_user] == "dev"
+    assert manifest["user_partition_by_id"][exposed_user] == "holdout"
     # the dev user keeps its frozen partition; its rows must not leak into the
     # train split (a complete subject→user mapping is required by the contract)
     assert dev_user not in {
@@ -1707,6 +1723,8 @@ def test_sd_v2_builder_published_manifest_is_one_based_and_validates(
             str(tmp_path / "unused-raw"),
             "--out",
             str(out_dir),
+            "--exposed-users-file",
+            str(exposed_file),
         ])
     assert {
         path.name: path.read_bytes()

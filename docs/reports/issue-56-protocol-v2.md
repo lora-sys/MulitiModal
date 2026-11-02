@@ -1,8 +1,13 @@
 # Issue #56 protocol-v2 development evaluation
 
-**Status: DEV_AND_CV_COMPLETE; SYNTHETIC_TESTS_PASS_WITH_SKIPS; HOST_DOCKER_WORKER_NOT_RUN**
+**Status: DEV_AND_CV_COMPLETE; SYNTHETIC_TESTS_PASS_WITH_SKIPS; HOST_DOCKER_WORKER_CHAIN_RUN (acam-lab); POST-REVIEW-EVIDENCE-REGENERATED**
 
-The protocol-v2 builder created short and clinical selection-only inputs from the frozen train/dev users. Both CV runs completed successfully. This report uses only the selection records and manifests. The final test set, ledger, old campaign artifacts, and real-data finalization were not accessed.
+The protocol-v2 builder created short and clinical selection-only inputs from
+the frozen train/dev users, excluding the exact sd-v1 unblinded user set. Both
+CV runs completed successfully. This report uses only the selection records
+and manifests, plus the static exposed-user id file derived from the unlock
+delivery artifacts. The final test split file, ledger, and real-data
+finalization were not accessed.
 
 ## Scope and evidence boundary
 
@@ -23,10 +28,10 @@ artifacts are outside this evaluation.
 Run the builder once for each fresh scenario directory. The evaluator output
 directory must also be fresh and separate from the scenario input directory.
 
-    PYTHONPATH=src python -m scripts.build_sd_campaign_inputs --scenario short --out runs/sd-v2/short
+    PYTHONPATH=src python -m scripts.build_sd_campaign_inputs --scenario short --out runs/sd-v2/short --exposed-users-file runs/sd-campaign/sd-v1-exposed-users.json
     PYTHONPATH=src python -m scripts.evaluate_sd_v2_cv --scenario short --out runs/sd-v2/cv-short-<fresh-id>
 
-    PYTHONPATH=src python -m scripts.build_sd_campaign_inputs --scenario clinical --out runs/sd-v2/clinical
+    PYTHONPATH=src python -m scripts.build_sd_campaign_inputs --scenario clinical --out runs/sd-v2/clinical --exposed-users-file runs/sd-campaign/sd-v1-exposed-users.json
     PYTHONPATH=src python -m scripts.evaluate_sd_v2_cv --scenario clinical --out runs/sd-v2/cv-clinical-<fresh-id>
 
 The evaluator prints a concise run summary and writes cv-report.json under
@@ -38,17 +43,14 @@ For the frozen train-to-dev benchmark, use a new output directory:
     PYTHONPATH=src python -m scripts.evaluate_sd_v2_cv --mode dev --scenario short --out runs/sd-v2/dev-short-<fresh-id>
     PYTHONPATH=src python -m scripts.evaluate_sd_v2_cv --mode dev --scenario clinical --out runs/sd-v2/dev-clinical-<fresh-id>
 
-The recorded dev runs used these arguments inside the offline CPU image.
-The image mounted src/ and scripts/ read-only, mounted only each scenario's
-selection_manifest.json and selection_records.json read-only, and wrote the
-report to a bounded temporary output volume before copying the report into
-runs/sd-v2/.
+The regenerated evidence below was executed directly on the dev host
+(acam-lab) with the committed tree; the dev runs used these same arguments.
 
 ## Frozen protocol
 
 | Field | Protocol |
 | --- | --- |
-| Selection pool | Frozen train + dev rows from the selection-only builder artifact |
+| Selection pool | Frozen train + dev rows from the selection-only builder artifact, minus the exact sd-v1 unblinded user set (static `--exposed-users-file`, fail-closed) |
 | Fold assignment | selection_fold_ids; user-grouped, stratified by frozen user majority-label stratum |
 | Fold schedule | 4 folds × 2 repeats |
 | Repeat seed source | Frozen split seed + fold version + repeat + frozen user stratum |
@@ -75,54 +77,66 @@ configuration, environment, and the selection artifact hashes.
 
 ## Exposed-user exclusion
 
-The sd-v1 delivery unblinded a test assignment over the TCM-SD population,
-replayed deterministically by the builder from the frozen split seed
-20261101 (`data.tcm_sd.subject_partitions` over the loaded train+dev
-records). Every user in that replayed test partition is excluded from the
-protocol-v2 selection pool: their rows form the builder's internal holdout
-partition and are never scored in #56. No holdout or test file was read;
-the exclusion list is derived deterministically from the frozen seed, and
-the builder records the excluded user and row counts in build-summary.json
-under `sd_v1_exposed_user_exclusion`.
+The sd-v1 delivery unblinded the labels of 4,049 holdout rows (3,905 unique
+users). Those users are excluded from the protocol-v2 selection pool by an
+**exact static user set**, not a seed replay: a seed replay over this
+builder's reduced train+dev population would permute differently than the
+original 52,295-user assignment and would leave most exposed users in the
+pool. The set is published once as
+`runs/sd-campaign/sd-v1-exposed-users.json` (acam-lab), derived by mapping
+the unlocked delivery's scored holdout row ids
+(`runs/sd-campaign/manifest.json` `split.holdout`) through
+`runs/sd-campaign/records.json` user ids; no test file was read. The builder
+requires `--exposed-users-file`, validates the file's schema and integrity
+(`file_sha256` in build-summary.json), and fails closed on a missing or
+tampered file. Exposed users who do not appear in train+dev are recorded as
+`n_users_in_population` separately from the file's total `n_users`. The
+remaining users receive a fresh internal train/dev split over the clean
+population (`data.tcm_sd.subject_partitions`, seed 20261101) — that split is
+a development-only assignment and is not the sd-v1 holdout.
 
 ## Replay evidence
 
-Values below come from the two saved cv-report.json files. Both scenarios completed with status OK and eight fold runs (4 folds × 2 repeats). Results use the uncommitted worktree based on 4a73a199f7c2cfb97012507ee06f7ed24c0b3cd6.
+**Supersession note (2026-11-03 review round):** the previously recorded
+evidence (CV short 0.3216 / clinical 0.5544, dev 0.3148 / 0.5544) was produced
+by an intermediate builder whose exposed-user exclusion used a seed replay
+over the reduced train+dev population; that mechanism is wrong (a per-stratum
+reshuffle makes the replayed "test" set almost disjoint from the actually
+unblinded sd-v1 users) and its numbers are **NOT_REPRODUCIBLE** from this
+tree. All evidence below is regenerated with the committed builder and the
+exact static exposed-user file, on the dev host (acam-lab, CPU ovr-liblinear,
+Python 3.12.3 / scikit-learn 1.9.1 / NumPy 2.5.4, seed 20261101). Both
+scenarios completed with status OK and eight fold runs (4 folds × 2 repeats).
 
 | Evidence | short | clinical |
 | --- | --- | --- |
 | Status | OK | OK |
-| Source revision | Uncommitted worktree based on 4a73a199f7c2cfb97012507ee06f7ed24c0b3cd6 | Same uncommitted worktree based on 4a73a199f7c2cfb97012507ee06f7ed24c0b3cd6 |
-| Selection manifest SHA-256 | 286fdf4412111a352974cf01184ed2b0d79f5f908366573a1e128c83a83e4ea9 | 5a749511e9b36051f7c679ebc270cc93ac5798f19ee0ef48c02436b1f34efe97 |
-| Selection dataset SHA-256 | a0ddb09c1f06c6eb7dae621c1a43ba5d0c8b1a2fb8af6d9317002898bd060206 | 1e795296ec0ee9dd0af9a4a8e53de6a82ac975fc5cd3aac3071731c7b84434bc |
-| Parent manifest SHA-256 | 897c2ce1f7ba6d0871b81f0ed0b2e72ceecf29b22f777e83dc8ff539293850c3 | 1701f3fe58915ec95b94f836af58fa128e062946f9b1c1697d9c6808f8ffc633 |
-| Parent dataset SHA-256 | 8769c150aff5e5e26f13cf112890cd466cb5ae8a571dfa55da8d68986a67ea96 | 3b4d9f9b7ea9d6b2bcaa2693d1e578efdc82bf29c1ab7f4600183de449793216 |
-| Selection records | 42,982 | 44,258 |
-| Selection users with rows / frozen pool users | 41,573 / 43,249 | 42,785 / 43,249 |
+| Source revision | fix/issue-56-tcm-sd-eval (post-review fix) | same |
+| Selection manifest SHA-256 | f6ac971a9224542551163d692d40ec095b78465dcdd4ea0a67e0bd168b98f04e | 0f57c2ea4c0d273e0e2434d3ce2ee774dd728f1f6676cb848b8aa80f532c49e8 |
+| Selection dataset SHA-256 | e63682908e6bed7488ada3cd68cf50b4a1817a4bfbfa28c0a00b74fbc0af4d55 | be4f2f73142e139711fe45d421b720281672d862b93d9e7b98dc8338e9314710 |
+| Parent manifest SHA-256 | 093e7336ab4ae9e501ed049cfd169424d522f03f2b7393e25fa3c9e5569dbf30 | 74e47ac658569cede4c5d687cd221eecefb43cb974442e2dbcf6687936798a31 |
+| Parent dataset SHA-256 | 7257d9a02f8e7b0bea2dcba32d18836c2cc1b434a76ef9f3b5d88009d3b4853a | eb7e5cab1afca62b21ddd5c0d5e6e006fa44ab7bc6ba7276ab1e3c6417e744de |
+| Selection records | 45,026 | 45,043 |
+| Selection users with rows / frozen pool users | 43,504 / 43,520 | 43,520 / 43,520 |
+| Excluded sd-v1 exposed users (file total / in population) | 3,905 / 3,489 | 3,905 / 3,489 |
 | Fold runs | 8 | 8 |
-| Fold macro-F1 values by repeat | 0: 0.303738, 0.315914, 0.343637, 0.341493; 1: 0.318011, 0.339925, 0.303033, 0.307265 | 0: 0.543068, 0.576595, 0.545957, 0.559918; 1: 0.549773, 0.558867, 0.550877, 0.550120 |
-| Mean fold macro-F1 | 0.321627 | 0.554397 |
-| Population std. dev. across folds | 0.016323 | 0.009968 |
-| Evaluator report path | runs/sd-v2/cv-short-issue56-round2/cv-report.json | runs/sd-v2/cv-clinical-issue56-round2/cv-report.json |
-| Python / scikit-learn / NumPy versions | 3.12.16 / 1.5.2 / 1.26.4 | 3.12.16 / 1.5.2 / 1.26.4 |
+| Fold macro-F1 values | 0.3108, 0.3259, 0.3396, 0.3209, 0.3142, 0.3195, 0.3221, 0.3062 | 0.5406, 0.5614, 0.5578, 0.5568, 0.5446, 0.5464, 0.5503, 0.5457 |
+| Mean fold macro-F1 | 0.319921 | 0.550453 |
+| Population std. dev. across folds | 0.009593 | 0.006934 |
+| Evaluator report path | runs/sd-v2/cv-short-issue56-fix/cv-report.json | runs/sd-v2/cv-clinical-issue56-fix/cv-report.json |
 
 ## Development-set benchmark
 
 | Evidence | short | clinical |
 | --- | --- | --- |
-| Dev macro-F1 | 0.314839 | 0.554424 |
-| Training rows | 39,877 | 39,892 |
-| Dev rows scored | 3,105 | 4,366 |
-| Exact text duplicates dropped | 0 | 0 |
-| Logical manifest SHA-256 | 286fdf4412111a352974cf01184ed2b0d79f5f908366573a1e128c83a83e4ea9 | 5a749511e9b36051f7c679ebc270cc93ac5798f19ee0ef48c02436b1f34efe97 |
-| Dataset SHA-256 | a0ddb09c1f06c6eb7dae621c1a43ba5d0c8b1a2fb8af6d9317002898bd060206 | 1e795296ec0ee9dd0af9a4a8e53de6a82ac975fc5cd3aac3071731c7b84434bc |
-| Raw manifest file SHA-256 | 7eca44ece57686427b279db60cc47ee397346826a4b83ca1f1c4d528d8ea3240 | 8b8278620499d38358b8839aaf2ad32e8cd0a1bdf9feb29986992bec3bead733 |
-| Report path | runs/sd-v2/dev-short-20261102-issue56/dev-report.json | runs/sd-v2/dev-clinical-20261102-issue56/dev-report.json |
-| Environment | CPU scikit-learn; Python 3.12.16 / scikit-learn 1.5.2 / NumPy 1.26.4; seed 20261101 | CPU scikit-learn; Python 3.12.16 / scikit-learn 1.5.2 / NumPy 1.26.4; seed 20261101 |
+| Dev macro-F1 | 0.332107 | 0.543784 |
+| Dev rows scored | 2,844 | 4,043 |
+| Report path | runs/sd-v2/dev-short-issue56-fix/dev-report.json | runs/sd-v2/dev-clinical-issue56-fix/dev-report.json |
+| Environment | acam-lab CPU; Python 3.12.3 / scikit-learn 1.9.1 / NumPy 2.5.4; seed 20261101 | same |
 
-Both runs used selection-only files mounted read-only in a networkless
-container. No mixed records/manifest, test.json, ledger, old campaign artifacts,
-or Docker socket was mounted.
+The reruns executed directly on the dev host with the committed tree; no
+test.json, ledger, or old campaign artifact was read (the exposed-user file
+is the only sd-v1-derived input, and it contains user ids only).
 
 These development and CV scores are from the CPU TF-IDF n-gram baseline. Issue
 #56 validates the split and evaluation protocol; it did not train a neural

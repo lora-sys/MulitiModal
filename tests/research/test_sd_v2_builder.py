@@ -52,6 +52,46 @@ def _frozen_partitions() -> dict[str, frozenset[str]]:
     }
 
 
+def _patched_subject_partitions(monkeypatch, frozen_partitions):
+    """Stand-in for the internal clean-population split the builder makes.
+
+    The builder calls subject_partitions over the clean (non-exposed)
+    records and folds the returned internal test slice back into train, so
+    this stand-in must only ever return train/dev over the records it is
+    given — never the exposed users.
+    """
+    monkeypatch.setattr(
+        builder,
+        "subject_partitions",
+        lambda records, seed: {
+            "train": frozenset(frozen_partitions["train"] & {
+                r.user_id for r in records
+            }),
+            "dev": frozenset(frozen_partitions["dev"] & {
+                r.user_id for r in records
+            }),
+            "test": frozenset(),
+        },
+    )
+
+
+def _exposed_users_file(tmp_path, users: list[str]):
+    import hashlib
+
+    payload = json.dumps(
+        {
+            "source": "synthetic sd-v1 unlock delivery artifacts",
+            "n_rows": len(users),
+            "n_users": len(users),
+            "users": sorted(users),
+        },
+        indent=1,
+    )
+    path = tmp_path / "sd-v1-exposed-users.json"
+    path.write_text(payload, encoding="utf-8")
+    return path, hashlib.sha256(payload.encode()).hexdigest()
+
+
 @pytest.mark.parametrize("scenario", ["short", "clinical"])
 def test_builder_preserves_dev_duplicates_until_the_selection_fold_is_built(
     tmp_path, monkeypatch, scenario
@@ -68,10 +108,9 @@ def test_builder_preserves_dev_duplicates_until_the_selection_fold_is_built(
         "load_syndrome_vocab",
         lambda _raw_dir: ["气虚证", "血瘀证"],
     )
-    monkeypatch.setattr(
-        builder,
-        "subject_partitions",
-        lambda _records, seed: frozen_partitions,
+    _patched_subject_partitions(monkeypatch, frozen_partitions)
+    exposed_file, _ = _exposed_users_file(
+        tmp_path, ["exposed-1", "exposed-2"]
     )
     out = tmp_path / f"selection-{scenario}"
 
@@ -83,6 +122,8 @@ def test_builder_preserves_dev_duplicates_until_the_selection_fold_is_built(
             str(out),
             "--scenario",
             scenario,
+            "--exposed-users-file",
+            str(exposed_file),
         ]
     ) == 0
 
@@ -127,10 +168,9 @@ def test_builder_excludes_sd_v1_exposed_test_users_from_the_selection_pool(
         "load_syndrome_vocab",
         lambda _raw_dir: ["气虚证", "血瘀证"],
     )
-    monkeypatch.setattr(
-        builder,
-        "subject_partitions",
-        lambda _records, seed: frozen_partitions,
+    _patched_subject_partitions(monkeypatch, frozen_partitions)
+    exposed_file, exposed_sha = _exposed_users_file(
+        tmp_path, ["exposed-1", "exposed-2"]
     )
     out = tmp_path / "selection-exclusion"
 
@@ -142,6 +182,8 @@ def test_builder_excludes_sd_v1_exposed_test_users_from_the_selection_pool(
             str(out),
             "--scenario",
             "short",
+            "--exposed-users-file",
+            str(exposed_file),
         ]
     ) == 0
 
@@ -155,12 +197,58 @@ def test_builder_excludes_sd_v1_exposed_test_users_from_the_selection_pool(
     summary = json.loads((out / "build-summary.json").read_text(encoding="utf-8"))
     selected_users = {record.user_id for record in selected}
 
-    assert selected_users.isdisjoint(frozen_partitions["test"])
+    assert selected_users.isdisjoint({"exposed-1", "exposed-2"})
     assert "exposed-1" not in selection_manifest["user_partition_by_id"]
     # the complete frozen assignment stays auditable in the manifest hash
     assert "user_partition_sha256" in manifest
     assert "user_partition_sha256" in selection_manifest
     exclusion = summary["sd_v1_exposed_user_exclusion"]
     assert exclusion["n_users"] == 2
+    assert exclusion["n_users_in_population"] == 2
     assert exclusion["n_rows"] == 2
-    assert "frozen split seed" in exclusion["policy"]
+    assert exclusion["file_sha256"] == exposed_sha
+    assert "not a seed replay" in exclusion["policy"]
+
+
+def test_builder_rejects_a_missing_or_tampered_exposed_users_file(
+    tmp_path, monkeypatch
+):
+    records = _synthetic_records()
+    monkeypatch.setattr(
+        builder,
+        "load_tcm_sd_development_records",
+        lambda _raw_dir: records,
+    )
+    monkeypatch.setattr(
+        builder,
+        "load_syndrome_vocab",
+        lambda _raw_dir: ["气虚证", "血瘀证"],
+    )
+    good_file, _ = _exposed_users_file(tmp_path, ["exposed-1"])
+    tampered = tmp_path / "tampered.json"
+    tampered.write_text(
+        json.dumps(
+            {
+                "source": "tampered",
+                "n_rows": 1,
+                "n_users": 2,
+                "users": ["exposed-1"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "selection-fail-closed"
+    argv = [
+        "--raw-dir",
+        str(tmp_path / "synthetic-no-data-access"),
+        "--out",
+        str(out),
+        "--scenario",
+        "short",
+    ]
+    with pytest.raises(ValueError, match="n_users does not match"):
+        builder.main(argv + ["--exposed-users-file", str(tampered)])
+    with pytest.raises(FileNotFoundError):
+        builder.main(argv + ["--exposed-users-file", str(tmp_path / "absent.json")])
+    assert not out.exists()
+    assert good_file.exists()
