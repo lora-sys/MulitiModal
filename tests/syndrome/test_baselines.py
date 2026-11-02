@@ -58,8 +58,28 @@ def test_tfidf_probability_rows_sum_to_one(small_corpus):
     texts, labels = small_corpus
     clf = TfidfNgramBaseline().fit(texts, labels)
     probs = clf.predict_proba(texts[:5])
-    assert probs.shape == (5, 5)
+    assert probs.shape == (5, 148)
     assert all(abs(row.sum() - 1.0) < 1e-6 for row in probs)
+
+
+def test_tfidf_probabilities_scatter_to_frozen_label_ids():
+    texts = [
+        "甲类头晕气短",
+        "甲类乏力自汗",
+        "乙类胸闷刺痛",
+        "乙类痛处固定",
+    ]
+    labels = [2, 2, 7, 7]
+    clf = TfidfNgramBaseline(
+        TfidfNgramConfig(min_df=1, class_weight=None, seed=7)
+    ).fit(texts, labels)
+
+    probs = clf.predict_proba(texts)
+    assert probs.shape == (len(texts), 148)
+    assert np.array_equal(probs.argmax(axis=1), labels)
+    unseen = np.setdiff1d(np.arange(148), labels)
+    assert np.count_nonzero(probs[:, unseen]) == 0
+    assert np.allclose(probs.sum(axis=1), 1.0)
 
 
 def test_environment_record_documents_versions():

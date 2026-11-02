@@ -21,6 +21,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.pipeline import Pipeline
 
+#: 冻结 TCM-SD 词表大小（data.tcm_sd.AUDIT_CONCLUSIONS["vocab_size"]）。
+#: 这里用模块级常量而非硬导入：评估胶水测试会向 sys.modules 注入 fake
+#: data.tcm_sd，模块级导入会在 fake 生效时失败；子词表合成夹具通过
+#: TfidfNgramBaseline(n_classes=...) 覆盖。
+TCM_SD_CLASS_COUNT = 148
+
 MAJORITY_BASELINE_NAME = "dummy-most-frequent"
 NGRAM_BASELINE_NAME = "tfidf-char-1-3-logreg"
 
@@ -46,6 +52,7 @@ class MostFrequentBaseline:
     硬编码 0 冒充真实 seed）。"""
 
     name = MAJORITY_BASELINE_NAME
+    score_semantics = "one-hot majority score; not a calibrated probability"
 
     def __init__(self, seed: int = 20261101) -> None:
         self.seed = seed
@@ -75,6 +82,7 @@ class MostFrequentBaseline:
     def provenance(self) -> dict:
         return {
             "name": self.name,
+            "score_semantics": self.score_semantics,
             "params": {},
             "environment": environment_record(seed=self.seed),
         }
@@ -108,9 +116,15 @@ class TfidfNgramBaseline:
     """
 
     name = NGRAM_BASELINE_NAME
+    score_semantics = "OvR sigmoid-normalized scores; not softmax; uncalibrated"
 
-    def __init__(self, config: TfidfNgramConfig | None = None) -> None:
+    def __init__(
+        self, config: TfidfNgramConfig | None = None,
+        n_classes: int | None = None,
+    ) -> None:
         self.config = config or TfidfNgramConfig()
+        # 默认对齐冻结的 148 类词表；子词表合成夹具显式传入更小的类数
+        self._n_classes = TCM_SD_CLASS_COUNT if n_classes is None else n_classes
         self._pipe: Pipeline | None = None
 
     def _build(self) -> Pipeline:
@@ -155,6 +169,17 @@ class TfidfNgramBaseline:
     def fit(self, texts: list[str], labels: list[int]) -> TfidfNgramBaseline:
         if len(texts) != len(labels):
             raise ValueError(f"length mismatch: {len(texts)} vs {len(labels)}")
+        if not labels:
+            raise ValueError("training labels must not be empty")
+        if any(
+            isinstance(label, bool) or not isinstance(label, int) or label < 0
+            for label in labels
+        ):
+            raise ValueError("training labels must be non-negative ints")
+        if any(label >= self._n_classes for label in labels):
+            raise ValueError(
+                f"training label outside the {self._n_classes}-class taxonomy"
+            )
         self._pipe = self._build()
         self._pipe.fit(texts, labels)
         return self
@@ -168,13 +193,20 @@ class TfidfNgramBaseline:
         return [int(x) for x in self._require().predict(texts)]
 
     def predict_proba(self, texts: list[str]) -> np.ndarray:
-        """softmax 概率（LogisticRegression 天然概率，未经额外校准）。"""
-        return self._require().predict_proba(texts)
+        """按冻结的 TCM-SD label id 返回概率，训练 fold 未见类补 0。"""
+        pipe = self._require()
+        classifier = pipe.named_steps["clf"]
+        observed_classes = np.asarray(classifier.classes_, dtype=np.int64)
+        observed_probs = pipe.predict_proba(texts)
+        probs = np.zeros((len(texts), self._n_classes), dtype=np.float64)
+        probs[:, observed_classes] = observed_probs
+        return probs
 
     def provenance(self) -> dict:
         cfg = self.config
         return {
             "name": self.name,
+            "score_semantics": self.score_semantics,
             "params": {
                 "ngram_range": [cfg.ngram_low, cfg.ngram_high],
                 "min_df": cfg.min_df,

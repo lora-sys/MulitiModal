@@ -8,7 +8,7 @@ provenance。
 - 空输入 / 无任何症状信息 → ABSTAIN 拒判，绝不输出证候标签；
 - 英文 / 乱码 / 把证候名当症状输入 → OUT_OF_DOMAIN；
 - 最高分低于 dev 上选定的阈值 → UNCERTAIN（仍列出候选）；
-- 分数为模型原始 softmax 概率，未做校准——在结果里如实声明；
+- 分数语义由 predictor 提供；未经确认的分数不得标为 softmax 概率；
 - 解释只能来自已输入内容或 syndrome_knowledge 引用，禁止编造症状/处方/疗效；
 - 生理数值永不进入本接口（见 feedback.py）。
 """
@@ -60,6 +60,27 @@ class ProbabilisticPredictor(Protocol):
     def predict_proba(self, texts: list[str]) -> np.ndarray: ...
 
 
+def validate_probability_matrix(
+    scores: object, row_count: int, class_count: int
+) -> np.ndarray:
+    """拒绝形状错误、非有限或越界的模型输出，确保排序只接收概率矩阵。"""
+    try:
+        probabilities = np.asarray(scores, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("predictor probabilities must be a numeric matrix") from exc
+    expected_shape = (row_count, class_count)
+    if probabilities.shape != expected_shape:
+        raise ValueError(
+            f"predictor probabilities must have shape {expected_shape}, "
+            f"got {probabilities.shape}"
+        )
+    if not np.isfinite(probabilities).all():
+        raise ValueError("predictor probabilities must all be finite")
+    if np.any(probabilities < 0.0) or np.any(probabilities > 1.0):
+        raise ValueError("predictor probabilities must be within [0, 1]")
+    return probabilities
+
+
 @dataclass(frozen=True)
 class Candidate:
     label: str
@@ -105,15 +126,14 @@ def is_out_of_domain(text: str, label_space: LabelSpace) -> tuple[bool, str]:
     cjk = len(_CJK_RE.findall(text))
     if cjk / len(text) < 0.15:
         return True, "输入不是中文症状描述"
-    if _STRIP_RE.sub("", text) in label_space:
+    normalized = _STRIP_RE.sub("", text)
+    if normalized in label_space or f"{normalized}证" in label_space:
         return True, "输入是证候名称而非症状描述"
     return False, ""
 
 
-def has_any_information(text: str, fields: Mapping[str, object] | None) -> bool:
-    """无信息判定：文本为空（或纯标点）且没有任何结构化字段。"""
-    if fields:
-        return True
+def has_any_information(text: str) -> bool:
+    """文本模型只接受症状文本；结构化字段不能替代空文本。"""
     return bool(_STRIP_RE.sub("", text))
 
 
@@ -128,9 +148,11 @@ def select_uncertainty_threshold(
     """
     probs = np.asarray(max_probs, dtype=np.float64)
     correct = np.asarray(correct, dtype=bool)
-    if len(probs) != len(correct) or len(probs) == 0:
-        raise ValueError("threshold selection needs non-empty paired dev outputs")
-    candidates = np.unique(np.round(probs, 4))
+    if probs.ndim != 1 or correct.ndim != 1 or len(probs) != len(correct) or len(probs) == 0:
+        raise ValueError("threshold selection needs non-empty paired dev vectors")
+    if not np.isfinite(probs).all() or np.any(probs < 0.0) or np.any(probs > 1.0):
+        raise ValueError("dev maximum probabilities must be finite values in [0, 1]")
+    candidates = np.unique(probs)
     best: dict[str, float] | None = None
     for tau in candidates:
         kept = probs >= tau
@@ -167,20 +189,29 @@ class SyndromeInference:
         label_space: LabelSpace,
         model_version: str,
         provenance: dict,
-        threshold: float = 0.0,
+        threshold: float,
         top_k: int = DEFAULT_TOP_K,
         knowledge: Mapping[str, object] | None = None,
         weight_path: str | None = None,
+        threshold_scope: str = "UNVERIFIED",
     ) -> None:
         self.predictor = predictor
         self.label_space = label_space
+        score_semantics = getattr(predictor, "score_semantics", None)
+        if not isinstance(score_semantics, str) or not score_semantics.strip():
+            score_semantics = (
+                "predictor score semantics are UNVERIFIED; calibration status unknown"
+            )
+        self.score_semantics = score_semantics
         self.threshold = float(threshold)
+        if not np.isfinite(self.threshold) or not 0.0 <= self.threshold <= 1.0:
+            raise ValueError("uncertainty threshold must be a finite probability in [0, 1]")
         self.top_k = top_k
         self.knowledge = knowledge
         self.model_version = model_version
         prov = dict(provenance)
         prov["uncertainty_threshold"] = self.threshold
-        prov["threshold_scope"] = "selected on dev partition; holdout untouched"
+        prov["threshold_scope"] = threshold_scope or "UNVERIFIED"
         if weight_path:
             prov["weight_sha256"] = _artifact_sha256(weight_path)
         self.provenance = prov
@@ -245,7 +276,7 @@ class SyndromeInference:
         ]
         result.knowledge_reference = self._knowledge_reference(result.candidates[0].label)
         result.calibrated = False
-        result.provenance["score_semantics"] = "raw softmax probability; NOT calibrated"
+        result.provenance["score_semantics"] = self.score_semantics
         if float(scores.max()) < self.threshold:
             result.status = STATUS_UNCERTAIN
             result.message = (
@@ -261,7 +292,7 @@ class SyndromeInference:
     ) -> InferenceResult:
         text = (text or "").strip()
 
-        if not has_any_information(text, fields):
+        if not has_any_information(text):
             result = self._base_result(text, fields)
             result.message = "未提供症状信息，不作证候判断（ABSTAIN）"
             return result
@@ -273,7 +304,9 @@ class SyndromeInference:
             result.message = f"{reason}，不作证候判断（OUT_OF_DOMAIN）"
             return result
 
-        scores = np.asarray(self.predictor.predict_proba([text]), dtype=np.float64)[0]
+        scores = validate_probability_matrix(
+            self.predictor.predict_proba([text]), 1, len(self.label_space)
+        )[0]
         return self._decide(text, fields, scores)
 
     def predict_batch(
@@ -288,11 +321,15 @@ class SyndromeInference:
         decidable = [
             i
             for i, (t, f) in enumerate(zip(clean, fields, strict=False))
-            if has_any_information(t, f) and not is_out_of_domain(t, self.label_space)[0]
+            if has_any_information(t) and not is_out_of_domain(t, self.label_space)[0]
         ]
         results: list[InferenceResult | None] = [None] * len(texts)
         if decidable:
-            probs = np.asarray(self.predictor.predict_proba([clean[i] for i in decidable]))
+            probs = validate_probability_matrix(
+                self.predictor.predict_proba([clean[i] for i in decidable]),
+                len(decidable),
+                len(self.label_space),
+            )
             for row, i in enumerate(decidable):
                 results[i] = self._decide(clean[i], fields[i], probs[row])
         for i, t in enumerate(clean):

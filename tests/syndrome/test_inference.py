@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 from syndrome.inference import (
@@ -42,6 +43,7 @@ def test_ok_result_shape(fixed_predictor, label_space):
     assert r["label_taxonomy_version"] == label_space.taxonomy_id
     assert r["model_version"] == "test-model-v1"
     assert "provenance" in r
+    assert r["provenance"]["threshold_scope"] == "UNVERIFIED"
     assert r["calibrated"] is False  # 未校准必须显式声明
 
 
@@ -62,11 +64,17 @@ def test_empty_input_abstains(fixed_predictor, label_space):
         assert r.message
 
 
-def test_empty_text_but_fields_present_still_runs(fixed_predictor, label_space):
+@pytest.mark.parametrize("text", ("", " ，。！？ "))
+def test_empty_or_punctuation_text_with_fields_abstains_without_model_call(
+    fixed_predictor, label_space, text
+):
     inf = make_inference(fixed_predictor, label_space, threshold=0.0)
-    r = inf.predict_one("", fields={"age": 40})
-    assert r.status == STATUS_OK
-    assert "age=40" in r.evidence
+    single = inf.predict_one(text, fields={"age": 40})
+    batch = inf.predict_batch([text], fields=[{"age": 40}])
+    assert single.status == STATUS_ABSTAIN
+    assert batch[0].status == STATUS_ABSTAIN
+    assert single.candidates == batch[0].candidates == []
+    assert fixed_predictor.calls == []
 
 
 def test_out_of_domain_english_and_garbage(fixed_predictor, label_space):
@@ -77,11 +85,14 @@ def test_out_of_domain_english_and_garbage(fixed_predictor, label_space):
         assert r.candidates == []
 
 
-def test_syndrome_name_as_input_is_out_of_domain(fixed_predictor, label_space):
-    """把证候名当症状输入属于越界，不当作正常分类请求。"""
+def test_syndrome_name_or_suffix_omission_is_out_of_domain(fixed_predictor, label_space):
+    """证候名及省略“证”后缀的已知别名都不作为症状分类。"""
     inf = make_inference(fixed_predictor, label_space)
-    r = inf.predict_one(" 气虚血瘀证 ")
-    assert r.status == STATUS_OUT_OF_DOMAIN
+    for text in (" 气虚血瘀证 ", "脾肾阳虚"):
+        result = inf.predict_one(text)
+        assert result.status == STATUS_OUT_OF_DOMAIN
+        assert result.candidates == []
+    assert fixed_predictor.calls == []
 
 
 def test_is_out_of_domain_reasons(label_space):
@@ -96,6 +107,48 @@ def test_low_confidence_is_uncertain(fixed_predictor, label_space):
     assert r.status == STATUS_UNCERTAIN
     assert r.candidates  # UNCERTAIN 仍列出候选
     assert r.candidates[0].score < 0.5
+
+
+@pytest.mark.parametrize("batch", (False, True))
+@pytest.mark.parametrize(
+    "malformation",
+    ("wrong_rank", "wrong_row_count", "wrong_class_count", "nan", "negative", "over_one"),
+)
+def test_invalid_predictor_probabilities_fail_closed(
+    label_space, batch, malformation
+):
+    class MalformedPredictor:
+        def predict_proba(self, texts):
+            rows = len(texts)
+            probabilities = np.full(
+                (rows, len(label_space)), 1.0 / len(label_space)
+            )
+            if malformation == "wrong_rank":
+                return probabilities[0]
+            if malformation == "wrong_row_count":
+                return np.full((rows + 1, len(label_space)), 0.2)
+            if malformation == "wrong_class_count":
+                return np.full((rows, len(label_space) - 1), 0.2)
+            if malformation == "nan":
+                probabilities[0, 0] = np.nan
+            elif malformation == "negative":
+                probabilities[0, 0] = -0.01
+            elif malformation == "over_one":
+                probabilities[0, 0] = 1.01
+            return probabilities
+
+    inference = SyndromeInference(
+        MalformedPredictor(),
+        label_space,
+        model_version="malformed-test-v1",
+        provenance={"artifact": "synthetic"},
+        threshold=0.0,
+    )
+    with pytest.raises(ValueError, match="predictor probabilities"):
+        if batch:
+            inference.predict_batch(["患者刺痛固定", "近期心悸失眠"])
+        else:
+            inference.predict_one("患者刺痛固定")
 
 
 def test_missing_information_lists_unprovided_fields(fixed_predictor, label_space):
@@ -145,10 +198,56 @@ def test_select_threshold_satisfies_coverage_floor():
     assert 0.0 <= info["threshold"] <= 1.0
 
 
+def test_select_threshold_is_safe_for_repeated_and_dense_probabilities():
+    repeated = [0.12346] * 10
+    dense = [0.12346 + i * 0.000001 for i in range(10)]
+    for probs in (repeated, dense):
+        info = select_uncertainty_threshold(probs, [True] * len(probs), coverage_floor=0.9)
+        assert info["threshold"] == min(probs)
+        assert info["dev_coverage"] >= 0.9
+
+
 def test_select_threshold_impossible_floor_raises():
     with pytest.raises(ValueError):
         select_uncertainty_threshold([0.2] * 10, [True] * 10, coverage_floor=1.5)
 
 
+@pytest.mark.parametrize(
+    "probabilities",
+    ([float("nan")], [-0.01], [1.01], [[0.5]]),
+)
+def test_select_threshold_rejects_invalid_probability_vectors(probabilities):
+    with pytest.raises(ValueError):
+        select_uncertainty_threshold(probabilities, [True])
+
+
 def test_default_coverage_floor_value():
     assert DEFAULT_COVERAGE_FLOOR == 0.9
+
+@pytest.mark.synthetic
+def test_inference_provenance_preserves_tfidf_ovr_score_semantics(corpus):
+    from syndrome.baselines import (
+        TCM_SD_CLASS_COUNT,
+        TfidfNgramBaseline,
+        TfidfNgramConfig,
+    )
+    from syndrome.labels import LabelSpace
+
+    texts, labels = corpus
+    label_space = LabelSpace(
+        tuple(f"synthetic-syndrome-{index}" for index in range(TCM_SD_CLASS_COUNT))
+    )
+    predictor = TfidfNgramBaseline(
+        TfidfNgramConfig(min_df=1)
+    ).fit(texts, labels)
+    inference = SyndromeInference(
+        predictor,
+        label_space,
+        model_version="synthetic-tfidf-v1",
+        provenance={"source": "SYNTHETIC"},
+        threshold=0.0,
+    )
+    result = inference.predict_one("患者近期明显刺痛固定伴乏力")
+    assert result.provenance["score_semantics"] == predictor.score_semantics
+    assert "not softmax" in result.provenance["score_semantics"]
+    assert "uncalibrated" in predictor.provenance()["score_semantics"]

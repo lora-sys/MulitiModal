@@ -9,17 +9,38 @@ from __future__ import annotations
 
 import pytest
 
-from syndrome.baselines import TfidfNgramBaseline, TfidfNgramConfig
+from syndrome.baselines import (
+    TCM_SD_CLASS_COUNT,
+    TfidfNgramBaseline,
+    TfidfNgramConfig,
+)
 from syndrome.inference import SyndromeInference
-from syndrome.labels import STATUS_ABSTAIN, STATUS_OK, STATUS_OUT_OF_DOMAIN, STATUS_UNCERTAIN
+from syndrome.labels import (
+    STATUS_ABSTAIN,
+    STATUS_OK,
+    STATUS_OUT_OF_DOMAIN,
+    STATUS_UNCERTAIN,
+    LabelSpace,
+)
 
 pytestmark = pytest.mark.synthetic
 
 
 @pytest.fixture(scope="module")
-def trained(label_space, make_corpus):
-    texts, labels = make_corpus(n_per_class=12, seed=5)
-    clf = TfidfNgramBaseline(TfidfNgramConfig(seed=5)).fit(texts, labels)
+def trained():
+    labels = tuple(
+        "湿热下注证" if class_id == 0 else f"合成证型{class_id:03d}"
+        for class_id in range(TCM_SD_CLASS_COUNT)
+    )
+    label_space = LabelSpace(labels)
+    texts, targets = [], []
+    for class_id in range(TCM_SD_CLASS_COUNT):
+        for sample_id in range(2):
+            texts.append(
+                f"合成证型{class_id:03d} synthetic-marker-{class_id:03d} sample-{sample_id}"
+            )
+            targets.append(class_id)
+    clf = TfidfNgramBaseline(TfidfNgramConfig(seed=5)).fit(texts, targets)
     inference = SyndromeInference(
         clf,
         label_space,
