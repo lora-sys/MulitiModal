@@ -73,9 +73,10 @@ from data.tcm_sd import SPLIT_SEED
 from research.frozen import FoldData, selection_fold_ids
 from research.tasks import TaskAdapter
 
-MANIFEST_VERSION = "tcm-sd-manifest-v2"
+MANIFEST_VERSION = "tcm-sd-manifest-v3"
 TASK_TYPE = "syndrome_classification"
 DATASET_ID = "tcm-sd-v1"
+SELECTION_FOLD_VERSION = "tcm-sd-stratified-user-fold-v2"
 #: v0 record contract: one feature group holding the frozen text features
 FEATURE_GROUP = "frozen_text_features"
 MODALITY_NAME = "text"
@@ -99,7 +100,7 @@ HASHED_TEXT_PARAMS = {
 INPUT_SPEC_PREFIX = "tcm-sd-text-v1"
 INPUT_SPEC_VERSION_HASHED_PREFIX = "tcm-sd-text-v2"
 PRIMARY_METRIC_SD = "syndrome/macro_f1"
-EVAL_METRIC_VERSION = "tcm-sd-eval-v1"
+EVAL_METRIC_VERSION = "tcm-sd-eval-v3"
 PREDICTION_KEY = "syndrome_probs"
 TARGET_KEY = "syndrome_labels"
 
@@ -238,6 +239,8 @@ def build_syndrome_manifest(
     split_seed: int = SPLIT_SEED,
     modality_kind: str = MODALITY_KIND_FLOAT_GROUPS,
     notes: str = "",
+    frozen_user_partitions: dict[str, frozenset[str]] | None = None,
+    frozen_user_strata: dict[str, str] | None = None,
 ):
     """Freeze the syndrome split into a hash-identified manifest.
 
@@ -248,15 +251,13 @@ def build_syndrome_manifest(
     ("PUBLISHED" for author-provided TCM-SD answers; "SMOKE_ONLY" for
     synthetic fixtures).
 
-    The split itself is NOT drawn here (R1 F3): the internal 0.70/0.15/0.15
-    case-level shuffle is gone, and the partition of the records' deduplicated
-    user set is delegated to the single source of truth
-    `data.tcm_sd.subject_partitions(records, seed=split_seed)`. That is the
-    AGENTS.md hard rule 2 semantics: every case of one user_id lands in
-    exactly one partition, partitions are pairwise disjoint by user, and the
-    assignment is a deterministic function of (records, seed). The
-    data-layer partitions name the third split "test"; the manifest exposes
-    it as "holdout" (the engine's naming) with identical membership.
+    PUBLISHED manifests require the caller to freeze subject_partitions over
+    the complete input user set before evaluation filtering. Only explicit
+    SMOKE_ONLY fixtures may derive partitions from their synthetic records.
+    Passing frozen_user_partitions preserves that assignment after dev rows
+    are removed. Every case for one user therefore
+    remains in one partition, with the original user mapping included in the
+    manifest hash. The data-layer third split is named holdout here.
 
     `modality_kind` selects the input contract: "float_groups" keeps the v0
     frozen inline vectors with a train-fold-fitted scaler (#29); "hashed_text"
@@ -268,7 +269,14 @@ def build_syndrome_manifest(
     kind.
     """
     from data.real_split import RealManifest, _fit_scaler
-    from data.tcm_sd import DEV_RATIO, TEST_RATIO, TRAIN_RATIO, subject_partitions
+    from data.tcm_sd import (
+        DEV_RATIO,
+        TEST_RATIO,
+        TRAIN_RATIO,
+        subject_partition_sha256,
+        subject_partitions,
+        user_majority_strata,
+    )
 
     if n_classes < 2:
         raise ValueError(f"n_classes must be >= 2, got {n_classes}")
@@ -308,14 +316,62 @@ def build_syndrome_manifest(
                 "the v0 contract is one frozen feature vector per case"
             )
 
-    user_parts = subject_partitions(records, seed=split_seed)
-    for a in ("train", "dev", "test"):
-        for b in ("train", "dev", "test"):
-            if a < b and user_parts[a] & user_parts[b]:
-                raise ValueError(
-                    f"subject_partitions returned overlapping users for "
-                    f"{a!r}/{b!r}; refusing a leaky manifest"
-                )
+    if frozen_user_partitions is None:
+        if label_tier != "SMOKE_ONLY":
+            raise ValueError(
+                "frozen_user_partitions is required for non-SMOKE_ONLY "
+                "syndrome manifests"
+            )
+        user_parts = subject_partitions(records, seed=split_seed)
+    else:
+        user_parts = {
+            name: frozenset(users)
+            for name, users in frozen_user_partitions.items()
+        }
+    if frozen_user_strata is None:
+        if label_tier != "SMOKE_ONLY":
+            raise ValueError(
+                "frozen_user_strata is required for non-SMOKE_ONLY "
+                "syndrome manifests"
+            )
+        user_strata = user_majority_strata(records)
+    else:
+        user_strata = dict(frozen_user_strata)
+    expected_user_parts = {"train", "dev", "test"}
+    if set(user_parts) != expected_user_parts:
+        raise ValueError(
+            "frozen_user_partitions must contain exactly train, dev, and test"
+        )
+    all_partitioned_users: set[str] = set()
+    for name in ("train", "dev", "test"):
+        overlap = all_partitioned_users & user_parts[name]
+        if overlap:
+            raise ValueError(
+                f"frozen user partitions overlap in {name!r}: "
+                f"{sorted(overlap)[:3]}"
+            )
+        all_partitioned_users.update(user_parts[name])
+    if set(user_strata) != all_partitioned_users or any(
+        not isinstance(stratum, str) or not stratum
+        for stratum in user_strata.values()
+    ):
+        raise ValueError(
+            "frozen user strata must exactly cover every frozen user with "
+            "a non-empty syndrome"
+        )
+    missing_users = {r.user_id for r in records} - all_partitioned_users
+    if missing_users:
+        raise ValueError(
+            "records reference users outside frozen_user_partitions: "
+            f"{sorted(missing_users)[:3]}"
+        )
+    user_partition_by_id = {
+        user_id: partition
+        for partition, source in (
+            ("train", "train"), ("dev", "dev"), ("holdout", "test")
+        )
+        for user_id in sorted(user_parts[source])
+    }
     by_row = {r.subject_index: r for r in records}
     partitions = {
         part: sorted(
@@ -329,7 +385,7 @@ def build_syndrome_manifest(
         if not members:
             raise ValueError(
                 f"empty {name!r} partition for {len(records)} cases over "
-                f"{len(user_parts['train'] | user_parts['dev'] | user_parts['test'])} "
+                f"{len(all_partitioned_users)} "
                 "users; the subject-level ratios leave nothing to score"
             )
     # fold-only scaler: statistics from TRAIN rows exclusively (#29) — for
@@ -385,6 +441,16 @@ def build_syndrome_manifest(
                for p, rows in partitions.items()},
         },
         "subject_row_by_id": {subject_id(r): r for r in sorted(indices)},
+        "subject_user_by_id": {
+            subject_id(r.subject_index): r.user_id
+            for r in sorted(records, key=lambda record: record.subject_index)
+        },
+        "user_partition_by_id": user_partition_by_id,
+        "user_stratum_by_id": dict(sorted(user_strata.items())),
+        # canonical hash over the complete frozen user→partition assignment;
+        # derived manifests inherit it unchanged so the full assignment stays
+        # auditable even after holdout users are pruned from a selection pool
+        "user_partition_sha256": subject_partition_sha256(user_parts),
         "scaler": scaler,
         "scaler_policy": scaler_policy,
         "scaler_fit_rows": scaler_fit_rows,
@@ -393,6 +459,173 @@ def build_syndrome_manifest(
     digest = _manifest_digest(data)
     data["manifest_sha256"] = digest
     return RealManifest(data=data, sha256=digest)
+
+
+def build_syndrome_selection_artifacts(manifest, records):
+    """Derive train+dev-only CV inputs from a frozen syndrome manifest.
+
+    The user partition and majority-stratum maps are retained for every
+    original train/dev user, including users whose rows were removed by
+    scenario text filtering. This keeps CV assignment stable under row
+    filtering. All holdout rows and users are removed from the derived
+    artifact, and both dataset and manifest hashes are recomputed.
+    """
+    import hashlib
+
+    from data.real_split import RealManifest
+
+    data = json.loads(json.dumps(manifest.data))
+    parent_sha = data.get("manifest_sha256")
+    if not isinstance(parent_sha, str) or parent_sha != manifest.sha256:
+        raise ValueError(
+            "parent syndrome manifest SHA-256 is missing or inconsistent"
+        )
+
+    split = data.get("split")
+    row_map = data.get("subject_row_by_id")
+    subject_users = data.get("subject_user_by_id")
+    user_partitions = data.get("user_partition_by_id")
+    user_strata = data.get("user_stratum_by_id")
+    if not all(
+        isinstance(value, dict)
+        for value in (split, row_map, subject_users, user_partitions, user_strata)
+    ):
+        raise ValueError("parent syndrome manifest lacks selection metadata")
+    train_ids = split.get("train")
+    dev_ids = split.get("dev")
+    holdout_ids = split.get("holdout")
+    if not all(
+        isinstance(value, list)
+        for value in (train_ids, dev_ids, holdout_ids)
+    ):
+        raise ValueError("parent syndrome manifest has invalid split lists")
+    pool_ids = set(train_ids) | set(dev_ids)
+    if (
+        set(row_map) != pool_ids | set(holdout_ids)
+        or set(subject_users) != set(row_map)
+        or set(user_partitions) != set(user_strata)
+    ):
+        raise ValueError("parent syndrome manifest mappings are incomplete")
+    pool_users = {
+        user_id
+        for user_id, partition in user_partitions.items()
+        if partition in {"train", "dev"}
+    }
+    if any(
+        user_partitions[user_id] not in {"train", "dev", "holdout"}
+        for user_id in user_partitions
+    ):
+        raise ValueError("parent syndrome manifest has an invalid user partition")
+    if any(
+        user_partitions[subject_users[subject_id]] != expected
+        for partition, expected in (
+            (train_ids, "train"),
+            (dev_ids, "dev"),
+            (holdout_ids, "holdout"),
+        )
+        for subject_id in partition
+    ):
+        raise ValueError("parent syndrome user partitions disagree with split rows")
+    if not pool_users <= set(user_strata):
+        raise ValueError("parent syndrome manifest lacks frozen pool user strata")
+
+    row_by_subject = {int(row): subject_id for subject_id, row in row_map.items()}
+    expected_rows = {int(row_map[subject_id]) for subject_id in pool_ids}
+    record_rows = [record.subject_index for record in records]
+    if len(record_rows) != len(set(record_rows)):
+        raise ValueError("parent syndrome records contain duplicate rows")
+    if set(record_rows) != set(row_map.values()):
+        raise ValueError("parent syndrome records do not match the manifest rows")
+    selected_records = sorted(
+        (record for record in records if record.subject_index in expected_rows),
+        key=lambda record: record.subject_index,
+    )
+    selected_subject_ids = {
+        row_by_subject[record.subject_index] for record in selected_records
+    }
+    if selected_subject_ids != pool_ids:
+        raise ValueError("selection records do not cover parent train+dev rows")
+
+    payload = records_to_json(selected_records)
+    data["dataset_sha256"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    data["selection_parent_manifest_sha256"] = parent_sha
+    data["selection_parent_dataset_sha256"] = manifest.data["dataset_sha256"]
+    data["split"]["holdout"] = []
+    data["subject_row_by_id"] = {
+        subject_id: row_map[subject_id] for subject_id in sorted(pool_ids)
+    }
+    data["subject_user_by_id"] = {
+        subject_id: subject_users[subject_id] for subject_id in sorted(pool_ids)
+    }
+    data["user_partition_by_id"] = {
+        user_id: user_partitions[user_id] for user_id in sorted(pool_users)
+    }
+    data["user_stratum_by_id"] = {
+        user_id: user_strata[user_id] for user_id in sorted(pool_users)
+    }
+    data["notes"] = (
+        f"{data.get('notes', '')}; selection_pool=train+dev; holdout omitted"
+    )
+    data.pop("manifest_sha256", None)
+    digest = _manifest_digest(data)
+    data["manifest_sha256"] = digest
+    return selected_records, RealManifest(data=data, sha256=digest)
+
+
+def _rehash_manifest_data(data: dict) -> str:
+    data.pop("manifest_sha256", None)
+    digest = _manifest_digest(data)
+    data["manifest_sha256"] = digest
+    return digest
+
+
+def _prune_syndrome_user_metadata(manifest):
+    """Keep only in-scope subject identities in a derived manifest."""
+    from data.real_split import RealManifest
+
+    data = json.loads(json.dumps(manifest.data))
+    row_ids = set(data["subject_row_by_id"])
+    subject_users = data.get("subject_user_by_id")
+    if not isinstance(subject_users, dict) or not row_ids <= set(subject_users):
+        raise ValueError(
+            "syndrome manifest lacks a complete subject-to-user mapping"
+        )
+    data["subject_user_by_id"] = {
+        subject_id: subject_users[subject_id] for subject_id in sorted(row_ids)
+    }
+    user_strata = data.get("user_stratum_by_id")
+    current_users = set(data["subject_user_by_id"].values())
+    if not isinstance(user_strata, dict) or not current_users <= set(user_strata):
+        raise ValueError(
+            "syndrome manifest lacks complete frozen user strata"
+        )
+    data["user_stratum_by_id"] = {
+        user_id: user_strata[user_id] for user_id in sorted(current_users)
+    }
+    data.pop("user_partition_by_id", None)
+    digest = _rehash_manifest_data(data)
+    return RealManifest(data=data, sha256=digest)
+
+
+def _build_syndrome_fold_manifest(
+    manifest: dict, records, train_ids, dev_ids, notes: str = ""
+):
+    from data.real_split import fold_manifest
+
+    derived = fold_manifest(
+        manifest, records, train_ids, dev_ids, notes=notes,
+        scaler=_frozen_scaler(manifest),
+    )
+    return _prune_syndrome_user_metadata(derived)
+
+
+def _build_syndrome_pool_manifest(manifest: dict, records, notes: str = ""):
+    from data.real_split import pool_manifest
+
+    derived = pool_manifest(
+        manifest, records, notes=notes, scaler=_frozen_scaler(manifest)
+    )
+    return _prune_syndrome_user_metadata(derived)
 
 
 def _input_spec_version(manifest: dict) -> str:
@@ -619,29 +852,49 @@ class SyndromeBatchProvider:
 # -- trusted evaluation -------------------------------------------------------
 
 
-def _macro_f1(pairs: list[tuple[int, int]]) -> float | None:
-    """Macro-F1 over observed (predicted, true) pairs, classes = true ∪ pred.
+def _per_class_metrics(
+    pairs: list[tuple[int, int]], n_classes: int
+) -> dict[str, dict]:
+    if isinstance(n_classes, bool) or not isinstance(n_classes, int) or n_classes < 2:
+        raise ValueError(f"n_classes must be an integer >= 2, got {n_classes!r}")
+    if any(
+        prediction < 0 or prediction >= n_classes
+        or label < 0 or label >= n_classes
+        for prediction, label in pairs
+    ):
+        raise ValueError("observed syndrome class is outside the frozen taxonomy")
+    report = {}
+    for class_id in range(n_classes):
+        tp = sum(
+            1 for prediction, label in pairs
+            if prediction == class_id and label == class_id
+        )
+        fp = sum(
+            1 for prediction, label in pairs
+            if prediction == class_id and label != class_id
+        )
+        fn = sum(
+            1 for prediction, label in pairs
+            if prediction != class_id and label == class_id
+        )
+        support = tp + fn
+        precision_denom = tp + fp
+        f1_denom = 2 * tp + fp + fn
+        report[str(class_id)] = {
+            "precision": tp / precision_denom if precision_denom else 0.0,
+            "recall": tp / support if support else 0.0,
+            "f1": 2 * tp / f1_denom if f1_denom else 0.0,
+            "support": support,
+        }
+    return report
 
-    A class with no true and no predicted occurrence cannot appear; a class
-    with an empty F1 denominator scores 0.0 (the sklearn convention), so the
-    macro is always defined when at least one labeled pair exists.
 
-    NOTE (R1 F4): this is an OBSERVED-CLASS average — its denominator is
-    only the classes that actually occur in the pairs. It is deliberately
-    different from `syndrome.metrics.macro_f1`, which averages over ALL 148
-    frozen classes with zero F1 for absent ones. The two numbers must never
-    be compared side by side (this one is >= the full-taxonomy number)."""
+def _macro_f1(pairs: list[tuple[int, int]], n_classes: int) -> float | None:
+    """Macro-F1 over the complete frozen taxonomy; absent classes score 0."""
     if not pairs:
         return None
-    classes = sorted({p for p, _ in pairs} | {lbl for _, lbl in pairs})
-    f1s = []
-    for c in classes:
-        tp = sum(1 for p, lbl in pairs if p == c and lbl == c)
-        fp = sum(1 for p, lbl in pairs if p == c and lbl != c)
-        fn = sum(1 for p, lbl in pairs if p != c and lbl == c)
-        denom = 2 * tp + fp + fn
-        f1s.append((2 * tp / denom) if denom else 0.0)
-    return sum(f1s) / len(f1s)
+    per_class = _per_class_metrics(pairs, n_classes)
+    return sum(metrics["f1"] for metrics in per_class.values()) / n_classes
 
 
 @dataclass(frozen=True)
@@ -737,16 +990,27 @@ class SyndromeTrustedEvaluator:
                 "score a model against a contract it was not built for"
             )
         allowed = set(self.manifest["split"][partition])
-        foreign = [s for s in provider.subject_ids if s not in allowed]
-        if foreign:
+        provider_ids = tuple(provider.subject_ids)
+        duplicates = len(provider_ids) != len(set(provider_ids))
+        missing = sorted(allowed - set(provider_ids))
+        foreign = sorted(set(provider_ids) - allowed)
+        if duplicates or missing or foreign:
             raise ValueError(
-                f"leakage refusal: {foreign[:3]} are not in partition "
-                f"{partition!r} of the frozen manifest"
+                f"provider sample set mismatch for partition {partition!r}: "
+                f"missing={missing[:3]}, foreign={foreign[:3]}, "
+                f"duplicates={duplicates}"
             )
+        from core.batch import ModelOutput
+
         pairs: list[tuple[int, int]] = []
-        n_subjects = len(provider.subject_ids)
+        n_subjects = len(provider_ids)
         for item in provider:
-            out = model(item.batch)
+            with torch.no_grad():
+                out = model(item.batch)
+            if not isinstance(out, ModelOutput) or not isinstance(
+                out.predictions, dict
+            ):
+                raise ValueError("model must return ModelOutput with a prediction mapping")
             if PREDICTION_KEY not in out.predictions:
                 raise ValueError(
                     f"model did not predict {PREDICTION_KEY!r}; unknown "
@@ -755,10 +1019,25 @@ class SyndromeTrustedEvaluator:
             probs = out.predictions[PREDICTION_KEY]
             labels = item.batch.targets[TARGET_KEY].squeeze(-1)
             mask = item.batch.target_mask[TARGET_KEY].squeeze(-1)
+            if not isinstance(probs, torch.Tensor):
+                raise ValueError(f"{PREDICTION_KEY!r} probability output must be a tensor")
             if probs.shape != (len(labels), self.manifest["n_classes"]):
                 raise ValueError(
                     f"{PREDICTION_KEY!r} must be [B, n_classes="
                     f"{self.manifest['n_classes']}], got {tuple(probs.shape)}"
+                )
+            if not torch.isfinite(probs).all():
+                raise ValueError(f"{PREDICTION_KEY!r} probabilities must be finite")
+            if torch.any(probs < 0.0) or torch.any(probs > 1.0):
+                raise ValueError(
+                    f"{PREDICTION_KEY!r} probabilities must be within [0, 1]"
+                )
+            row_sums = probs.sum(dim=-1)
+            if not torch.allclose(
+                row_sums, torch.ones_like(row_sums), rtol=1e-4, atol=1e-4
+            ):
+                raise ValueError(
+                    f"{PREDICTION_KEY!r} probabilities must sum to one per row"
                 )
             pred = probs.argmax(dim=-1)
             for p, lbl, observed in zip(pred.tolist(), labels.tolist(),
@@ -766,11 +1045,12 @@ class SyndromeTrustedEvaluator:
                 if observed:
                     pairs.append((int(p), int(lbl)))
         smoke_only = self.manifest["label_tier"] == "SMOKE_ONLY"
-        macro = _macro_f1(pairs)
+        n_classes = int(self.manifest["n_classes"])
+        macro = _macro_f1(pairs, n_classes)
         not_computable: tuple = ()
         if macro is None:
             not_computable = ("no labeled cases in this partition",)
-        per_class = self._per_class(pairs)
+        per_class = self._per_class(pairs, n_classes)
         return SyndromeReport(
             metric_version=EVAL_METRIC_VERSION,
             primary_metric=PRIMARY_METRIC_SD,
@@ -790,58 +1070,101 @@ class SyndromeTrustedEvaluator:
         )
 
     @staticmethod
-    def _per_class(pairs: list[tuple[int, int]]) -> dict:
+    def _per_class(pairs: list[tuple[int, int]], n_classes: int) -> dict:
         if not pairs:
             return {}
-        classes = sorted({p for p, _ in pairs} | {lbl for _, lbl in pairs})
-        report: dict[str, dict] = {}
-        for c in classes:
-            tp = sum(1 for p, lbl in pairs if p == c and lbl == c)
-            fp = sum(1 for p, lbl in pairs if p == c and lbl != c)
-            fn = sum(1 for p, lbl in pairs if p != c and lbl == c)
-            support = tp + fn
-            precision = tp / (tp + fp) if tp + fp else None
-            recall = tp / support if support else None
-            denom = 2 * tp + fp + fn
-            report[str(c)] = {
-                "precision": precision,
-                "recall": recall,
-                "f1": (2 * tp / denom) if denom else 0.0,
-                "support": support,
-            }
-        return report
+        return _per_class_metrics(pairs, n_classes)
+
 
 
 # -- folds ----------------------------------------------------------------------
 
 
-def build_fold(config: dict, manifest_path, dataset_path, fold: int,
-               folds: int, repeat: int, records=None):
-    """One selection fold of the syndrome task: same derivation and the same
-    manifest pruning as the constitution path (holdout emptied, row mapping
-    pruned to the fold's own train∪dev ids, fold-own scaler)."""
-    from data.real_split import fold_manifest as _prune_fold
-    from data.real_split import load_real_manifest
+def build_fold(
+    config: dict,
+    manifest: dict,
+    fold: int,
+    folds: int,
+    repeat: int,
+    records: list[SyndromeRecord],
+):
+    """Build a fold from a validated selection-only manifest and records."""
+    from research.tasks import validate_manifest_contract
 
-    manifest = load_real_manifest(manifest_path)
+    validate_manifest_contract("syndrome", manifest, selection_pool=True)
+    if manifest["split"]["holdout"] != []:
+        raise ValueError("selection manifest must have an empty holdout partition")
     if records is None:
-        records = records_from_json(Path(dataset_path).read_text())
+        raise ValueError("fold records must come from validated selection inputs")
+
     train_ids, dev_ids = selection_fold_ids(manifest, fold, folds, repeat)
-    data = _prune_fold(
-        manifest, records, train_ids, dev_ids,
-        notes=f"syndrome selection fold {fold} repeat {repeat}",
-        scaler=_frozen_scaler(manifest),
-    ).data
+    row_by_id = manifest["subject_row_by_id"]
+    pool_subject_ids = set(manifest["split"]["train"]) | set(manifest["split"]["dev"])
+    pool_rows = {row_by_id[subject_id] for subject_id in pool_subject_ids}
+    record_rows = [record.subject_index for record in records]
+    if len(record_rows) != len(set(record_rows)):
+        raise ValueError("duplicate subject_index in syndrome fold pool records")
+    if set(record_rows) != pool_rows:
+        raise ValueError("syndrome fold records do not match selection manifest rows")
+    records_by_row = {record.subject_index: record for record in records}
+
+    dev_before = len(dev_ids)
+    text_dedup = {
+        "policy": "one-way exact input_text dedup from dev against train",
+        "text_basis": None,
+        "n_before": dev_before,
+        "n_dropped": 0,
+        "n_after": dev_before,
+    }
+    if _modality_kind(manifest) == MODALITY_KIND_HASHED_TEXT:
+        train_texts = {
+            records_by_row[row_by_id[subject_id]].input_text
+            for subject_id in train_ids
+        }
+        dev_ids = [
+            subject_id
+            for subject_id in dev_ids
+            if records_by_row[row_by_id[subject_id]].input_text not in train_texts
+        ]
+        text_dedup.update(
+            {
+                "text_basis": "input_text",
+                "n_dropped": dev_before - len(dev_ids),
+                "n_after": len(dev_ids),
+            }
+        )
+
+    derived = _build_syndrome_fold_manifest(
+        manifest,
+        records,
+        train_ids,
+        dev_ids,
+        notes=(
+            f"syndrome selection fold {fold} repeat {repeat}; "
+            f"{SELECTION_FOLD_VERSION}"
+        ),
+    )
+    data = derived.data
+    data["selection_fold"] = {
+        "version": SELECTION_FOLD_VERSION,
+        "grouping": "user_id",
+        "fold": fold,
+        "folds": folds,
+        "repeat": repeat,
+        "dev_text_dedup": text_dedup,
+    }
+    _rehash_manifest_data(data)
     fold_rows = set(data["subject_row_by_id"].values())
-    fold_records = [r for r in records if r.subject_index in fold_rows]
+    fold_records = [record for record in records if record.subject_index in fold_rows]
     batch_size = int(config.get("train_provider", {}).get("batch_size", 32))
     fold_data = FoldData(
-        train=SyndromeBatchProvider(data, fold_records, "train",
-                                    batch_size=batch_size),
+        train=SyndromeBatchProvider(data, fold_records, "train", batch_size=batch_size),
         dev=SyndromeBatchProvider(data, fold_records, "dev", batch_size=64),
         input_spec=syndrome_input_spec(data),
         dims={
-            "modalities": {name: p["dim"] for name, p in data["modalities"].items()},
+            "modalities": {
+                name: params["dim"] for name, params in data["modalities"].items()
+            },
             "targets": int(data["n_classes"]),
         },
         n_train_subjects=len(train_ids),
@@ -901,7 +1224,10 @@ def syndrome_baselines(view: dict, records: list[SyndromeRecord]) -> dict:
         if by_row[view["subject_row_by_id"][s]].label is not None
     ]
     return {"majority": {
-        "holdout": {"macro_f1": _macro_f1(pairs), "n_labeled": len(pairs)},
+        "holdout": {
+            "macro_f1": _macro_f1(pairs, int(view["n_classes"])),
+            "n_labeled": len(pairs),
+        },
     }}
 
 
@@ -926,11 +1252,25 @@ class SyndromeAdapter(TaskAdapter):
     def load_records(self, dataset_path):
         return records_from_json(Path(dataset_path).read_text())
 
+    def load_records_verified(self, dataset_path, expected_sha256):
+        from research.evaluator import read_verified_dataset_bytes
+
+        payload = read_verified_dataset_bytes(
+            dataset_path, expected_sha256, "syndrome dataset"
+        )
+        return records_from_json(payload.decode("utf-8"))
+
     def load_eval_records(self, config):
         data = config["data"]
         if data.get("records_path"):
-            return records_from_json(Path(data["records_path"]).read_text())
-        return records_from_json(Path(data["dataset_path"]).read_text())
+            raise ValueError(
+                "syndrome evaluation records must come from the dataset bytes "
+                "bound to the frozen manifest"
+            )
+        frozen = self.load_manifest(data["frozen_manifest_path"])
+        return self.load_records_verified(
+            data["dataset_path"], frozen["dataset_sha256"]
+        )
 
     def records_from_json(self, text):
         return records_from_json(text)
@@ -939,25 +1279,16 @@ class SyndromeAdapter(TaskAdapter):
         return records_to_json(records)
 
     def fold_manifest(self, manifest, records, train_ids, dev_ids, notes=""):
-        from data.real_split import fold_manifest
-
-        return fold_manifest(
+        return _build_syndrome_fold_manifest(
             manifest, records, train_ids, dev_ids, notes=notes,
-            scaler=_frozen_scaler(manifest),
         )
 
     def pool_manifest(self, frozen, records, notes=""):
-        from data.real_split import pool_manifest
+        return _build_syndrome_pool_manifest(frozen, records, notes=notes)
 
-        return pool_manifest(
-            frozen, records, notes=notes, scaler=_frozen_scaler(frozen)
-        )
-
-    def build_fold(self, config, manifest_path, dataset_path, fold, folds,
-                   repeat, records=None):
+    def build_fold(self, config, manifest, fold, folds, repeat, records):
         return build_fold(
-            config, manifest_path, dataset_path, fold, folds, repeat,
-            records=records,
+            config, manifest, fold, folds, repeat, records=records,
         )
 
     def training_fold_data(self, fit_manifest, records, config):

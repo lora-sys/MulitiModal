@@ -318,7 +318,7 @@ def _add_src_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--dataset", required=True)
     p.add_argument("--folds", type=int, default=4)
     p.add_argument("--repeats", type=int, default=2)
-    p.add_argument("--margin-sem", type=float, default=1.0)
+    p.add_argument("--margin-fold-sd-multiplier", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--task", default="constitution",
                    help="research task (constitution | syndrome)")
@@ -369,7 +369,8 @@ def cmd_research_src_finalize(args: argparse.Namespace) -> int:
 
     worktree = GitWorktree(Path(args.worktree), args.branch)
     worktree.assert_clean()
-    store_champion = _src_loop(args, worktree).champion()
+    loop = _src_loop(args, worktree)
+    store_champion = loop.champion()
     if not store_champion:
         print(json.dumps({"ok": False, "error": "no champion in the manifest store"}))
         return 1
@@ -384,7 +385,7 @@ def cmd_research_src_finalize(args: argparse.Namespace) -> int:
     result = refit_and_score(
         worktree=worktree.path, out_dir=Path(args.out),
         manifest_path=args.data_manifest, dataset_path=args.dataset,
-        editable=args.editable or "src/research/candidate.py",
+        editable=loop.editable,
         commit=commit, seed=args.seed, budget_seconds=args.budget_s,
         task=args.task,
     )
@@ -402,7 +403,7 @@ def _src_loop(args: argparse.Namespace, worktree):
         worktree=worktree, out_dir=args.out,
         manifest_path=args.data_manifest, dataset_path=args.dataset,
         folds=args.folds, repeats=args.repeats,
-        margin_sem=args.margin_sem, seed=args.seed,
+        margin_fold_sd_multiplier=args.margin_fold_sd_multiplier, seed=args.seed,
         task=args.task, editable=args.editable, budget_s=args.budget_s,
     )
 

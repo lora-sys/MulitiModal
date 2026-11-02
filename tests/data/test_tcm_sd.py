@@ -27,8 +27,11 @@ from data.tcm_sd import (
     deduplicate_evaluation_records,
     load_syndrome_knowledge,
     load_syndrome_vocab,
+    load_tcm_sd_development_records,
     load_tcm_sd_records,
+    subject_partition_sha256,
     subject_partitions,
+    user_majority_strata,
     verify_tcm_sd_hashes,
 )
 
@@ -167,6 +170,46 @@ def test_load_records_parses_all_fields(raw_dir):
     empty_detection = [r for r in records if r.user_id == "u4"][0]
     assert empty_detection.detection == ""
 
+
+
+def test_development_loader_never_hashes_or_opens_test_split(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    row_payloads = {}
+    for name, row in zip(("train.json", "dev.json"), SYN_RECORDS[:2], strict=True):
+        payload = json.dumps(row, ensure_ascii=False) + "\n"
+        (raw_dir / name).write_text(payload, encoding="utf-8")
+        row_payloads[name] = payload.encode("utf-8")
+    (raw_dir / "test.json").write_text("not valid JSON or a valid data file", encoding="utf-8")
+    monkeypatch.setattr(
+        tcm_sd,
+        "EXPECTED_SHA256",
+        {name: hashlib.sha256(payload).hexdigest() for name, payload in row_payloads.items()},
+    )
+
+    hashed_names = []
+    original_sha256 = tcm_sd._sha256
+
+    def track_sha256(path):
+        hashed_names.append(Path(path).name)
+        return original_sha256(path)
+
+    monkeypatch.setattr(tcm_sd, "_sha256", track_sha256)
+    opened_names = []
+    original_open = Path.open
+
+    def track_open(path, *args, **kwargs):
+        opened_names.append(path.name)
+        assert path.name != "test.json"
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", track_open)
+    records = load_tcm_sd_development_records(raw_dir)
+
+    assert hashed_names == ["train.json", "dev.json"]
+    assert opened_names == ["train.json", "dev.json", "train.json", "dev.json"]
+    assert {record.source_file for record in records} == {"train.json", "dev.json"}
+    assert len(records) == 2
 
 def test_load_vocab_preserves_order_and_rejects_duplicates(raw_dir, monkeypatch):
     assert load_syndrome_vocab(raw_dir) == SYN_VOCAB
@@ -356,6 +399,24 @@ def test_dedup_drops_dev_cases_duplicating_train_text():
     assert stats["kept"] == {"train": 2, "dev": 1, "test": 0}
 
 
+def test_dedup_preserves_frozen_partition_when_all_dev_rows_for_user_drop():
+    records = _dup_text_records() + [
+        # A repeat visit by d1 has the same text as train, so every case for
+        # this dev user disappears from evaluation after the frozen split.
+        _record(user_id="d1", norm_syndrome="气虚证", chief_complaint="咳嗽2月。",
+                description="干咳少痰。", detection="脉细。"),
+    ]
+    kept, stats = deduplicate_evaluation_records(records, PARTS_3)
+
+    assert stats["dropped"] == {"dev": 2, "test": 1}
+    assert "d1" not in {r.user_id for r in kept}
+    assert {r.user_id for r in kept if r.user_id in PARTS_3["train"]} == {
+        "t1", "t2",
+    }
+    assert {r.user_id for r in kept if r.user_id in PARTS_3["dev"]} == {"d2"}
+    assert not {r.user_id for r in kept} - set().union(*PARTS_3.values())
+
+
 def test_dedup_drops_test_cases_against_train_and_dev():
     records = _dup_text_records()
     kept, _stats = deduplicate_evaluation_records(records, PARTS_3)
@@ -521,3 +582,57 @@ def test_real_evaluation_dedup_replays_deterministically():
     # train side is kept in full — only evaluation partitions shrink
     assert stats1["kept"]["train"] == sum(1 for r in records if r.user_id in parts["train"])
     assert stats1["dropped"]["dev"] > 0  # the R1 finding this fix removes
+
+
+def test_user_majority_strata_uses_lexical_tie_break():
+    records = [
+        _record(user_id="tie", norm_syndrome="beta"),
+        _record(user_id="tie", norm_syndrome="alpha"),
+        _record(user_id="majority", norm_syndrome="beta"),
+        _record(user_id="majority", norm_syndrome="beta"),
+        _record(user_id="majority", norm_syndrome="alpha"),
+    ]
+
+    assert user_majority_strata(records) == {
+        "tie": "alpha",
+        "majority": "beta",
+    }
+
+
+def test_subject_partition_sha256_pins_the_complete_assignment():
+    parts = {
+        "train": frozenset({"u1", "u2"}),
+        "dev": frozenset({"u3"}),
+        "test": frozenset({"u4"}),
+    }
+    digest = subject_partition_sha256(parts)
+
+    assert len(digest) == 64
+    # order-independent: the same assignment hashes identically however the
+    # frozensets are iterated, and replays deterministically
+    assert digest == subject_partition_sha256(dict(reversed(list(parts.items()))))
+    # a different assignment must not collide
+    moved = {
+        "train": frozenset({"u1", "u2", "u3"}),
+        "dev": frozenset(),
+        "test": frozenset({"u4"}),
+    }
+    assert digest != subject_partition_sha256(moved)
+
+
+def test_subject_partition_sha256_rejects_incomplete_or_conflicting_maps():
+    with pytest.raises(ValueError, match="keys"):
+        subject_partition_sha256({"train": frozenset({"u1"}), "dev": frozenset()})
+    overlapping = {
+        "train": frozenset({"u1"}),
+        "dev": frozenset({"u1"}),
+        "test": frozenset(),
+    }
+    with pytest.raises(ValueError, match="multiple partitions"):
+        subject_partition_sha256(overlapping)
+    with pytest.raises(ValueError, match="empty user_id"):
+        subject_partition_sha256({
+            "train": frozenset({""}),
+            "dev": frozenset(),
+            "test": frozenset(),
+        })
