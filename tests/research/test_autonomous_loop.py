@@ -389,3 +389,67 @@ def test_history_view_exposes_the_research_trail(tmp_path):
     payload = json.loads(json.dumps(session.status()))
     assert payload["rounds_completed"] == 2
     assert payload["best_metric"] == 0.40
+
+def test_run_round_refuses_to_train_when_the_preflight_blocks(tmp_path):
+    """The `step` path: a single externally-driven round must pass the gate too.
+
+    The batch loop preflights before its rounds, but `step` calls run_round
+    directly, so the diagnosis has to live in run_round - the one place every
+    round passes - or an agent-driven round trains, and can be KEPT, on inputs
+    the doctor would have refused.
+    """
+    repo, session, loop, ctx, *_ = _setup(tmp_path, scores=[0.30])
+    # inject the #1 leak: a dev record reusing a train user's identity
+    dev_row = ctx["manifest"]["subject_row_by_id"][ctx["manifest"]["split"]["dev"][0]]
+    ctx["records"][dev_row].user_id = ctx["records"][0].user_id
+    head_before = loop.worktree.head()
+
+    entry = loop.run_round(
+        _width_patch(repo, 64), "h",
+        proposer="pi:test",
+        hypothesis={"hypothesis": "h", "controlled_change": "c",
+                    "expected_observation": "e"},
+        agent_kind="external-coding-agent", doctor_context=ctx,
+    )
+
+    assert entry["status"] == "rejected"
+    assert entry["outcome"] == "INVALID_PROTOCOL"
+    assert entry["preflight_blocked"] is True
+    assert entry["doctor"]["blocked"] is True
+    assert loop.runner_calls == [], "a blocked preflight must never reach training"
+    assert len(session.entries()) == 1, "the refusal is still a recorded round"
+    assert loop.worktree.head() == head_before, "a refused round must not commit"
+
+
+def test_a_blocked_postflight_never_keeps_the_champion(tmp_path, monkeypatch):
+    """A blocked postflight must not leave a KEEP behind.
+
+    The baseline round always KEEPs (there is no champion yet) and the postflight
+    used to run AFTER that commit, so the campaign could stop on the blocking
+    finding only once the champion had already advanced to a model measured
+    under it.
+    """
+    repo, session, loop, ctx, *_ = _setup(tmp_path, scores=[0.30])
+    from research import doctor as doctor_mod
+
+    def blocked(_view, _config, _adapter):
+        return doctor_mod.DoctorReport(
+            "postflight", "toy",
+            [doctor_mod.Finding("metric_integrity", doctor_mod.BLOCKED, "forced")],
+        )
+
+    monkeypatch.setattr(doctor_mod, "postflight", blocked)
+    head_before = loop.worktree.head()
+
+    entry = loop.run_round(
+        _width_patch(repo, 64), "h",
+        proposer="pi:test", agent_kind="external-coding-agent", doctor_context=ctx,
+    )
+
+    assert loop.runner_calls, "training happens; the postflight is after it"
+    assert entry["doctor"]["blocked"] is True
+    assert entry["doctor_blocked_keep"] is True
+    assert entry["decision"] == "REVERT" and entry["outcome"] != "KEEP"
+    assert "postflight doctor blocked" in entry["reason"]
+    assert loop.worktree.head() == head_before, "the champion must not have advanced"
+    assert loop.champion() is None, "a blocked measurement may not create a champion"

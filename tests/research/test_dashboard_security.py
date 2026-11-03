@@ -317,3 +317,51 @@ def test_empty_runs_root_says_so_instead_of_loading_forever(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_pinned_run_id_cannot_escape_the_runs_root(tmp_path):
+    """`?run=` is untrusted: a crafted value must never load a run outside.
+
+    The old lookup joined the raw value onto the root, so an absolute value
+    discarded the root (pathlib's rule) and `../x` climbed out - a directory
+    outside the root that happens to hold a run.json was served as a run.
+    """
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from research.dashboard import make_runs_handler
+
+    root = tmp_path / "runs"
+    legit = ResearchSession.create(
+        root / "run-0", task="toy", editable="src/research/candidate_toy.py",
+        worktree=str(tmp_path / "wt"), branch="autoresearch/x",
+        folds=2, repeats=1, max_rounds=3, budget_seconds=1.0,
+        primary_metric="toy/macro_f1",
+    ).run_id
+    # an outside run that a `../outside` join WOULD have reached
+    ResearchSession.create(
+        tmp_path / "outside", task="toy",
+        editable="src/research/candidate_toy.py",
+        worktree=str(tmp_path / "wt2"), branch="autoresearch/x",
+        folds=2, repeats=1, max_rounds=3, budget_seconds=1.0,
+        primary_metric="toy/macro_f1",
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_runs_handler(root))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        for hostile in ("../outside", "..%2Foutside", "a/../../outside", "/etc",
+                        "%2Fetc", "..", ".", "outside"):
+            try:
+                urllib.request.urlopen(f"{base}/api/status?run={hostile}", timeout=5)
+                raise AssertionError(f"{hostile!r} must not resolve to a run")
+            except urllib.error.HTTPError as exc:
+                assert exc.code == 404, (hostile, exc.code)
+        # the legitimate pinned id still replays, by id and not by directory
+        pinned = json.loads(urllib.request.urlopen(
+            f"{base}/api/status?run={legit}", timeout=5).read())
+        assert pinned["run_id"] == legit
+    finally:
+        server.shutdown()
+        server.server_close()

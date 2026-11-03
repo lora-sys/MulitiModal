@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -102,6 +103,13 @@ def _latest_doctor(session: ResearchSession) -> dict | None:
     if entries and (entries[-1].get("doctor") or {}).get("findings"):
         return entries[-1]["doctor"]
     return report
+
+
+#: a run id is a single path component the dashboard looks up BY NAME. The
+#: dashboard never joins a request value onto the runs root (`?run=` is
+#: untrusted: an absolute value would discard the root, `..` would climb out),
+#: so this only has to describe the names the engine can produce.
+RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 
 
 def resolve_run(runs_root: str | Path) -> Path | None:
@@ -745,12 +753,20 @@ def make_runs_handler(runs_root: str | Path):
     def resolve(query: dict) -> ResearchSession:
         pinned = (query.get("run") or [None])[0]
         if pinned:
-            candidate = Path(runs_root) / pinned
-            if (candidate / "run.json").exists():
-                return ResearchSession.load(candidate)
+            # `?run=` is untrusted input. Resolve it BY NAME through the walk,
+            # which only ever yields directories one level under the root, and
+            # re-assert containment after following symlinks - never join the
+            # raw value onto the root.
+            if not RUN_ID_RE.match(pinned):
+                raise FileNotFoundError(f"unknown run {pinned!r} under {runs_root}")
+            root = Path(runs_root).resolve()
             for row in list_runs(runs_root):
                 if row.get("run_id") == pinned and row.get("dir"):
-                    return ResearchSession.load(row["dir"])
+                    run_dir = Path(row["dir"]).resolve()
+                    if run_dir.parent != root:
+                        raise FileNotFoundError(
+                            f"run {pinned!r} resolves outside {runs_root}")
+                    return ResearchSession.load(run_dir)
             raise FileNotFoundError(f"unknown run {pinned!r} under {runs_root}")
         newest = resolve_run(runs_root)
         if newest is None:

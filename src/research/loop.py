@@ -528,6 +528,24 @@ class SourceResearchLoop:
             return entry
 
         try:
+            # The gate `step` needed: the batch loop preflights once before its
+            # rounds, but an externally-driven round goes straight through
+            # run_round, so the diagnosis has to live here - the one place every
+            # round passes - or an agent-driven round trains, and can be KEPT, on
+            # inputs the doctor would have refused.
+            from research import doctor as doctor_mod
+
+            preflight = self._preflight(doctor_context, run_id)
+            if preflight is not None and preflight.blocked:
+                blocked_checks = [f.check for f in preflight.findings
+                                  if f.severity == doctor_mod.BLOCKED]
+                entry["doctor"] = preflight.to_dict()
+                return finish(
+                    "REVERT", "rejected",
+                    f"preflight doctor blocked the round: {blocked_checks}; "
+                    "nothing was applied or trained",
+                    preflight_blocked=True,
+                )
             if len(patch.encode("utf-8")) > MAX_PATCH_BYTES:
                 raise PatchRejected(
                     f"candidate patch exceeds the {MAX_PATCH_BYTES}-byte limit"
@@ -610,11 +628,6 @@ class SourceResearchLoop:
             "uncertainty_semantics": uncertainty_semantics,
             "folds": result["folds"], "fold_seconds": result["fold_seconds"],
         }
-        if keep:
-            sha = self.worktree.commit(f"{run_id}: {intent}")
-        else:
-            self.worktree.reset_to(parent_sha)
-            sha = parent_sha
         entry["observed_evidence"] = {
             "primary_value": value,
             "previous_best": previous_best,
@@ -628,10 +641,33 @@ class SourceResearchLoop:
             "fold_seconds": result.get("fold_seconds"),
             "decision_basis": reason,
         }
+        # Diagnose BEFORE the champion moves. The postflight used to run after
+        # the commit, so a blocking finding on THIS round could only stop the
+        # next one: the campaign had already kept a model measured under a
+        # suspect protocol. A blocked measurement must never advance the
+        # champion, so the decision is made on the postflight verdict.
         report = self._postflight(entry, doctor_context)
+        blocked_keep = bool(keep and report is not None and report.blocked)
+        if blocked_keep:
+            from research import doctor as doctor_mod
+
+            blocked_checks = [f.check for f in report.findings
+                              if f.severity == doctor_mod.BLOCKED]
+            keep = False
+            reason = (
+                f"postflight doctor blocked the round: {blocked_checks}; the "
+                "champion is not advanced on a measurement taken under a "
+                "blocked protocol"
+            )
+        if keep:
+            sha = self.worktree.commit(f"{run_id}: {intent}")
+        else:
+            self.worktree.reset_to(parent_sha)
+            sha = parent_sha
         entry["next_action"] = self._next_action(hypothesis, keep, report)
         return finish(
             "KEEP" if keep else "REVERT", "completed", reason,
+            doctor_blocked_keep=blocked_keep,
             git_commit_sha=sha, git_parent_sha=parent_sha,
             selection={
                 "folds": self.folds,
@@ -840,6 +876,32 @@ class SourceResearchLoop:
         })
         return state
 
+    def _preflight(self, doctor_context: dict | None, run_id: str):
+        """The training-time gate; None when no context was supplied.
+
+        Read-only checks over the frozen inputs. Fail CLOSED on a malformed
+        context: an un-diagnosable input is not a licence to train.
+        """
+        if not doctor_context:
+            return None
+        from research import doctor as doctor_mod
+
+        try:
+            return doctor_mod.preflight(
+                doctor_context.get("config") or {},
+                doctor_context.get("manifest") or {},
+                doctor_context.get("records") or [],
+                doctor_context.get("adapter"),
+                run_id=run_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - a broken doctor must not train
+            return doctor_mod.DoctorReport(
+                "preflight", "unknown",
+                [doctor_mod.Finding("preflight_context", doctor_mod.BLOCKED,
+                                    f"preflight context is unusable: {exc}")],
+                run_id=run_id,
+            )
+
     def _postflight(self, entry: dict, doctor_context: dict | None) -> dict | None:
         """Diagnose a finished round from the trusted side, before it is stored."""
         if not doctor_context:
@@ -1046,6 +1108,14 @@ class SourceResearchLoop:
                 if entry.get("next_action"):
                     writer.emit("IDLE", "info", round_index=index,
                                 message=str(entry["next_action"])[:200])
+
+                if entry.get("preflight_blocked"):
+                    # a refused round trained nothing; repeating the same proposal
+                    # against the same state would only be refused again
+                    stop_reason = "blocked_preflight"
+                    writer.emit("IDLE", "blocked", round_index=index,
+                                message="preflight doctor blocked: stopping the campaign")
+                    break
 
                 doctor_report = None
                 blocked_now = (entry.get("doctor") or {}).get("blocked")
