@@ -436,7 +436,8 @@ def cmd_report(args) -> int:
     from research.report import write_report
 
     session = ResearchSession.load(args.run)
-    paths = write_report(session, out_dir=args.out)
+    paths = write_report(session, out_dir=args.out, screenshot=args.screenshot,
+                         browser=args.browser)
     print(json.dumps({"ok": True, **{k: str(v) for k, v in paths.items()}},
                      ensure_ascii=False, indent=2))
     return 0
@@ -532,6 +533,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("report", help="write a report for a run")
     p.add_argument("--run", required=True)
     p.add_argument("--out", default=None)
+    p.add_argument("--screenshot", action="store_true",
+                   help="also capture report-<run_id>.png from the static page "
+                        "(NOT_AVAILABLE is reported if no browser exists)")
+    p.add_argument("--browser", default=None, help="override the browser binary")
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("dashboard", help="serve the read-only live view")

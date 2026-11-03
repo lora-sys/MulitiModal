@@ -615,7 +615,44 @@ def make_handler(session: ResearchSession):
     return Handler
 
 
-def serve(session: ResearchSession, *, host: str = "127.0.0.1", port: int = 8765,
+def capture_static(session: ResearchSession, out_path, *, browser: str | None = None,
+                   size: str = "1280x1760", settle_ms: int = 4000):
+    """Screenshot this run's static page, without needing a running dashboard.
+
+    The report should carry a picture of the page it describes, so this starts a
+    throwaway server on an ephemeral loopback port, captures `/static`, and shuts
+    it down. Nothing is exposed: the port is loopback-only, it lives for one
+    capture, and no other route is reachable by the browser.
+
+    The browser step lives in `scripts/autoresearch_screenshot.py` because it is
+    also a CLI; the CLI is always run from the repository root, and this raises a
+    clear error rather than guessing a path if that import cannot be resolved.
+    """
+    import threading
+    from http.server import ThreadingHTTPServer
+    from pathlib import Path
+
+    try:
+        from scripts.autoresearch_screenshot import screenshot
+    except ModuleNotFoundError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError(
+            "screenshot support needs the repository root on sys.path "
+            "(run the CLI from the checkout, or from the repository root)"
+        ) from exc
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/static"
+        return screenshot(url, Path(out_path), size=size, settle_ms=settle_ms,
+                          browser=browser)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def serve(session: ResearchSession, *,  host: str = "127.0.0.1", port: int = 8765,
           once: bool = False) -> int:
     if once:
         sys.stdout.write(render_page())

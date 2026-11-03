@@ -580,10 +580,19 @@ class SourceResearchLoop:
             selector = selectors.DefaultSelector()
             selector.register(process.stdout, selectors.EVENT_READ)
             deadline = time.monotonic() + self.timeout_s
+            # a fold can take minutes without the runner printing anything (its
+            # progress lines arrive once per fold), so the coordinator emits its own
+            # heartbeat while it waits. Without it the dashboard shows STALE during
+            # perfectly healthy training, which is worse than having no monitor.
+            heartbeat_every = 5.0
+            next_heartbeat = time.monotonic() + heartbeat_every
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, self.timeout_s)
+                if time.monotonic() >= next_heartbeat and on_progress is not None:
+                    on_progress({"stage": "TRAINING", "heartbeat": True})
+                    next_heartbeat = time.monotonic() + heartbeat_every
                 if not selector.select(timeout=min(1.0, remaining)):
                     if process.poll() is not None:
                         break
@@ -898,6 +907,19 @@ class SourceResearchLoop:
                     )),
                     "spawn": (lambda pid, pgid: session.mark_active_child(pid, pgid)),
                 }
+                # a heartbeat refreshes the clock without pretending a new fold
+                # started: it keeps the stage the coordinator last reported
+                _raw_progress = event_sink["progress"]
+
+                def _progress_with_heartbeat(record, _index=index):
+                    if record.get("heartbeat"):
+                        writer.emit("TRAINING", "heartbeat", round_index=_index,
+                                    budget_seconds=self.budget,
+                                    message="heartbeat while the fold runs")
+                        return None
+                    return _raw_progress(record)
+
+                event_sink["progress"] = _progress_with_heartbeat
                 entry = self.run_round(
                     hypothesis.patch, hypothesis.intent,
                     proposer=agent_kind if is_real else f"{agent_kind} (not an agent)",

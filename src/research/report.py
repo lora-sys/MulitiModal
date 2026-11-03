@@ -163,6 +163,8 @@ def render_markdown(report: dict) -> str:
             f"{str(row['next_action'])[:80]} | "
             f"{(row['git_commit_sha'] or 'NOT_AVAILABLE')[:8]} |"
         )
+    if report.get("screenshot"):
+        lines += ["", f"Page screenshot: `{report['screenshot']}`"]
     lines += [
         "",
         "## Evidence and limits",
@@ -177,7 +179,8 @@ def render_markdown(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_report(session, out_dir=None) -> dict:
+def write_report(session, out_dir=None, *, screenshot: bool = False,
+                 browser: str | None = None) -> dict:
     out = Path(out_dir) if out_dir else session.root
     out.mkdir(parents=True, exist_ok=True)
     report = build_report(session)
@@ -186,5 +189,21 @@ def write_report(session, out_dir=None) -> dict:
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     md_path = out / f"report-{session.run_id}.md"
+    paths = {"json": json_path, "markdown": md_path}
+    if screenshot:
+        # a delivery that claims a working page should carry its picture; the
+        # failure mode is explicit (NOT_AVAILABLE when no browser exists), and it
+        # never turns a report into a success it cannot back up
+        from research.dashboard import capture_static
+
+        png = out / f"report-{session.run_id}.png"
+        try:
+            paths["screenshot"] = capture_static(session, png, browser=browser)
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
+            paths["screenshot"] = f"NOT_AVAILABLE: {type(exc).__name__}: {exc}"
+        report["screenshot"] = str(paths["screenshot"])
+        json_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
     md_path.write_text(render_markdown(report), encoding="utf-8")
-    return {"json": json_path, "markdown": md_path}
+    return paths
