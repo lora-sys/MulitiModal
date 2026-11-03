@@ -263,7 +263,8 @@ def _start_or_resume(args, *, resume: bool) -> int:
         from research.dashboard import spawn_dashboard
 
         try:
-            dashboard_info = spawn_dashboard(session, port=args.port)
+            dashboard_info = ensure_dashboard(
+                Path(args.out).resolve().parent, args.port)
         except OSError as exc:
             print(json.dumps({"dashboard": {"ok": False, "error": str(exc)}}),
                   flush=True)
@@ -443,9 +444,39 @@ def cmd_report(args) -> int:
     return 0
 
 
+def ensure_dashboard(runs_root, port: int, *, no_serve: bool = False) -> dict:
+    """Make sure THE dashboard is running, and return its URL.
+
+    A fixed process on a fixed port: if something already answers there it is
+    reused and nothing is started. Spawning one dashboard per campaign is what
+    left a trail of processes and stray ports behind.
+    """
+    import socket
+
+    url = f"http://127.0.0.1:{port}/"
+    with socket.socket() as probe:
+        probe.settimeout(0.6)
+        if probe.connect_ex(("127.0.0.1", port)) == 0:
+            return {"reused": True, "url": url, "port": port}
+    command = [sys.executable, "-m", "research.cli", "dashboard",
+               "--runs-root", str(runs_root), "--port", str(port)]
+    if no_serve:
+        command.append("--no-serve")
+    process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, start_new_session=True,
+                               cwd=str(Path(__file__).resolve().parents[2]))
+    return {"reused": False, "pid": process.pid, "url": url, "port": port,
+            "command": " ".join(command)}
+
+
 def cmd_dashboard(args) -> int:
     from research.dashboard import render_static, serve
 
+    if args.runs_root:
+        from research.dashboard import serve_runs
+
+        return serve_runs(args.runs_root, host=args.host, port=args.port,
+                          serve_tailnet=not args.no_serve)
     session = ResearchSession.load(args.run)
     if args.static:
         html = render_static(session)
@@ -540,7 +571,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("dashboard", help="serve the read-only live view")
-    p.add_argument("--run", required=True)
+    p.add_argument("--run", default=None, help="serve ONE run")
+    p.add_argument("--runs-root", default=None,
+                   help="serve the newest run under this root and follow it as "
+                        "campaigns start — this is the fixed, single dashboard")
     p.add_argument("--host", default=DEFAULT_HOST)
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--once", action="store_true",
@@ -558,6 +592,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not callable(getattr(args, "func", None)):
         parser.error(f"subcommand {args.command!r} has no handler wired")
+    if args.command == "dashboard" and not (args.run or args.runs_root):
+        parser.error("dashboard needs --run (one run) or --runs-root (the fixed view)")
     return args.func(args)
 
 

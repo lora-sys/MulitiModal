@@ -201,3 +201,90 @@ def test_absent_numbers_never_get_a_unit_glued_on(tmp_path):
     assert 'typeof p.elapsed_seconds === "number"' in page
     # and the buggy shape is gone
     assert 'fmt(p.elapsed_seconds, 1) + "s' not in page
+
+
+def test_fixed_dashboard_follows_the_newest_run(tmp_path):
+    """One dashboard, one port, following a runs root: starting a campaign must
+    not need a new process, and a reader must be able to see which runs exist."""
+    import time
+
+    from research.dashboard import list_runs, resolve_run
+
+    root = tmp_path / "runs"
+    assert resolve_run(root) is None and list_runs(root) == []
+
+    older = root / "run-a"
+    newer = root / "run-b"
+    for path, run_id in ((older, "toy-a"), (newer, "toy-b")):
+        ResearchSession.create(
+            path, task="toy", editable="src/research/candidate_toy.py",
+            worktree=str(tmp_path / "wt"), branch=f"autoresearch/{run_id}",
+            folds=2, repeats=1, max_rounds=3, budget_seconds=1.0,
+            primary_metric="toy/macro_f1",
+        )
+    time.sleep(0.02)
+    (newer / "run.json").touch()  # the newest one wins
+    assert resolve_run(root) == newer
+    runs = list_runs(root)
+    assert [row["run_id"] for row in runs] == ["toy-b", "toy-a"], runs
+    assert all("rounds_completed" in row for row in runs)
+
+
+def test_fixed_dashboard_routes_pin_a_run_and_serve_the_root(tmp_path):
+    """`?run=<id>` replays a chosen run; without it, the newest is served."""
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from research.dashboard import make_runs_handler
+
+    root = tmp_path / "runs"
+    for run_id in ("toy-a", "toy-b"):
+        ResearchSession.create(
+            root / run_id, task="toy", editable="src/research/candidate_toy.py",
+            worktree=str(tmp_path / "wt"), branch="autoresearch/x",
+            folds=2, repeats=1, max_rounds=3, budget_seconds=1.0,
+            primary_metric="toy/macro_f1",
+        )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_runs_handler(root))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        runs = json.loads(urllib.request.urlopen(f"{base}/api/runs", timeout=5).read())
+        assert {row["run_id"] for row in runs["runs"]} == {"toy-a", "toy-b"}
+        pinned = json.loads(urllib.request.urlopen(
+            f"{base}/api/status?run=toy-a", timeout=5).read())
+        assert pinned["run_id"].startswith("toy-")
+        # an unknown run is a stated 404 with the list, not an empty page
+        try:
+            urllib.request.urlopen(f"{base}/api/status?run=nope", timeout=5)
+            raise AssertionError("unknown run must 404")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+            assert b"unknown run" in exc.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_empty_runs_root_says_so_instead_of_loading_forever(tmp_path):
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from research.dashboard import make_runs_handler
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0),
+                                 make_runs_handler(tmp_path / "empty"))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{server.server_address[1]}/",
+                                   timeout=5)
+            raise AssertionError("an empty root must not pretend to serve a run")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404 and b"no runs yet" in exc.read()
+    finally:
+        server.shutdown()
+        server.server_close()
