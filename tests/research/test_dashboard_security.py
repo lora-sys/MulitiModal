@@ -195,8 +195,9 @@ def test_absent_numbers_never_get_a_unit_glued_on(tmp_path):
     and the renderer appends the unit unconditionally. The page must say
     NOT_AVAILABLE, and a number must carry its unit."""
     page = dash.render_page()
-    assert "s / " in page, "the budget line still renders an elapsed/budget pair"
-    assert 'typeof p.elapsed_seconds === "number"' in page, (
-        "the budget line must check for a number before formatting it"
-    )
+    # the number path formats and then appends the unit
+    assert "p.elapsed_seconds.toFixed(1)" in page
+    # the absence path says NOT_AVAILABLE and adds no unit
+    assert 'typeof p.elapsed_seconds === "number"' in page
+    # and the buggy shape is gone
     assert 'fmt(p.elapsed_seconds, 1) + "s' not in page
