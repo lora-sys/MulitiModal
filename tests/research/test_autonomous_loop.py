@@ -28,13 +28,13 @@ import pytest
 
 from research.agent import (
     AgentUnavailable,
-    state_aware_step,
     DeterministicStubProposer,
     Hypothesis,
     ProposalRejected,
     SubprocessCodingAgent,
     UnavailableAgent,
     build_proposer,
+    state_aware_step,
     stub_step,
 )
 from research.loop import SourceResearchLoop
