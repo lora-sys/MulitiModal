@@ -186,6 +186,8 @@ def test_chart_follows_the_lieflat_g18_skeleton(tmp_path):
         assert fragment in page, fragment
     # the template draws a sparse axis label row, not one label per point
     assert "interval: Math.max(0, Math.ceil" in page
+    # an ECharts mount needs a height, or it silently renders nothing
+    assert "#chart{height:" in page
 
 
 def test_doctor_card_shows_the_latest_diagnosis_not_not_available(tmp_path):
