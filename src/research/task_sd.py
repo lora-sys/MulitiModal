@@ -914,6 +914,40 @@ class SyndromeAdapter(TaskAdapter):
     name = "syndrome"
     default_editable = "src/research/candidate_sd.py"
 
+    # -- doctor hooks ---------------------------------------------------------
+    has_text = True
+    single_label = True
+
+    def record_user_key(self, record):
+        return getattr(record, "user_id", None)
+
+    def record_text_key(self, record):
+        return getattr(record, "input_text", None) or None
+
+    def record_label_key(self, record):
+        return getattr(record, "label", None)
+
+    def record_has_label(self, record) -> bool:
+        return getattr(record, "label", None) is not None
+
+    def label_space(self, manifest: dict):
+        """The frozen taxonomy, from the manifest when it declares one.
+
+        The syndrome manifest carries the taxonomy version and class count; the
+        concrete names live in the data layer. Returning `None` when the manifest
+        says nothing keeps the check UNVERIFIED instead of inventing an order.
+        """
+        declared = (manifest or {}).get("label_space")
+        if declared:
+            return list(declared)
+        n_classes = (manifest or {}).get("n_classes")
+        if isinstance(n_classes, int) and n_classes > 0:
+            return [str(i) for i in range(n_classes)]
+        return None
+
+    def metric_names(self):
+        return (PRIMARY_METRIC_SD,)
+
     @property
     def primary_metric(self) -> str:
         return PRIMARY_METRIC_SD
