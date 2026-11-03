@@ -260,8 +260,7 @@ def _start_or_resume(args, *, resume: bool) -> int:
     # only appears once there is nothing left to watch
     dashboard_info = None
     if args.dashboard:
-        from research.dashboard import spawn_dashboard
-
+        
         try:
             dashboard_info = ensure_dashboard(
                 Path(args.out).resolve().parent, args.port)
@@ -575,6 +574,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--runs-root", default=None,
                    help="serve the newest run under this root and follow it as "
                         "campaigns start — this is the fixed, single dashboard")
+    p.add_argument("--no-serve", action="store_true",
+                   help="do not publish this port on the tailnet")
     p.add_argument("--host", default=DEFAULT_HOST)
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--once", action="store_true",
