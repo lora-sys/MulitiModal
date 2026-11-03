@@ -44,8 +44,36 @@ from research.session import ResearchSession
 
 MAX_EVENTS_PER_REQUEST = 500
 MAX_TEXT_CHARS = 400
+#: JSON endpoint cap: a status page is a summary, not a data export.
 MAX_RESPONSE_BYTES = 256 * 1024
+#: Page cap. The page inlines the vendored ECharts bundle (~1.1 MB) so it can render
+#: the lieflat Glance charts offline; the JSON cap above still bounds every data
+#: endpoint. Without this the page itself would be swapped for a 413 and the
+#: dashboard would be unreachable.
+MAX_PAGE_BYTES = 4 * 1024 * 1024
 PAGE_TITLE = "AutoResearch dashboard"
+
+
+_ECHARTS_CACHE: str | None = None
+
+
+def _echarts_source() -> str:
+    """The vendored ECharts bundle, read once and inlined into every page.
+
+    Inlined, not linked: the dashboard runs on a loopback port with no network, and
+    the upstream lieflat-charts Glance cards (G18 and friends) are ECharts-based, so
+    the engine has to travel with the page. See vendor/THIRD_PARTY_NOTICES.md.
+    """
+    global _ECHARTS_CACHE
+    if _ECHARTS_CACHE is None:
+        path = Path(__file__).resolve().parent / "vendor" / "echarts.min.js"
+        if not path.exists():
+            raise RuntimeError(
+                f"the vendored ECharts bundle is missing ({path}); the dashboard "
+                "cannot render the lieflat Glance charts without it"
+            )
+        _ECHARTS_CACHE = path.read_text(encoding="utf-8")
+    return _ECHARTS_CACHE
 
 
 def _clip(value, limit: int = MAX_TEXT_CHARS):
@@ -267,7 +295,7 @@ footer{padding:18px 32px 28px;color:var(--faint);font-size:10px;font-weight:600;
   </section>
   <section class="card wide">
     <h2>Trusted metric per round, against the best so far</h2>
-    <p class="csub" id="chartsub">macro metric · each point is one AutoResearch round</p>
+    <p class="csub" id="chartsub">trusted metric per round · the line draws, the number counts · click to replay</p>
     <div id="chart"></div>
     <p class="src" id="chartsrc">source: run manifest · trusted evaluator (isolated process)</p>
   </section>
@@ -304,6 +332,7 @@ footer{padding:18px 32px 28px;color:var(--faint);font-size:10px;font-weight:600;
   </section>
 </div>
 <footer>read-only view · operations live in the cli · charts follow the lieflat-charts mono grammar</footer>
+<script>__ECHARTS__</script>
 <script>
 const state = {lastSeq: 0, history: [], drawn: false};
 const T = {ink:"#1C1C1A", paper:"#F0EFEB", muted:"#8F8E88", faint:"#C6C5BF", grid:"#DEDDD6",
@@ -416,107 +445,113 @@ function renderStatus(s){
   }
   drawChart(s.history);
 }
-/* Mono grammar: brightness is importance — the metric is ink, the best-so-far is
-   muted, a rolled-back round is faint. Hairline baseline only, no grid clutter,
-   direct labels on the values that matter, axes labelled in words. */
-function drawChart(rows){
-  const host = el("chart"); host.textContent = "";
-  const scored = rows.filter(r => typeof r.primary_value === "number");
+/* ── G18 · Draw-in + Counter (lieflat-charts Glance family) ───────────────────
+   Skeleton taken from the upstream gallery card "H1 revenue, drawn in one stroke":
+   one line drawn in over DUR with cubicOut, a sparse axis label row, an area
+   gradient, and a counter rendered as a graphic group beside the chart. Data,
+   titles and annotations are ours; the structure, easing and spacing are the
+   template's. A second line series carries the best-so-far reference — same chart
+   family, not a second chart type.
+   Reveal: scroll into view, replay on click, and no animation at all under
+   prefers-reduced-motion (the upstream token's `obsReveal` contract).
+   ───────────────────────────────────────────────────────────────────────────── */
+const G18 = {DUR: 1400, INK: "#1C1C1A", MUTED: "#8F8E88", FAINT: "#C6C5BF"};
+let g18Gen = 0;
+
+function obsReveal(node, draw){
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let revealed = false;
+  const run = () => { g18Gen += 1; draw(node); };
+  if (node.dataset.replayBound !== "1") {
+    node.dataset.replayBound = "1";
+    node.style.cursor = "pointer";
+    node.addEventListener("click", run);
+  }
+  if (reduce) { run(); return; }
+  const io = new IntersectionObserver((entries) => {
+    if (entries.some(e => e.isIntersecting)) { revealed = true; io.disconnect(); run(); }
+  }, {threshold: 0.3});
+  io.observe(node);
+  if (revealed) run();
+}
+
+function drawChart(rows, replay){
+  const host = el("chart");
+  const scored = (rows || []).filter(r => typeof r.primary_value === "number");
   if (!scored.length){
+    host.textContent = "";
     const span = document.createElement("div"); span.className = "na";
     span.textContent = "No scored round yet (NOT_AVAILABLE)";
-    host.appendChild(span); return;
+    host.appendChild(span);
+    delete host.dataset.sig;
+    return;
   }
-  const best = rows.filter(r => typeof r.best_so_far === "number").map(r => r.best_so_far);
-  const all = scored.map(r => r.primary_value).concat(best.length ? best : []);
-  const lo = Math.min(...all), hi = Math.max(...all);
-  const pad = (hi - lo) * 0.18 || 0.01;
-  const y0 = lo - pad, y1 = hi + pad;
-  const w = 720, h = 240, ml = 62, mr = 86, mt = 22, mb = 40;
-  const x = i => ml + (scored.length === 1 ? (w - ml - mr) / 2
-      : i * (w - ml - mr) / (scored.length - 1));
-  const y = v => (h - mb) - (v - y0) / (y1 - y0) * (h - mt - mb);
-  const svg = svgEl("svg");
-  svg.setAttribute("viewBox", "0 0 " + w + " " + h);
-  svg.setAttribute("width", "100%"); svg.setAttribute("height", h);
-  svg.setAttribute("role", "img");
-  const label = svgEl("title");
-  label.textContent = "Trusted metric per round with the best-so-far line";
-  svg.appendChild(label);
-
-  const base = svgEl("line");
-  base.setAttribute("x1", ml); base.setAttribute("x2", w - mr);
-  base.setAttribute("y1", h - mb); base.setAttribute("y2", h - mb);
-  base.setAttribute("stroke", T.grid); base.setAttribute("stroke-width", "1");
-  svg.appendChild(base);
-
-  const axis = (value, anchor) => {
-    const t = svgEl("text");
-    t.setAttribute("x", ml - 10); t.setAttribute("y", y(value) + 4);
-    t.setAttribute("text-anchor", "end"); t.setAttribute("font-size", "6.5");
-    t.setAttribute("font-weight", "600"); t.setAttribute("fill", T.muted);
-    t.textContent = fmt(value, 4);
-    if (anchor) t.setAttribute("y", y(value) + 10);
-    svg.appendChild(t);
-  };
-  axis(hi); axis(lo);
-
-  if (best.length > 1) {
-    const bl = svgEl("polyline");
-    bl.setAttribute("fill", "none"); bl.setAttribute("stroke", T.muted);
-    bl.setAttribute("stroke-width", "1.25"); bl.setAttribute("stroke-dasharray", "4 4");
-    bl.setAttribute("points", best.map((v, i) => x(i) + "," + y(v)).join(" "));
-    svg.appendChild(bl);
-  }
-  const line = svgEl("polyline");
-  line.setAttribute("fill", "none"); line.setAttribute("stroke", T.ink);
-  line.setAttribute("stroke-width", "2"); line.setAttribute("stroke-linecap", "round");
-  line.setAttribute("points", scored.map((r, i) => x(i) + "," + y(r.primary_value)).join(" "));
-  svg.appendChild(line);
-
-  scored.forEach((r, i) => {
-    const c = svgEl("circle");
-    c.setAttribute("cx", x(i)); c.setAttribute("cy", y(r.primary_value));
-    c.setAttribute("r", "4");
-    c.setAttribute("fill", r.outcome === "KEEP" ? T.ink : T.paper);
-    c.setAttribute("stroke", r.outcome === "KEEP" ? T.ink : T.l4);
-    c.setAttribute("stroke-width", "1.5");
-    const t = svgEl("title");
-    t.textContent = (r.run_id || "") + " · " + (r.outcome || "") + " · " + fmt(r.primary_value)
-      + " · " + (r.hypothesis || "");
-    c.appendChild(t); svg.appendChild(c);
+  // a 3s poll must not restart the draw-in: only new data (or a click) replays it
+  const signature = JSON.stringify(scored.map(
+    r => [r.round, r.primary_value, r.best_so_far, r.outcome]));
+  if (host.dataset.sig === signature && !replay) return;
+  host.dataset.sig = signature;
+  host.textContent = "";
+  obsReveal(host, (node) => {
+    const g = echarts.getInstanceByDom(node) || echarts.init(node);
+    g.clear();
+    const gen = g18Gen;
+    const labels = scored.map(r => "R" + r.round);
+    const metric = scored.map(r => r.primary_value);
+    const best = scored.map(r => (typeof r.best_so_far === "number" ? r.best_so_far : null));
+    const champion = scored.reduce((acc, r) =>
+      (typeof r.best_so_far === "number" && (acc === null || r.best_so_far > acc)) ? r.best_so_far : acc,
+      null);
+    const top = Math.max.apply(null, metric.concat(best.filter(v => v !== null))) || 1;
+    const last = scored[scored.length - 1];
+    g.setOption({
+      animationDuration: G18.DUR, animationEasing: "cubicOut",
+      textStyle: {fontFamily: "Inter"},
+      tooltip: {show: false},
+      grid: {left: 14, right: 20, top: 64, bottom: 24},
+      xAxis: {type: "category", data: labels, boundaryGap: false,
+        axisLine: {show: false}, axisTick: {show: false}, splitLine: {show: false},
+        axisLabel: {color: G18.FAINT, fontFamily: "Inter", fontSize: 9, fontWeight: 600,
+          interval: Math.max(0, Math.ceil(labels.length / 6) - 1)}},
+      yAxis: {show: false, max: top * 1.06},
+      series: [
+        {name: "metric", type: "line", data: metric, smooth: 0.2, symbol: "none",
+         lineStyle: {color: G18.INK, width: 2.6},
+         areaStyle: {color: {type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+           colorStops: [{offset: 0, color: "rgba(28,28,26,.14)"},
+                        {offset: 1, color: "rgba(28,28,26,0)"}]}}},
+        {name: "best so far", type: "line", data: best, smooth: 0.2, symbol: "none",
+         connectNulls: true, lineStyle: {color: G18.MUTED, width: 1.4, type: "dashed"}},
+      ],
+    });
+    // the counter: one big number that counts up, exactly the template's shape
+    const target = champion === null ? metric[metric.length - 1] : champion;
+    const caption = (last.run_id || "") + " · " + last.outcome
+      + " · round " + (scored.length - 1) + "/" + (rows.length - 1);
+    const t0 = performance.now();
+    const tick = () => {
+      if (gen !== g18Gen) return;
+      const p = Math.min(1, (performance.now() - t0) / G18.DUR);
+      const eased = 1 - Math.pow(1 - p, 3);
+      const value = (target * eased).toFixed(4);
+      g.setOption({graphic: [{id: "kpi", type: "group", left: 16, top: 8, children: [
+        {type: "text", left: 0, top: 0,
+         style: {text: "best " + value, font: "800 32px Inter", fill: G18.INK}},
+        {type: "text", left: 0, top: 38,
+         style: {text: caption, font: "600 10px Inter", fill: G18.MUTED}},
+      ]}]});
+      if (p < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
   });
-
-  const last = scored[scored.length - 1];
-  const lastLabel = svgEl("text");
-  lastLabel.setAttribute("x", x(scored.length - 1) + 10);
-  lastLabel.setAttribute("y", y(last.primary_value) + 4);
-  lastLabel.setAttribute("font-size", "6.5"); lastLabel.setAttribute("font-weight", "800");
-  lastLabel.setAttribute("fill", T.ink);
-  lastLabel.textContent = fmt(last.primary_value, 4);
-  svg.appendChild(lastLabel);
-
-  const xLabel = svgEl("text");
-  xLabel.setAttribute("x", ml); xLabel.setAttribute("y", h - 14);
-  xLabel.setAttribute("font-size", "6.5"); xLabel.setAttribute("font-weight", "600");
-  xLabel.setAttribute("fill", T.muted);
-  xLabel.textContent = "ROUND 0";
-  const xLabel2 = svgEl("text");
-  xLabel2.setAttribute("x", w - mr); xLabel2.setAttribute("y", h - 14);
-  xLabel2.setAttribute("text-anchor", "end");
-  xLabel2.setAttribute("font-size", "6.5"); xLabel2.setAttribute("font-weight", "600");
-  xLabel2.setAttribute("fill", T.muted);
-  xLabel2.textContent = "ROUND " + (scored.length - 1) + " · " + last.outcome;
-  svg.appendChild(xLabel); svg.appendChild(xLabel2);
-
-  const legend = svgEl("text");
-  legend.setAttribute("x", ml); legend.setAttribute("y", mt - 6);
-  legend.setAttribute("font-size", "6.5"); legend.setAttribute("font-weight", "600");
-  legend.setAttribute("fill", T.muted);
-  legend.textContent = "— filled dot: KEEP · hollow dot: rolled back · dashed: best so far";
-  svg.appendChild(legend);
-  host.appendChild(svg);
 }
+
+addEventListener("resize", () => {
+  const node = el("chart");
+  const instance = node && echarts.getInstanceByDom(node);
+  if (instance) instance.resize();
+});
+
 function renderEvents(s){
   const list = el("events");
   for(const e of (s.events || [])){
@@ -597,7 +632,9 @@ def render_static(session: ResearchSession, *, max_events: int = 60,
 
 
 def render_page() -> str:
-    return PAGE.replace("__TITLE__", PAGE_TITLE)
+    return PAGE.replace("__TITLE__", PAGE_TITLE).replace(
+        "__ECHARTS__", _echarts_source()
+    )
 
 
 def make_handler(session: ResearchSession):
@@ -605,8 +642,9 @@ def make_handler(session: ResearchSession):
         server_version = "AutoResearchDashboard/1"
         sys_version = ""
 
-        def _send(self, status: int, body: bytes, content_type: str) -> None:
-            if len(body) > MAX_RESPONSE_BYTES:
+        def _send(self, status: int, body: bytes, content_type: str,
+                  limit: int = MAX_RESPONSE_BYTES) -> None:
+            if len(body) > limit:
                 status, body = 413, b'{"error":"response too large"}'
                 content_type = "application/json"
             self.send_response(status)
@@ -635,12 +673,12 @@ def make_handler(session: ResearchSession):
                 # first paint from data, then poll: the page is useful even if
                 # the client's first request never comes back
                 self._send(200, render_static(session).encode("utf-8"),
-                           "text/html; charset=utf-8")
+                           "text/html; charset=utf-8", MAX_PAGE_BYTES)
             elif path == "/static":
                 # same page, payload inlined, no polling: for archives and for
                 # automated screenshots, which never settle on a polling page
                 self._send(200, render_static(session, frozen=True).encode("utf-8"),
-                           "text/html; charset=utf-8")
+                           "text/html; charset=utf-8", MAX_PAGE_BYTES)
             elif path == "/api/status":
                 after = int((query.get("after") or ["0"])[0] or 0)
                 self._json(_status_payload(session, max(0, after)))
@@ -710,8 +748,9 @@ def make_runs_handler(runs_root: str | Path):
         server_version = "AutoResearchDashboard/1"
         sys_version = ""
 
-        def _send(self, status: int, body: bytes, content_type: str) -> None:
-            if len(body) > MAX_RESPONSE_BYTES:
+        def _send(self, status: int, body: bytes, content_type: str,
+                  limit: int = MAX_RESPONSE_BYTES) -> None:
+            if len(body) > limit:
                 status, body = 413, b'{"error":"response too large"}'
                 content_type = "application/json"
             self.send_response(status)
@@ -767,10 +806,10 @@ def make_runs_handler(runs_root: str | Path):
                 return
             if path == "/":
                 self._send(200, render_static(session).encode("utf-8"),
-                           "text/html; charset=utf-8")
+                           "text/html; charset=utf-8", MAX_PAGE_BYTES)
             elif path == "/static":
                 self._send(200, render_static(session, frozen=True).encode("utf-8"),
-                           "text/html; charset=utf-8")
+                           "text/html; charset=utf-8", MAX_PAGE_BYTES)
             elif path == "/api/status":
                 after = int((query.get("after") or ["0"])[0] or 0)
                 self._json(_status_payload(session, max(0, after)))

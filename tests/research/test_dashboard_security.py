@@ -57,9 +57,16 @@ def test_hostile_text_round_trips_as_data_not_markup(tmp_path):
     # transport's job and the page's renderer uses textContent
     assert payload["history"][0]["hypothesis"] == HOSTILE
     page = dash.render_page()
-    # structural guarantee: no data is ever assigned to innerHTML
-    assert "innerHTML" not in page
-    assert "textContent" in page
+    assert len(page) <= dash.MAX_PAGE_BYTES, "the page must fit the page cap"
+    assert "echarts" in page, "the chart engine is inlined, not linked"
+    assert "cdn.jsdelivr" not in page, "an offline page must not reference a CDN"
+    # our renderer must never build markup from data. The vendored ECharts bundle
+    # has innerHTML of its own inside it — that is the library's business and it is
+    # pinned by hash in vendor/THIRD_PARTY_NOTICES.md — so the assertion is scoped
+    # to OUR script, which is the block after the engine.
+    ours = page.rsplit("<script>", 1)[-1]
+    assert "innerHTML" not in ours, "our renderer must not write data as markup"
+    assert "textContent" in ours
 
 
 def test_torn_jsonl_and_oversized_log_are_contained(tmp_path):
@@ -111,7 +118,9 @@ def test_route_whitelist_and_read_only(tmp_path):
             with urllib.request.urlopen(f"{base}{path}", timeout=5) as response:
                 assert response.status == 200
                 body = response.read()
-                assert len(body) <= dash.MAX_RESPONSE_BYTES
+                limit = (dash.MAX_PAGE_BYTES if path == "/"
+                         else dash.MAX_RESPONSE_BYTES)
+                assert len(body) <= limit
         for path in ("/etc/passwd", "/../frozen.py", "/api/status/../run.json",
                      "/api/unknown", "/api/run", "/api/stop"):
             try:
@@ -163,6 +172,21 @@ def test_stale_flag_comes_from_the_heartbeat(tmp_path):
     stale = dash._status_payload(session, after=0)
     assert stale["stale"] is True
     assert stale["heartbeat_age_seconds"] > STALE_AFTER_SECONDS
+
+def test_chart_follows_the_lieflat_g18_skeleton(tmp_path):
+    """G18 · Draw-in + Counter is the upstream card for "one line + one big
+    number", which is what this page draws. Its skeleton — cubicOut draw-in, a
+    sparse label row, an area gradient, a counter in a graphic group, scroll-in
+    reveal with click-to-replay and a reduced-motion escape — must be the real
+    implementation, not a lookalike."""
+    page = dash.render_page()
+    for fragment in ("animationEasing: \"cubicOut\"", "type: \"line\"", "symbol: \"none\"",
+                     "areaStyle", "id: \"kpi\"", "IntersectionObserver",
+                     "prefers-reduced-motion", "click", "requestAnimationFrame"):
+        assert fragment in page, fragment
+    # the template draws a sparse axis label row, not one label per point
+    assert "interval: Math.max(0, Math.ceil" in page
+
 
 def test_doctor_card_shows_the_latest_diagnosis_not_not_available(tmp_path):
     """A campaign's per-round postflight lives in the manifest; the dashboard
