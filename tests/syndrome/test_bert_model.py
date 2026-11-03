@@ -30,11 +30,18 @@ def weights_dir() -> Path:
 
 @pytest.fixture(scope="module")
 def tiny(tmp_path_factory):
-    """bert-base-chinese + 3 类小词表；仅前向/保存，不做完整训练。"""
-    from syndrome.bert_model import BertSyndromeClassifier
+    """bert-base-chinese + 3 类小词表；仅前向/保存，不做完整训练。
+
+    predict_proba / save 的 #53 守卫（_require_fitted_max_len）要求模型带着已拟合的
+    max_len；本 fixture 不做训练（真训练在远程开发机 GPU，见模块头），所以按训练
+    配置的默认值声明该超参——与 test_save_load_restores_max_len_and_seed_without_weights
+    里合成路径用的是同一种写法。
+    """
+    from syndrome.bert_model import BertSyndromeClassifier, BertTrainConfig
 
     out = tmp_path_factory.mktemp("bert-smoke")
     clf = BertSyndromeClassifier(LabelSpace(SYNTH_VOCAB), str(weights_dir()), seed=20261101)
+    clf._fit_max_len = BertTrainConfig(model_path=str(weights_dir())).max_len
     yield clf, out
 
 
