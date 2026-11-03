@@ -58,8 +58,9 @@ BASELINE_CONFIG = TfidfNgramConfig(
 )
 
 
-def _new_baseline() -> TfidfNgramBaseline:
-    return TfidfNgramBaseline(TfidfNgramConfig(**asdict(BASELINE_CONFIG)))
+def _new_baseline(seed: int = BASELINE_CONFIG.seed) -> TfidfNgramBaseline:
+    config = TfidfNgramConfig(**{**asdict(BASELINE_CONFIG), "seed": seed})
+    return TfidfNgramBaseline(config)
 
 
 def _validate_manifest(manifest: dict, scenario: str) -> None:
@@ -202,12 +203,13 @@ def evaluate_cv(
     records_by_row: dict[int, SyndromeRecord],
     scenario: str,
     *,
+    seed: int = BASELINE_CONFIG.seed,
     baseline_factory: Callable[[], TfidfNgramBaseline] | None = None,
 ) -> dict:
     _validate_manifest(manifest, scenario)
     row_by_subject = manifest["subject_row_by_id"]
     pool_subjects = set(manifest["split"]["train"]) | set(manifest["split"]["dev"])
-    model_factory = baseline_factory or _new_baseline
+    model_factory = baseline_factory or (lambda: _new_baseline(seed))
     fold_results: list[dict] = []
 
     for repeat in range(CV_REPEATS):
@@ -231,7 +233,7 @@ def evaluate_cv(
             _fold_data, fold_manifest = build_fold(
                 {
                     "train_provider": {"batch_size": 32},
-                    "trainer": {"seed": BASELINE_CONFIG.seed},
+                    "trainer": {"seed": seed},
                 },
                 manifest,
                 fold=fold,
@@ -328,9 +330,9 @@ def evaluate_cv(
         },
         "training_config": {
             "baseline": NGRAM_BASELINE_NAME,
-            "parameters": asdict(BASELINE_CONFIG),
+            "parameters": {**asdict(BASELINE_CONFIG), "seed": seed},
             "fit_scope": "selection_fold_ids train rows only",
-            "environment": environment_record(seed=BASELINE_CONFIG.seed),
+            "environment": environment_record(seed=seed),
         },
         "metric_contract": {
             "primary_metric": PRIMARY_METRIC_SD,
@@ -366,6 +368,7 @@ def evaluate_dev(
     scenario: str,
     *,
     input_hashes: dict[str, str],
+    seed: int = BASELINE_CONFIG.seed,
     baseline_factory: Callable[[], TfidfNgramBaseline] | None = None,
 ) -> dict:
     """Fit the frozen baseline on train and score exact-text-deduped dev only."""
@@ -435,7 +438,7 @@ def evaluate_dev(
     if any(label < 0 or label >= FIXED_LABEL_COUNT for label in y_train + y_true):
         raise ValueError("train/dev labels fall outside the frozen 148-class taxonomy")
 
-    model_factory = baseline_factory or _new_baseline
+    model_factory = baseline_factory or (lambda: _new_baseline(seed))
     model = model_factory()
     model.fit(
         [record.input_text for record in train_labeled],
@@ -503,9 +506,9 @@ def evaluate_dev(
         },
         "training_config": {
             "baseline": NGRAM_BASELINE_NAME,
-            "parameters": asdict(BASELINE_CONFIG),
+            "parameters": {**asdict(BASELINE_CONFIG), "seed": seed},
             "fit_scope": "frozen split.train rows with observed labels only",
-            "environment": environment_record(seed=BASELINE_CONFIG.seed),
+            "environment": environment_record(seed=seed),
         },
         "metric_contract": {
             "primary_metric": PRIMARY_METRIC_SD,
@@ -554,6 +557,13 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="new, unused output directory under runs/sd-v2",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=BASELINE_CONFIG.seed,
+        help="model seed for the frozen baseline (fold membership comes from "
+        "the manifest and is unaffected); default keeps the frozen run",
+    )
     return parser
 
 
@@ -585,11 +595,17 @@ def main(argv: list[str] | None = None) -> int:
                 records_by_row,
                 args.scenario,
                 input_hashes=input_hashes,
+                seed=args.seed,
             )
             report_name = "dev-report.json"
         else:
             report = evaluate_cv(
-                manifest, manifest_path, records_path, records_by_row, args.scenario
+                manifest,
+                manifest_path,
+                records_path,
+                records_by_row,
+                args.scenario,
+                seed=args.seed,
             )
             report_name = "cv-report.json"
         out_dir.mkdir(parents=True, exist_ok=False)
