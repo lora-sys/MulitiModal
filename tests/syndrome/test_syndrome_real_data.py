@@ -59,7 +59,9 @@ def test_subject_partitions_disjoint_and_total():
     assert len(train) + len(dev) + len(test) == len({r.user_id for r in records})
     # 官方文件边界仅作对照：记录对照数但分区必须与官方文件不同（user_id 跨文件重叠）。
     # 对照数按加载后记录流计（泄漏记录已在加载层剔除，train 文件 43,180→43,179）
-    assert aux["official_file_counts"]["train"] == 43179
+    # 加载层只暴露开发文件计数：official_file_counts 已随解锁额度纪律改名为
+    # development_file_counts（test 未跟随，缺数据跳过期间无人察觉）
+    assert aux["development_file_counts"]["train"] == 43179
 
 
 def test_all_norm_syndromes_in_frozen_vocab():
