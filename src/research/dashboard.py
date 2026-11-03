@@ -298,7 +298,11 @@ function renderStatus(s){
   const bits = [["stage", s.stale ? "STALE" : stage]];
   if (p.round !== null && p.round !== undefined) bits.push(["round", p.round]);
   if (p.fold !== null && p.fold !== undefined) bits.push(["fold", (p.fold + 1) + "/" + (p.folds_total || "?")]);
-  if (p.budget_seconds) bits.push(["stage budget", fmt(p.elapsed_seconds, 1) + "s / " + p.budget_seconds + "s"]);
+  // a heartbeat carries no elapsed time; render the absence instead of gluing a
+  // unit onto the words NOT_AVAILABLE ("NOT_AVAILABLEs")
+  if (p.budget_seconds) bits.push(["stage budget",
+    (typeof p.elapsed_seconds === "number" ? p.elapsed_seconds.toFixed(1) : "NOT_AVAILABLE")
+    + " / " + p.budget_seconds + "s"]);
   for (const [k, v] of bits) {
     const span = document.createElement("span");
     const kb = document.createElement("b"); kb.textContent = k + ": ";

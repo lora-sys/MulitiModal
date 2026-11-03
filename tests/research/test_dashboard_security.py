@@ -188,3 +188,15 @@ def test_doctor_card_shows_the_latest_diagnosis_not_not_available(tmp_path):
                                         "severity": "BLOCKED", "message": "x"}]})
     payload = dash._status_payload(session, after=0)
     assert payload["doctor"]["findings"][0]["check"] == "user_isolation"
+
+
+def test_absent_numbers_never_get_a_unit_glued_on(tmp_path):
+    """`NOT_AVAILABLEs` is what you get when a heartbeat carries no elapsed time
+    and the renderer appends the unit unconditionally. The page must say
+    NOT_AVAILABLE, and a number must carry its unit."""
+    page = dash.render_page()
+    assert "s / " in page, "the budget line still renders an elapsed/budget pair"
+    assert 'typeof p.elapsed_seconds === "number"' in page, (
+        "the budget line must check for a number before formatting it"
+    )
+    assert 'fmt(p.elapsed_seconds, 1) + "s' not in page
