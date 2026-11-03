@@ -1,3 +1,8 @@
+---
+name: autoresearch
+description: Run, watch, stop and report an AutoResearch campaign on this repository (bounded source-level experiments with a trusted evaluator and KEEP/REVERT). Use when the user says 跑研究 / 自动研究 / AutoResearch / RSI / 爬山 / 调模型 / 加指标 / 做实验并保留最好的 / keep or revert / watch the training live, or asks to optimize a model over many rounds, diagnose a run, or open the live dashboard. The module drives real training and scoring; this skill only tells you which CLI commands to run and in what order.
+---
+
 # AutoResearch Skill
 
 Guide a Coding Agent through an AutoResearch campaign against **this repository's
