@@ -125,7 +125,11 @@ def run(config: dict, folds: int, repeats: int, records=None,
     scores: list[float | None] = []
     fold_seconds: list[float] = []
     worker_compute_seconds: list[float] = []
-    overran = False
+    # NB: no `overran` flag here. The coordinator decides overran from the
+    # per-fold seconds against the budget (`loop.py` REVERTs with reason
+    # 'overran'); the result key stays False because this runner never
+    # reports a round-level overrun of its own. The #56/#61 merge left the
+    # dead assignment here, which ruff flagged as F841.
     def progress(**payload) -> None:
         """One machine-readable line per fold, for the TRUSTED COORDINATOR.
 
