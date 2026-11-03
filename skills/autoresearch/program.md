@@ -1,6 +1,8 @@
 # program.md — the proposer's contract
 
-This is the instruction given to a Coding Agent that drives AutoResearch. It is
+This is the instruction for the Coding Agent that loaded the Skill and is
+driving the campaign: you read the state, you write one hypothesis per round,
+and you call `autoresearch step` for it. No separate agent process is needed. It is
 short on purpose: the module owns the data, the isolation, the scoring and the
 record. Your only job is to propose **one** controlled, falsifiable experiment
 per round, after reading the result of the previous one.

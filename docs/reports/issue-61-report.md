@@ -149,7 +149,11 @@ PASS report written / carries the trail    PASS resume with no rounds left adds 
 
 ## 8. 尚未解决的风险与明确阻塞
 
-1. **真实 Coding Agent 的 CLI 不在本机**：开发机上没有 `claude`/`codex`/`gemini` 等 CLI，也没有 LLM 客户端库，因此 `--agent-command` 路径**未在本机跑过**（代码路径存在、可配置、有超时与 JSON 校验，但 `NOT_AVAILABLE` 于真实 provider）。本轮真实验收由**操作侧 Coding Agent 逐轮调用 `autoresearch step`** 完成（6.1），这与 DoD 的"每轮根据上轮新证据提假设"一致，但不等于"外部 agent CLI 自动驱动"。若要以 CLI 形式验收，需要一个可用的 agent 命令。
+1. **驱动方式（已更正）**：本项目的自主研究**不需要**外部 agent CLI。流程是：当前
+   Coding Agent（即加载 `skills/autoresearch/SKILL.md` 的那个）读取 `status` → 写出**一个**
+   假设 → 调 `autoresearch step` → 再读新状态。§6.1 的 4 轮就是这样跑的，每轮提案都在上轮
+   结果之后写成，`batch_supplied=false` 且有 context/proposal 摘要。`--agent-command`
+   （把同一套单轮协议交给独立 CLI）是**可选路径，本期不使用**，不是阻塞。
 2. **隔离等级未升级**：候选代码仍在子进程内，隔离状态沿用既有的 `AGENT_ISOLATION_UNVERIFIED`；本 Issue 未新增 OS/容器级验证。
 3. **holdout/最终交付未动**：示例任务没有 holdout 解锁流程（`finalize` 沿用既有台账与预算），本 Issue 不消费任何真实 holdout。
 4. **Dashboard 无认证**：仅 loopback；远程访问/认证/分享**明确不在本期范围**。

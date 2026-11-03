@@ -443,9 +443,18 @@ def cmd_report(args) -> int:
 
 
 def cmd_dashboard(args) -> int:
-    from research.dashboard import serve
+    from research.dashboard import render_static, serve
 
     session = ResearchSession.load(args.run)
+    if args.static:
+        html = render_static(session)
+        if args.out:
+            Path(args.out).write_text(html, encoding="utf-8")
+            print(json.dumps({"ok": True, "static_html": str(args.out),
+                              "bytes": len(html)}))
+        else:
+            sys.stdout.write(html)
+        return 0
     return serve(session, host=args.host, port=args.port, once=args.once)
 
 
@@ -531,6 +540,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
     p.add_argument("--once", action="store_true",
                    help="render the page to stdout and exit (used by tests)")
+    p.add_argument("--static", action="store_true",
+                   help="write one self-contained page (payload inlined, no polling) "
+                        "for archiving or screenshots")
+    p.add_argument("--out", default=None, help="file for --static")
     p.set_defaults(func=cmd_dashboard)
     return parser
 

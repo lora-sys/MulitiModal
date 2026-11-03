@@ -3,8 +3,8 @@
 Deliberate limits, because a training dashboard is an easy place to leak things
 and an easy place to introduce a dependency:
 
-* **Read-only.** The route whitelist is `GET /`, `/api/status`, `/api/events`,
-  `/api/history`. There is no route that starts, stops, patches, scores or
+* **Read-only.** The route whitelist is `GET /`, `/static`, `/api/status`,
+  `/api/events`, `/api/history`. There is no route that starts, stops, patches, scores or
   unlocks anything; those stay in the CLI.
 * **localhost by default.** Binding elsewhere is an explicit operator choice and
   is logged, because the page is not authenticated.
@@ -470,6 +470,19 @@ function drawChart(rows){
   svg.appendChild(legend);
   host.appendChild(svg);
 }
+function renderEvents(s){
+  const list = el("events");
+  for(const e of (s.events || [])){
+    if(!e || e.seq <= (list.dataset.lastSeq || 0)) continue;
+    const row = document.createElement("div");
+    row.textContent = "#" + e.seq + " " + (e.time || "") + " " + (e.stage || "")
+      + (e.fold !== null && e.fold !== undefined ? (" f" + e.fold) : "")
+      + " " + (e.status || "") + " " + (e.message || "");
+    list.prepend(row);
+    list.dataset.lastSeq = e.seq;
+  }
+  while(list.childElementCount > 60) list.removeChild(list.lastChild);
+}
 async function tick(){
   try{
     const res = await fetch("/api/status?after=" + state.lastSeq, {cache: "no-store"});
@@ -478,17 +491,7 @@ async function tick(){
     state.history = s.history;
     state.lastSeq = s.last_event_seq || state.lastSeq;
     renderStatus(s);
-    const list = el("events");
-    for(const e of (s.events || [])){
-      if(!e || e.seq <= (list.dataset.lastSeq || 0)) continue;
-      const row = document.createElement("div");
-      row.textContent = "#" + e.seq + " " + (e.time || "") + " " + (e.stage || "")
-        + (e.fold !== null && e.fold !== undefined ? (" f" + e.fold) : "")
-        + " " + (e.status || "") + " " + (e.message || "");
-      list.prepend(row);
-      list.dataset.lastSeq = e.seq;
-    }
-    while(list.childElementCount > 60) list.removeChild(list.lastChild);
+    renderEvents(s);
   }catch(err){
     el("idsub").append(" · ");
     const pill = document.createElement("span");
@@ -497,10 +500,33 @@ async function tick(){
     text(el("heartbeat"), String(err));
   }
 }
-tick(); setInterval(tick, 3000);
+/* Static mode renders the SAME page once, from an inlined payload, and never
+   polls. It exists so the page can be archived, screenshotted and diffed — a
+   live monitor that repaints every three seconds keeps an automated
+   screenshotter from ever seeing the page settle. Same renderers, same tokens,
+   same markup: only the transport differs. */
+if (window.__STATIC_PAYLOAD__) {
+  renderStatus(window.__STATIC_PAYLOAD__);
+  renderEvents(window.__STATIC_PAYLOAD__);
+} else {
+  tick(); setInterval(tick, 3000);
+}
 </script>
 </body></html>
 """
+
+
+def render_static(session: ResearchSession, *, max_events: int = 60) -> str:
+    """The page with its payload inlined and no polling.
+
+    Same CSS, same markup, same renderers; only the transport is gone. Used for
+    screenshots, archives and the acceptance check that the page really paints.
+    """
+    payload = _status_payload(session, after=0)
+    payload["events"] = list(reversed(payload.get("events") or []))[:max_events]
+    blob = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+    inject = f'<script>window.__STATIC_PAYLOAD__ = {blob};</script>\n'
+    return render_page().replace("<script>\nconst state", inject + "<script>\nconst state", 1)
 
 
 def render_page() -> str:
@@ -541,6 +567,11 @@ def make_handler(session: ResearchSession):
             if path == "/":
                 self._send(200, render_page().encode("utf-8"),
                            "text/html; charset=utf-8")
+            elif path == "/static":
+                # same page, payload inlined, no polling: for archives and for
+                # automated screenshots, which never settle on a polling page
+                self._send(200, render_static(session).encode("utf-8"),
+                           "text/html; charset=utf-8")
             elif path == "/api/status":
                 after = int((query.get("after") or ["0"])[0] or 0)
                 self._json(_status_payload(session, max(0, after)))
@@ -553,8 +584,9 @@ def make_handler(session: ResearchSession):
             elif path == "/api/history":
                 self._json(_history_payload(session))
             else:
-                self._json({"error": "not found", "allowed": ["/", "/api/status",
-                                                              "/api/events", "/api/history"]}, 404)
+                self._json({"error": "not found",
+                            "allowed": ["/", "/static", "/api/status",
+                                        "/api/events", "/api/history"]}, 404)
 
         def do_HEAD(self) -> None:  # noqa: N802
             self._send(200, b"", "text/plain")

@@ -40,23 +40,28 @@ Do not use it for one-off manual training runs — that is `runtime.cli smoke`.
    It exits `1` with `"blocked": true` if the Doctor refuses the protocol. Fix
    what it names; do not work around it.
 
-3. **Run the campaign.** With a real Coding Agent CLI available:
+3. **Run the campaign — the agent that loaded this Skill is the proposer.**
+   This is the intended flow, and it needs no external agent CLI:
 
    ```bash
-   python -m research.cli run --task toy --out runs/toy-1 --repo . \
-     --agent-command "claude -p" --max-rounds 8 --budget 20 --folds 4 --repeats 2 \
-     --dashboard --port 8765
-   ```
-   The agent command reads the prompt on stdin and prints one JSON object
-   (see `program.md`). If no agent CLI exists, drive it one round at a time —
-   `run --block 0` prepares, then per round:
-   read `status`, write the proposal JSON, then `step`.
-
-   ```bash
-   python -m research.cli status --run runs/toy-1
-   python -m research.cli step  --run runs/toy-1 --proposal-file p.json \
+   python -m research.cli run --task toy --out runs/toy-1 --repo . --block 0
+   # then, once per round, in this order:
+   python -m research.cli status --run runs/toy-1        # read the latest result
+   # decide one hypothesis, write it to p.json (see program.md), then:
+   python -m research.cli step --run runs/toy-1 --proposal-file p.json \
      --proposer "<your-agent-id>"
    ```
+   `run --block 0` only prepares the run (worktree, inputs, preflight). Each
+   `step` applies exactly one hypothesis, trains, scores with the frozen
+   evaluator, records the decision and prints the new state — so the NEXT
+   hypothesis is always written after the previous round's result exists. That
+   is what `batch_supplied: false` plus the recorded `context_sha256` /
+   `proposal_sha256` certify.
+
+   An optional `--agent-command <cmd>` exists for handing the same one-round
+   protocol to a separate CLI (it reads the prompt on stdin and prints one JSON
+   object). It is **not used in this project**: the agent driving the session is
+   the proposer, and `--agent-command` is left for a future automated setup.
 
 4. **Watch it.** `python -m research.cli dashboard --run runs/toy-1 --port 8765`
    serves a read-only page on `http://127.0.0.1:8765/`. Tell the user that URL.
