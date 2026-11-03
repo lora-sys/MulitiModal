@@ -230,7 +230,6 @@ def test_absent_numbers_never_get_a_unit_glued_on(tmp_path):
 def test_fixed_dashboard_follows_the_newest_run(tmp_path):
     """One dashboard, one port, following a runs root: starting a campaign must
     not need a new process, and a reader must be able to see which runs exist."""
-    import time
 
     from research.dashboard import list_runs, resolve_run
 
