@@ -125,10 +125,22 @@ def run(config: dict, folds: int, repeats: int, records=None,
     scores: list[float | None] = []
     fold_seconds: list[float] = []
     worker_compute_seconds: list[float] = []
+    overran = False
+    def progress(**payload) -> None:
+        """One machine-readable line per fold, for the TRUSTED COORDINATOR.
+
+        The dashboard's fold-level progress must not be written by candidate
+        code, so the runner reports and the coordinator emits. This is the
+        runner talking, not the candidate.
+        """
+        print(json.dumps({"progress": payload}, ensure_ascii=False), flush=True)
+
     with tempfile.TemporaryDirectory(prefix="research-eval-") as work_dir:
         work = Path(work_dir)
         for repeat in range(repeats):
             for fold in range(folds):
+                progress(stage="TRAINING", repeat=repeat, fold=fold, folds=folds,
+                         n_folds=folds * repeats)
                 before = integrity_snapshot(config)
                 train_ids, _dev_ids = selection_fold_ids(manifest, fold, folds, repeat)
                 # the fit manifest is the fold manifest with dev dropped: holdout
@@ -183,6 +195,9 @@ def run(config: dict, folds: int, repeats: int, records=None,
                 }
                 report = spawn(config, request)
                 scores.append(report["primary_value"])
+                progress(stage="EVALUATING", repeat=repeat, fold=fold, folds=folds,
+                         n_folds=folds * repeats, score=report["primary_value"],
+                         seconds=fold_seconds[-1])
     scored = [s for s in scores if s is not None]
     if not scored:
         raise RuntimeError("no fold produced a scoreable primary metric")
