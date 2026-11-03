@@ -69,7 +69,19 @@ Do not use it for one-off manual training runs — that is `runtime.cli smoke`.
    metric curve, KEEP/REVERT history and the Doctor's findings, and marks a run
    `STALE` when the heartbeat stops. Closing the tab does not affect training.
 
-5. **Stop / resume.** `stop --run <dir>` asks the run to stop and ends the live
+5. **Prove the page really paints.** The acceptance step is a picture, not an
+   assertion:
+
+   ```bash
+   python scripts/autoresearch_screenshot.py \
+     --url http://127.0.0.1:8765/static --out shots/<run_id>.png --size 1280x1750
+   ```
+   It uses a headless browser the host already has (chromium / chrome / snap) and
+   writes a PNG; exit `2` with `NOT_AVAILABLE` means no browser exists, which is a
+   stated gap rather than a silent pass. Point it at `/static`: the live page
+   repaints every three seconds, so an automated capture of it may never settle.
+
+6. **Stop / resume.** `stop --run <dir>` asks the run to stop and ends the live
    training child. `resume --out <dir> ...` continues from the manifest, never
    replaying a finished round. `report --run <dir>` writes
    `report.json` + `report-<run_id>.md` from persisted state only.
