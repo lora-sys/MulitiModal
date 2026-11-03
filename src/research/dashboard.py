@@ -76,6 +76,51 @@ def _latest_doctor(session: ResearchSession) -> dict | None:
     return report
 
 
+def resolve_run(runs_root: str | Path) -> Path | None:
+    """The newest run under a runs root, by `run.json` mtime.
+
+    A dashboard that follows a FIXED runs root is what makes one long-lived
+    process enough: a new campaign appears in the list the moment it is created,
+    with no restart and no new port. `None` means there is nothing to show yet,
+    which the page reports instead of pretending to be loading forever.
+    """
+    root = Path(runs_root)
+    if not root.is_dir():
+        return None
+    candidates = [
+        path.parent for path in root.glob("*/run.json") if path.is_file()
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: (path / "run.json").stat().st_mtime)
+
+
+def list_runs(runs_root: str | Path) -> list[dict]:
+    """Every run under the root, newest first: id, dir, updated, decisions."""
+    root = Path(runs_root)
+    out: list[dict] = []
+    if not root.is_dir():
+        return out
+    for spec_path in root.glob("*/run.json"):
+        try:
+            spec = json.loads(spec_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        run_dir = spec_path.parent
+        entry = {"run_id": spec.get("run_id"), "dir": str(run_dir),
+                 "task": spec.get("task"),
+                 "updated": (run_dir / "run.json").stat().st_mtime}
+        try:
+            session = ResearchSession.load(run_dir)
+            entry["rounds_completed"] = session.rounds_completed()
+            entry["best_metric"] = (session.champion() or {}).get("best_so_far")
+        except (OSError, ValueError):
+            pass
+        out.append(entry)
+    out.sort(key=lambda row: row.get("updated") or 0, reverse=True)
+    return out
+
+
 def _status_payload(session: ResearchSession, after: int) -> dict:
     view = session.status(after_seq=after, events_limit=MAX_EVENTS_PER_REQUEST)
     champion = view.get("champion_run_id")
@@ -490,7 +535,15 @@ function renderEvents(s){
 }
 async function tick(){
   try{
-    const res = await fetch("/api/status?after=" + state.lastSeq, {cache: "no-store"});
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    let res;
+    try {
+      res = await fetch("/api/status?after=" + state.lastSeq,
+                        {cache: "no-store", signal: ctl.signal});
+    } finally {
+      clearTimeout(timer);
+    }
     if(!res.ok) throw new Error("status " + res.status);
     const s = await res.json();
     state.history = s.history;
@@ -513,6 +566,11 @@ async function tick(){
 if (window.__STATIC_PAYLOAD__) {
   renderStatus(window.__STATIC_PAYLOAD__);
   renderEvents(window.__STATIC_PAYLOAD__);
+  if (window.__STATIC_PAYLOAD__.frozen) {
+    state.lastSeq = window.__STATIC_PAYLOAD__.last_event_seq || 0;
+  } else {
+    tick(); setInterval(tick, 3000);
+  }
 } else {
   tick(); setInterval(tick, 3000);
 }
@@ -521,7 +579,8 @@ if (window.__STATIC_PAYLOAD__) {
 """
 
 
-def render_static(session: ResearchSession, *, max_events: int = 60) -> str:
+def render_static(session: ResearchSession, *, max_events: int = 60,
+                  frozen: bool = True) -> str:
     """The page with its payload inlined and no polling.
 
     Same CSS, same markup, same renderers; only the transport is gone. Used for
@@ -529,6 +588,9 @@ def render_static(session: ResearchSession, *, max_events: int = 60) -> str:
     """
     payload = _status_payload(session, after=0)
     payload["events"] = list(reversed(payload.get("events") or []))[:max_events]
+    # `frozen` marks the archive route: it hydrates and stops, so a screenshot has
+    # a page that settles. `/` hydrates and keeps polling.
+    payload["frozen"] = bool(frozen)
     blob = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     inject = f'<script>window.__STATIC_PAYLOAD__ = {blob};</script>\n'
     return render_page().replace("<script>\nconst state", inject + "<script>\nconst state", 1)
@@ -536,6 +598,133 @@ def render_static(session: ResearchSession, *, max_events: int = 60) -> str:
 
 def render_page() -> str:
     return PAGE.replace("__TITLE__", PAGE_TITLE)
+
+
+def make_runs_handler(runs_root: str | Path):
+    """Routes for a FIXED dashboard: the run is resolved per request.
+
+    Reusing the single-run handler keeps one implementation of every route; the
+    only difference is where the session comes from. `?run=<id>` pins a run for
+    replay, which is how a historical run is inspected without a second server.
+    """
+    def resolve(path_query: dict) -> ResearchSession:
+        pinned = (path_query.get("run") or [None])[0]
+        if pinned:
+            candidate = Path(runs_root) / pinned
+            if (candidate / "run.json").exists():
+                return ResearchSession.load(candidate)
+            raise FileNotFoundError(f"unknown run {pinned!r} under {runs_root}")
+        newest = resolve_run(runs_root)
+        if newest is None:
+            raise FileNotFoundError(f"no runs yet under {runs_root}")
+        return ResearchSession.load(newest)
+
+    class Handler(BaseHTTPRequestHandler):
+        server_version = "AutoResearchDashboard/1"
+        sys_version = ""
+
+        def _send(self, status: int, body: bytes, content_type: str) -> None:
+            if len(body) > MAX_RESPONSE_BYTES:
+                status, body = 413, b'{"error":"response too large"}'
+                content_type = "application/json"
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _json(self, payload: dict, status: int = 200) -> None:
+            self._send(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                       "application/json; charset=utf-8")
+
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urlparse(self.path)
+            path = parsed.path.rstrip("/") or "/"
+            query = parse_qs(parsed.query)
+            if ".." in parsed.path:
+                self._json({"error": "path not allowed"}, 400)
+                return
+            try:
+                session = resolve(query)
+            except FileNotFoundError as exc:
+                self._json({"error": str(exc), "runs": list_runs(runs_root)}, 404)
+                return
+            if path == "/":
+                self._send(200, render_static(session).encode("utf-8"),
+                           "text/html; charset=utf-8")
+            elif path == "/static":
+                self._send(200, render_static(session, frozen=True).encode("utf-8"),
+                           "text/html; charset=utf-8")
+            elif path == "/api/status":
+                after = int((query.get("after") or ["0"])[0] or 0)
+                self._json(_status_payload(session, max(0, after)))
+            elif path == "/api/events":
+                after = int((query.get("after") or ["0"])[0] or 0)
+                events = session.status(after_seq=max(0, after),
+                                        events_limit=MAX_EVENTS_PER_REQUEST)["events"]
+                self._json({"events": [_clip(e) for e in events],
+                            "last_event_seq": events[-1]["seq"] if events else max(0, after)})
+            elif path == "/api/history":
+                self._json(_history_payload(session))
+            elif path == "/api/runs":
+                self._json({"runs": list_runs(runs_root)})
+            else:
+                self._json({"error": "not found",
+                            "allowed": ["/", "/static", "/api/status", "/api/events",
+                                        "/api/history", "/api/runs"]}, 404)
+
+        def do_HEAD(self) -> None:  # noqa: N802
+            self._send(200, b"", "text/plain")
+
+        def _reject_mutation(self) -> None:
+            self._json({"error": "read-only dashboard: operations live in the CLI"}, 405)
+
+        def do_POST(self) -> None:  # noqa: N802
+            self._reject_mutation()
+
+        def do_PUT(self) -> None:  # noqa: N802
+            self._reject_mutation()
+
+        def do_PATCH(self) -> None:  # noqa: N802
+            self._reject_mutation()
+
+        def do_DELETE(self) -> None:  # noqa: N802
+            self._reject_mutation()
+
+        def log_message(self, fmt: str, *args) -> None:
+            print(f"dashboard {self.address_string()} {fmt % args}", file=sys.stderr)
+
+    return Handler
+
+
+def serve_runs(runs_root: str | Path, *, host: str = "127.0.0.1",
+               port: int = 8765, serve_tailnet: bool = True) -> int:
+    """The FIXED dashboard: one process, one port, following a runs root."""
+    if not os.environ.get("AUTORESEARCH_NO_SERVE"):
+        from research.tailnet import serve_local
+
+        tailnet = serve_local(port)
+        if tailnet.get("available"):
+            print(f"tailnet (private, serve — not funnel): {tailnet['url']}",
+                  flush=True)
+        else:
+            print(f"tailnet: NOT_AVAILABLE ({tailnet.get('reason')})", flush=True)
+    server = ThreadingHTTPServer((host, port), make_runs_handler(runs_root))
+    current = resolve_run(runs_root)
+    print(f"AutoResearch dashboard on http://{host}:{port}/ · runs root "
+          f"{Path(runs_root).resolve()} · current run "
+          f"{current.name if current else 'none yet'} (read-only)", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
 
 
 def make_handler(session: ResearchSession):
@@ -570,12 +759,12 @@ def make_handler(session: ResearchSession):
                 self._json({"error": "path not allowed"}, 400)
                 return
             if path == "/":
-                self._send(200, render_page().encode("utf-8"),
+                # first paint from data, then poll: the page is useful even if the
+                # client's first request is slow, blocked or never answered
+                self._send(200, render_static(session).encode("utf-8"),
                            "text/html; charset=utf-8")
             elif path == "/static":
-                # same page, payload inlined, no polling: for archives and for
-                # automated screenshots, which never settle on a polling page
-                self._send(200, render_static(session).encode("utf-8"),
+                self._send(200, render_static(session, frozen=True).encode("utf-8"),
                            "text/html; charset=utf-8")
             elif path == "/api/status":
                 after = int((query.get("after") or ["0"])[0] or 0)
