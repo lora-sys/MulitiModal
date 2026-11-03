@@ -34,7 +34,13 @@ rsync 的 `--delete` 作用于**目标根目录**，而多源形式把 `src/`、
    理由：冻结决定已明确「v10 的第一次解锁发生在台账机制存在之前，由本报告与治理文档记录，**不追补台账条目**」（`docs/reports/research-src-v9.md:207`）。台账是「读权限被授予」的行为记录，不是可由报告反推的哈希；写入事后编造的条目比缺失更糟。已记录的事实：sd 线首次事件 `00dd8687b86f4518…`、预算 `MAX_UNLOCKS_SD=1`、冠军 `tcm-0003`（commit `1dbdbe5`）——见 `docs/reports/research-sd-v1.md:54-62`。
 2. **`runs/real-tcm-v5..v8`、`runs/research-v9/v10/v11*`、`runs/sd-campaign`、`runs/smoke`、`runs/manifests`、`runs/tcm-sd-syndrome-v1`**：历史运行目录（其中被文档引用的名字见 `docs/design/autoresearch-rsi-v1.md` §11、`docs/reports/research-src-v{9,11}.md`）。它们可由文档化命令重跑再生。
 3. **`artifacts/tcm-50-v8`——`#50` config 时代真实训练（v8）的交付产物目录，未自动再生。**
-   该线由 `runtime/harness.py` 产出（`docs/design/autoresearch-rsi-v1.md:284`「`runtime/harness.py`（v1–v8）」），重跑需要 GPU 工时而该线含 holdout 读取（v7 产物内有 `chart-regression-holdout.png`），属治理决策，须经明确授权后执行。其**数字与溯源仍在 git 内**：`docs/reports/tcm-50-real-training.md`、`README.md`「#50 交付结论」。
+   该线由 `runtime/harness.py` 产出（`docs/design/autoresearch-rsi-v1.md:284`「`runtime/harness.py`（v1–v8）」）。其**数字与溯源仍在 git 内**：`docs/reports/tcm-50-real-training.md`、`README.md`「#50 交付结论」。
+
+   **探测结果（2026-11-03，`scripts/reconstruct_tcm_50_v8.py`，全程未读 holdout）**：
+   `refit_champion` 只在选择池（train+dev）上拟合，不触 holdout，因此可作无解锁的探针。
+   - **可复现**：冻结划分——同一 seed `20261107` 重建得到 train 191 / dev 41 / holdout 42，与报告一致；manifest 摘要因 v8 之后扩展了 manifest 字段而不再是字节级可复现（`96137c20…` vs 记录前缀 `775ba73bfe8f4da6…`），已如实标注 `NOT_REPRODUCIBLE_BYTE_EXACT`。
+   - **不可复现**：**交付权重**。按报告记录的冠军配置（`tcm-0000` 基线：32/32、40 epochs、lr 3e-3、batch 32、seed 0）今日重训得 `cb9f59be6a5dcfc2…`，而交付值为 `9d642282767df088…`（完整值见 `docs/evidence/registry.json`）——refit 本身确定，差异来自 v8 之后流水线的演进。
+   - 结论：**不产出同名 bundle**，只留 `artifacts/tcm-50-v8/NOT_RECOVERABLE.json`（`status: NOT_REPRODUCIBLE`，含两枚哈希与 `holdout_read: false`）。该线任何未来结论都必须换新冻结划分重跑（AGENTS.md 规则 11）。
 
 ## 4. 恢复后的验证（开发机）
 
