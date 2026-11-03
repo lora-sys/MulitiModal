@@ -215,18 +215,21 @@ def test_fixed_dashboard_follows_the_newest_run(tmp_path):
 
     older = root / "run-a"
     newer = root / "run-b"
-    for path, run_id in ((older, "toy-a"), (newer, "toy-b")):
-        ResearchSession.create(
+    ids = {}
+    import os
+    for path in (older, newer):
+        ids[path] = ResearchSession.create(
             path, task="toy", editable="src/research/candidate_toy.py",
-            worktree=str(tmp_path / "wt"), branch=f"autoresearch/{run_id}",
+            worktree=str(tmp_path / "wt"), branch="autoresearch/x",
             folds=2, repeats=1, max_rounds=3, budget_seconds=1.0,
             primary_metric="toy/macro_f1",
-        )
-    time.sleep(0.02)
-    (newer / "run.json").touch()  # the newest one wins
+        ).run_id
+    # mtime decides; the ids a reader sees are the generated ones, not dir names
+    os.utime(newer / "run.json", (2_000_000_000, 2_000_000_000))
+    os.utime(older / "run.json", (1_000_000_000, 1_000_000_000))
     assert resolve_run(root) == newer
     runs = list_runs(root)
-    assert [row["run_id"] for row in runs] == ["toy-b", "toy-a"], runs
+    assert [row["run_id"] for row in runs] == [ids[newer], ids[older]], runs
     assert all("rounds_completed" in row for row in runs)
 
 
@@ -239,23 +242,26 @@ def test_fixed_dashboard_routes_pin_a_run_and_serve_the_root(tmp_path):
     from research.dashboard import make_runs_handler
 
     root = tmp_path / "runs"
-    for run_id in ("toy-a", "toy-b"):
+    created = [
         ResearchSession.create(
-            root / run_id, task="toy", editable="src/research/candidate_toy.py",
+            root / f"run-{i}", task="toy", editable="src/research/candidate_toy.py",
             worktree=str(tmp_path / "wt"), branch="autoresearch/x",
             folds=2, repeats=1, max_rounds=3, budget_seconds=1.0,
             primary_metric="toy/macro_f1",
-        )
+        ).run_id
+        for i in range(2)
+    ]
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_runs_handler(root))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_address[1]}"
     try:
         runs = json.loads(urllib.request.urlopen(f"{base}/api/runs", timeout=5).read())
-        assert {row["run_id"] for row in runs["runs"]} == {"toy-a", "toy-b"}
+        assert {row["run_id"] for row in runs["runs"]} == set(created)
+        # pin by RUN ID — what the page and the reports show — not by directory
         pinned = json.loads(urllib.request.urlopen(
-            f"{base}/api/status?run=toy-a", timeout=5).read())
-        assert pinned["run_id"].startswith("toy-")
+            f"{base}/api/status?run={created[0]}", timeout=5).read())
+        assert pinned["run_id"] == created[0]
         # an unknown run is a stated 404 with the list, not an empty page
         try:
             urllib.request.urlopen(f"{base}/api/status?run=nope", timeout=5)
