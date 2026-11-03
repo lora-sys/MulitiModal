@@ -32,6 +32,7 @@ minutes).
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -657,6 +658,21 @@ def serve(session: ResearchSession, *,  host: str = "127.0.0.1", port: int = 876
     if once:
         sys.stdout.write(render_page())
         return 0
+    # Publish this port on the tailnet automatically, so watching a run needs no
+    # hand-built tunnel. The server still binds loopback and `tailscale serve` is
+    # tailnet-only (never funnel); a failure here is printed, never fatal, and
+    # `AUTORESEARCH_NO_SERVE=1` opts out.
+    if not os.environ.get("AUTORESEARCH_NO_SERVE"):
+        from research.tailnet import serve_local
+
+        tailnet = serve_local(port)
+        if tailnet.get("available"):
+            print(f"tailnet (private, serve — not funnel): {tailnet['url']}",
+                  flush=True)
+        else:
+            print(f"tailnet: NOT_AVAILABLE ({tailnet.get('reason')})"
+                  + (f" — {tailnet['hint']}" if tailnet.get("hint") else ""),
+                  flush=True)
     server = ThreadingHTTPServer((host, port), make_handler(session))
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"WARNING: dashboard bound to {host}, which is not loopback, and it "
@@ -682,8 +698,12 @@ def spawn_dashboard(session: ResearchSession, *, port: int = 8765,
     """
     command = [sys.executable, "-m", "research.cli", "dashboard",
                "--run", str(session.root), "--host", host, "--port", str(port)]
-    process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, start_new_session=True,
+    # the child's diagnostics go to the run directory, not /dev/null: if the
+    # tailnet publish fails, that log is the only place the reason appears
+    log = Path(session.root) / "dashboard.log"
+    handle = log.open("a", encoding="utf-8")
+    process = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT,
+                               start_new_session=True,
                                cwd=str(Path(__file__).resolve().parents[1]))
     return {"pid": process.pid, "url": f"http://{host}:{port}/",
             "command": " ".join(shlex.quote(part) for part in command)}

@@ -31,8 +31,28 @@ SERVE_FLAG = "--bg"
 OPERATOR_HINT = "sudo tailscale set --operator=$USER"
 
 
+#: explicit candidates: a child process started with a minimal environment may
+#: not have the tailscale directory on PATH, and a silently skipped convenience
+#: is exactly the kind of failure this project refuses to leave unexplained
+_CANDIDATE_PATHS = (
+    "/usr/bin/tailscale",
+    "/usr/local/bin/tailscale",
+    "/snap/bin/tailscale",
+    "/opt/homebrew/bin/tailscale",
+)
+
+
 def _tailscale() -> str | None:
-    return shutil.which("tailscale")
+    found = shutil.which("tailscale")
+    if found:
+        return found
+    for path in _CANDIDATE_PATHS:
+        if pathlib_Path(path).exists():
+            return path
+    return None
+
+
+from pathlib import Path as pathlib_Path  # noqa: E402  (used by _tailscale only)
 
 
 def tailnet_hostname(binary: str) -> str | None:

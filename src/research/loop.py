@@ -911,13 +911,14 @@ class SourceResearchLoop:
                 # started: it keeps the stage the coordinator last reported
                 _raw_progress = event_sink["progress"]
 
-                def _progress_with_heartbeat(record, _index=index):
+                def _progress_with_heartbeat(record, _index=index,
+                                             _emit=_raw_progress):
                     if record.get("heartbeat"):
                         writer.emit("TRAINING", "heartbeat", round_index=_index,
                                     budget_seconds=self.budget,
                                     message="heartbeat while the fold runs")
                         return None
-                    return _raw_progress(record)
+                    return _emit(record)
 
                 event_sink["progress"] = _progress_with_heartbeat
                 entry = self.run_round(
