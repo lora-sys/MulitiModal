@@ -263,7 +263,8 @@ def _start_or_resume(args, *, resume: bool) -> int:
         from research.dashboard import spawn_dashboard
 
         try:
-            dashboard_info = spawn_dashboard(session, port=args.port)
+            dashboard_info = ensure_dashboard(
+                Path(args.out).resolve().parent, args.port)
         except OSError as exc:
             print(json.dumps({"dashboard": {"ok": False, "error": str(exc)}}),
                   flush=True)
@@ -446,9 +447,9 @@ def cmd_report(args) -> int:
 def ensure_dashboard(runs_root, port: int, *, no_serve: bool = False) -> dict:
     """Make sure THE dashboard is running, and return its URL.
 
-    A fixed process on a fixed port: if something already answers there, it is
-    reused and nothing new is started. Spawning one dashboard per campaign is
-    what left a trail of processes and stray ports behind.
+    A fixed process on a fixed port: if something already answers there it is
+    reused and nothing is started. Spawning one dashboard per campaign is what
+    left a trail of processes and stray ports behind.
     """
     import socket
 
