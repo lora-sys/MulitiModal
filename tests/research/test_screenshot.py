@@ -62,3 +62,54 @@ def test_missing_browser_says_not_available_rather_than_pretending(tmp_path, mon
 
     assert main(["--url", "http://127.0.0.1:1/static",
                  "--out", str(tmp_path / "x.png")]) == 2
+
+
+def test_report_persists_the_chart_beyond_the_browser(tmp_path):
+    """A live page is a view, not a record: the plotted series and a
+    self-contained page must be written, so the curve survives without a browser
+    and without this code."""
+    import json
+
+    from research.report import write_report
+    from research.session import ResearchSession
+
+    session = ResearchSession.create(
+        tmp_path / "run", task="toy", editable="src/research/candidate_toy.py",
+        worktree=str(tmp_path / "wt"), branch="autoresearch/chart",
+        folds=2, repeats=1, max_rounds=3, budget_seconds=1.0,
+        primary_metric="toy/macro_f1",
+    )
+    (session.root / "manifest.jsonl").write_text(
+        json.dumps({"run_id": "toy-0000", "round_index": 0, "decision": "KEEP",
+                    "status": "completed", "outcome": "KEEP", "reason": "baseline",
+                    "hypothesis": "the baseline", "best_so_far": 0.5,
+                    "metrics": {"primary_value": 0.5, "primary_sem": 0.01}}) + "\n",
+        encoding="utf-8",
+    )
+    paths = write_report(session, out_dir=tmp_path / "out")
+    series = json.loads(paths["chart_series"].read_text(encoding="utf-8"))
+    assert series["points"][0]["value"] == 0.5
+    assert series["points"][0]["outcome"] == "KEEP"
+    page = paths["page_archive"].read_text(encoding="utf-8")
+    assert "window.__STATIC_PAYLOAD__" in page, "the archive must carry its data"
+    assert '"frozen": true' in page, "the archive must not poll"
+
+
+def test_the_live_page_hydrates_before_it_polls(tmp_path):
+    """The phone case: a first paint that waits for a request can hang forever on
+    a roaming network. `/` must inline the payload (first paint from data) and
+    only then start polling."""
+    from research.dashboard import render_static
+    from research.session import ResearchSession
+
+    session = ResearchSession.create(
+        tmp_path / "run", task="toy", editable="src/research/candidate_toy.py",
+        worktree=str(tmp_path / "wt"), branch="autoresearch/chart",
+        folds=2, repeats=1, max_rounds=3, budget_seconds=1.0,
+        primary_metric="toy/macro_f1",
+    )
+    live = render_static(session, frozen=False)
+    assert '"frozen": false' in live
+    assert "if (window.__STATIC_PAYLOAD__)" in live
+    assert "setInterval(tick, 3000)" in live, "the live page must still poll"
+    assert "ctl.abort()" in live, "a hung request must surface, not hang"

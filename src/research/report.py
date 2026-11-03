@@ -163,8 +163,16 @@ def render_markdown(report: dict) -> str:
             f"{str(row['next_action'])[:80]} | "
             f"{(row['git_commit_sha'] or 'NOT_AVAILABLE')[:8]} |"
         )
+    lines += [
+        "",
+        "## Saved artifacts (the chart outlives the browser)",
+        "",
+        f"- plotted series (data, re-drawable): `{report.get('chart_series')}`",
+        f"- self-contained page (payload inlined, renders from a file): "
+        f"`{report.get('page_archive')}`",
+    ]
     if report.get("screenshot"):
-        lines += ["", f"Page screenshot: `{report['screenshot']}`"]
+        lines.append(f"- page screenshot: `{report['screenshot']}`")
     lines += [
         "",
         "## Evidence and limits",
@@ -188,8 +196,38 @@ def write_report(session, out_dir=None, *, screenshot: bool = False,
     json_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    # The chart must outlive the browser. A live page is a view, not a record, so
+    # every report also writes (a) the plotted SERIES as data, which can be
+    # re-drawn or diffed without this code, and (b) a self-contained page whose
+    # payload is inlined, which renders identically from a file. The PNG is the
+    # optional third form because it needs a browser on the host.
+    charts_dir = out / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    series_path = charts_dir / f"{session.run_id}-metric.json"
+    series = {
+        "schema_version": "autoresearch-chart-v1",
+        "run_id": session.run_id,
+        "primary_metric": session.spec.get("primary_metric"),
+        "points": [
+            {"round": row.get("round"), "run_id": row.get("run_id"),
+             "outcome": row.get("outcome"), "value": row.get("primary_value"),
+             "best_so_far": row.get("best_so_far"),
+             "hypothesis": row.get("hypothesis")}
+            for row in report["rounds"]
+        ],
+    }
+    series_path.write_text(
+        json.dumps(series, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    from research.dashboard import render_static
+
+    page_path = out / f"page-{session.run_id}.html"
+    page_path.write_text(render_static(session, frozen=True), encoding="utf-8")
     md_path = out / f"report-{session.run_id}.md"
-    paths = {"json": json_path, "markdown": md_path}
+    paths = {"json": json_path, "markdown": md_path, "chart_series": series_path,
+             "page_archive": page_path}
+    report["chart_series"] = str(series_path)
+    report["page_archive"] = str(page_path)
     if screenshot:
         # a delivery that claims a working page should carry its picture; the
         # failure mode is explicit (NOT_AVAILABLE when no browser exists), and it

@@ -490,7 +490,17 @@ function renderEvents(s){
 }
 async function tick(){
   try{
-    const res = await fetch("/api/status?after=" + state.lastSeq, {cache: "no-store"});
+    // without a deadline a hung request leaves the page silently stale, which
+    // looks identical to "the run is idle" — say DISCONNECTED instead
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    let res;
+    try {
+      res = await fetch("/api/status?after=" + state.lastSeq,
+                        {cache: "no-store", signal: ctl.signal});
+    } finally {
+      clearTimeout(timer);
+    }
     if(!res.ok) throw new Error("status " + res.status);
     const s = await res.json();
     state.history = s.history;
@@ -505,14 +515,20 @@ async function tick(){
     text(el("heartbeat"), String(err));
   }
 }
-/* Static mode renders the SAME page once, from an inlined payload, and never
-   polls. It exists so the page can be archived, screenshotted and diffed — a
-   live monitor that repaints every three seconds keeps an automated
-   screenshotter from ever seeing the page settle. Same renderers, same tokens,
-   same markup: only the transport differs. */
+/* The first paint NEVER waits for a request. The server inlines the current
+   payload, so the page shows the real state even if the client's first fetch is
+   slow, blocked or never answered — a phone on a roaming network was left on
+   "loading…" forever by the previous deferred-paint version. Polling then keeps
+   it live; `frozen` payloads (the archive route) skip polling so a screenshot
+   has a page that settles. */
 if (window.__STATIC_PAYLOAD__) {
   renderStatus(window.__STATIC_PAYLOAD__);
   renderEvents(window.__STATIC_PAYLOAD__);
+  if (window.__STATIC_PAYLOAD__.frozen) {
+    state.lastSeq = window.__STATIC_PAYLOAD__.last_event_seq || 0;
+  } else {
+    tick(); setInterval(tick, 3000);
+  }
 } else {
   tick(); setInterval(tick, 3000);
 }
@@ -521,7 +537,8 @@ if (window.__STATIC_PAYLOAD__) {
 """
 
 
-def render_static(session: ResearchSession, *, max_events: int = 60) -> str:
+def render_static(session: ResearchSession, *, max_events: int = 60,
+                  frozen: bool = True) -> str:
     """The page with its payload inlined and no polling.
 
     Same CSS, same markup, same renderers; only the transport is gone. Used for
@@ -529,6 +546,9 @@ def render_static(session: ResearchSession, *, max_events: int = 60) -> str:
     """
     payload = _status_payload(session, after=0)
     payload["events"] = list(reversed(payload.get("events") or []))[:max_events]
+    # `frozen` marks the archive route: the page hydrates and then stops, so a
+    # screenshot has something that settles. `/` hydrates and keeps polling.
+    payload["frozen"] = bool(frozen)
     blob = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     inject = f'<script>window.__STATIC_PAYLOAD__ = {blob};</script>\n'
     return render_page().replace("<script>\nconst state", inject + "<script>\nconst state", 1)
@@ -570,12 +590,14 @@ def make_handler(session: ResearchSession):
                 self._json({"error": "path not allowed"}, 400)
                 return
             if path == "/":
-                self._send(200, render_page().encode("utf-8"),
+                # first paint from data, then poll: the page is useful even if
+                # the client's first request never comes back
+                self._send(200, render_static(session).encode("utf-8"),
                            "text/html; charset=utf-8")
             elif path == "/static":
                 # same page, payload inlined, no polling: for archives and for
                 # automated screenshots, which never settle on a polling page
-                self._send(200, render_static(session).encode("utf-8"),
+                self._send(200, render_static(session, frozen=True).encode("utf-8"),
                            "text/html; charset=utf-8")
             elif path == "/api/status":
                 after = int((query.get("after") or ["0"])[0] or 0)
