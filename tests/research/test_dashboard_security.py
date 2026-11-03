@@ -163,3 +163,28 @@ def test_stale_flag_comes_from_the_heartbeat(tmp_path):
     stale = dash._status_payload(session, after=0)
     assert stale["stale"] is True
     assert stale["heartbeat_age_seconds"] > STALE_AFTER_SECONDS
+
+def test_doctor_card_shows_the_latest_diagnosis_not_not_available(tmp_path):
+    """A campaign's per-round postflight lives in the manifest; the dashboard
+    must surface it. Otherwise every round with a WARNING renders as
+    "NOT_AVAILABLE", which reads like nothing was ever checked."""
+    session = _session(tmp_path)
+    (session.root / "manifest.jsonl").write_text(
+        json.dumps(_entry("toy-0000", doctor={
+            "blocked": False,
+            "counts": {"BLOCKED": 0, "WARNING": 1, "INFO": 3, "UNVERIFIED": 4},
+            "findings": [{"check": "measurement_resolution", "severity": "WARNING",
+                          "message": "the difference from the champion is smaller "
+                                     "than one standard error"}],
+        })) + "\n",
+        encoding="utf-8",
+    )
+    payload = dash._status_payload(session, after=0)
+    assert payload["doctor"]["counts"]["WARNING"] == 1
+    assert payload["doctor"]["findings"][0]["check"] == "measurement_resolution"
+    # and a preflight report, when present, still wins (it is the run's protocol)
+    session.write_doctor({"blocked": True, "counts": {"BLOCKED": 1},
+                          "findings": [{"check": "user_isolation",
+                                        "severity": "BLOCKED", "message": "x"}]})
+    payload = dash._status_payload(session, after=0)
+    assert payload["doctor"]["findings"][0]["check"] == "user_isolation"

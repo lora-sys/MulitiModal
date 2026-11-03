@@ -82,6 +82,46 @@ Read the Doctor's findings before proposing anything new:
   dragged by a tail class. That is a task property, not a model property.
 * `UNVERIFIED` — the check could not be performed. Never read it as a pass.
 
+## Upstream visual skill: lieflat-charts (charts)
+
+The dashboard's charts are not styled by taste. They follow **lieflat-charts**, the
+template-driven data-visualisation skill:
+
+```bash
+git clone --depth 1 https://github.com/larashero3-dotcom/lieflat-charts.git
+```
+
+What we adopt, and where it came from:
+
+* **The Mono grammar**, with tokens taken from that skill's `mono-tokens.js` rather
+  than approximated: paper `#F0EFEB`, ink `#1C1C1A`, muted `#8F8E88`, faint
+  `#C6C5BF`, grid `#DEDDD6`, and the 7-step grey ladder.
+* **Structural rules**: 24px borderless cards separated by whitespace (no borders,
+  no shadows), a four-part card (conclusion-style title · subtitle that explains the
+  series · chart · uppercase source line), a title that states the conclusion
+  instead of naming the chart type, and a minimum SVG label size of 5.5–6.5px.
+* **Brightness encodes importance**: the primary metric is ink, the best-so-far
+  reference is muted and dashed, a rolled-back round is a hollow faint dot, a kept
+  round is a filled ink dot. No gradients, no glows, no decorative fills, no
+  broken-axis tricks; value and visual stay proportional.
+* **Data is deterministic**: every number comes from the run manifest, so a reload
+  paints the same picture.
+
+**Why the Glance family and not Lupi.** lieflat-charts requires that choice to be
+justified in writing: Lupi Editorial and Lupi Basics are static editorial charts,
+while this page is a live monitoring strip read at a glance, repainting every three
+seconds — the case its own rules assign to Glance. The dashboard is therefore a
+Glance-family page, not a re-invention.
+
+**Two deliberate deviations**, both because a loopback monitoring page must work
+with no network: the remote Inter webfont is replaced by a system-font stack that
+starts with Inter, and there is no entrance-animation library (a CSS reveal that
+honours `prefers-reduced-motion`).
+
+**Attribution.** lieflat-charts asks that publicly distributed output credit its
+developer ("本 skill 由‘躺在废墟里’开发"). That is not stamped into the dashboard UI;
+it belongs in documentation, which is this line.
+
 ## Limits to state honestly
 
 * A run driven by `--allow-stub` is **not** autonomous research; the manifest and

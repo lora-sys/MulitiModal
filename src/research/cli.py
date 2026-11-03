@@ -255,6 +255,20 @@ def _start_or_resume(args, *, resume: bool) -> int:
             for i in range(int(args.block or args.max_rounds))
         ])
     block = args.block
+    # start the dashboard BEFORE the campaign: the issue asks for a URL that can
+    # be opened *while* training runs, and spawning it afterwards means the page
+    # only appears once there is nothing left to watch
+    dashboard_info = None
+    if args.dashboard:
+        from research.dashboard import spawn_dashboard
+
+        try:
+            dashboard_info = spawn_dashboard(session, port=args.port)
+        except OSError as exc:
+            print(json.dumps({"dashboard": {"ok": False, "error": str(exc)}}),
+                  flush=True)
+        else:
+            print(json.dumps({"dashboard": dashboard_info}), flush=True)
     start = time.monotonic()
     try:
         summary = loop.run_autonomous(
@@ -271,10 +285,8 @@ def _start_or_resume(args, *, resume: bool) -> int:
         print(json.dumps({"ok": False, "blocked": True, "error": str(exc)},
                          ensure_ascii=False, indent=2))
         return 1
-    if args.dashboard:
-        from research.dashboard import spawn_dashboard
-
-        summary["dashboard"] = spawn_dashboard(session, port=args.port)
+    if dashboard_info:
+        summary["dashboard"] = dashboard_info
     summary.update({
         "run_dir": str(session.root),
         "wall_clock_s": round(time.monotonic() - start, 1),
