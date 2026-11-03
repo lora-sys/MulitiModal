@@ -296,6 +296,7 @@ def pool_manifest(
     data = json.loads(json.dumps(manifest))
     data.pop("manifest_sha256", None)
     data["split"] = {
+        "seed": data["split"]["seed"],
         "train": list(data["split"]["train"]) + list(data["split"]["dev"]),
         "dev": [],
         "holdout": [],
@@ -383,7 +384,10 @@ def fold_manifest(
     """
     data = json.loads(json.dumps(manifest))
     data.pop("manifest_sha256", None)
+    # the frozen split seed is part of the worker's selection-manifest
+    # contract; the fold coordinates never change it
     data["split"] = {
+        "seed": data["split"]["seed"],
         "train": list(train_ids),
         "dev": list(dev_ids),
         "holdout": [],

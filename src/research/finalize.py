@@ -1,34 +1,19 @@
-"""Finalise the source-level run: refit the champion on the selection pool in
-a one-shot training subprocess, then score the holdout once — in an isolated
-evaluator subprocess.
+"""Finalise a source-level run with a fit-validated holdout release.
 
-What this must not do:
+The driver validates task routing, candidate/commit bindings and both
+task-specific manifest schemas before running the candidate. It then runs a
+synthetic output-contract preflight and the selection-pool refit in the
+restricted Docker worker. Candidate containers see Python source, trimmed
+train+dev JSON inputs and temporary output only; they never receive Git,
+holdout inputs, the unlock ledger, HOME or the Docker socket.
 
-* read the holdout while choosing anything. The champion is already fixed by
-  the manifest before this module runs, and the holdout is touched exactly
-  once, at the end, to produce a number;
-* execute candidate code anywhere but a one-shot training subprocess. The
-  first implementation imported research.candidate into the driver; the
-  second let the finalize worker fit AND score in one interpreter, so the
-  candidate's code ran alongside the holdout read. Now the driver only
-  prepares the pool manifest and the trimmed pool records, appends the
-  unlock-intent event to the ledger, and spawns `python -m research.finalize`
-  (fit only) and then `research.evaluator --mode holdout` (state_dict only,
-  holdout rebuilt from the frozen parent manifest) — the same isolated
-  evaluation process the selection folds use;
- * unlock the holdout without paying. Phase 1 allows two unlock events for
- the constitution task (AGENTS.md rule 11); the syndrome task (#53) has its
- own ledger file and its own budget (see `ledger_params`). The unlock event
- is the GRANT of read permission, not a successful read: the driver appends
- the intent event BEFORE spawning the fit worker (under an flock, into the
- task's repo-global ledger), and a crashed or killed worker has still
- consumed the event. The worker re-checks the ledger — its own budget
- assertion and the presence of its specific event — before importing the
- candidate, and `python -m research.finalize` invoked by hand cannot skip
- that check: the worker validates the event itself. The ledger lives at
- `<repo-root>/runs/<task's ledger file>` (resolved through the worktree's
- git common dir), never inside --out, so changing the output directory
- cannot reset the count.
+After the candidate worker exits, the bounded container supervisor starts
+a trusted child to validate the state_dict, frozen architecture and first-batch
+output contract. The host checks only the child's attestation and streamed file
+hashes before atomically charging the unlock event. Only after the event is
+charged does it pass the frozen and pool manifest paths to the trusted holdout
+evaluator. The evaluator validates that exact event before materializing
+holdout records.
 """
 
 from __future__ import annotations
@@ -41,7 +26,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 import traceback
 import uuid
 from pathlib import Path
@@ -110,21 +94,33 @@ def _read_ledger_lines(ledger_path: Path) -> list[str]:
     return [line for line in lines if line.strip()]
 
 
-def unlock_count(ledger_path: Path) -> int:
-    return len(_read_ledger_lines(ledger_path))
-
-
-def ledger_contains(ledger_path: Path, event_id: str) -> bool:
-    """Exact match on the parsed event_id, line by line — not a substring
-    scan, which any longer id (or a corrupt line embedding the query) could
-    satisfy."""
-    for line in _read_ledger_lines(ledger_path):
-        try:
-            if json.loads(line).get("event_id") == event_id:
-                return True
-        except json.JSONDecodeError:
+def _validated_ledger_events(lines: list[str]) -> list[dict]:
+    import re
+    events = []
+    seen = set()
+    for line_number, line in enumerate(lines, 1):
+        if not line.strip():
             continue
-    return False
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"holdout unlock ledger has invalid JSON on line {line_number}"
+            ) from exc
+        event_id = event.get("event_id") if isinstance(event, dict) else None
+        if not isinstance(event_id, str) or re.fullmatch(r"[0-9a-f]{32}", event_id) is None:
+            raise RuntimeError(
+                f"holdout unlock ledger line {line_number} has an invalid event_id"
+            )
+        if event_id in seen:
+            raise RuntimeError("holdout unlock ledger contains a duplicate event_id")
+        seen.add(event_id)
+        events.append(event)
+    return events
+
+
+def unlock_count(ledger_path: Path) -> int:
+    return len(_validated_ledger_events(_read_ledger_lines(ledger_path)))
 
 
 def _assert_unlock_budget(ledger_path: Path,
@@ -132,20 +128,6 @@ def _assert_unlock_budget(ledger_path: Path,
     """DRIVER-side check, run BEFORE charging: refuse when no slot is left."""
     used = unlock_count(ledger_path)
     if used >= max_unlocks:
-        raise _unlock_budget_error(ledger_path, used, max_unlocks)
-    return used
-
-
-def _assert_worker_budget(ledger_path: Path,
-                          max_unlocks: int = MAX_UNLOCKS) -> int:
-    """WORKER-side check, run AFTER this run's event was charged: the
-    driver's own charge for the current run may legitimately have filled
-    the budget, so only an OVER-spend (a ledger beyond max_unlocks, i.e.
-    someone bypassed the driver) is refused here. Using the driver-side
-    `>=` check here would crash every legal final unlock (round-4 review
-    finding 1)."""
-    used = unlock_count(ledger_path)
-    if used > max_unlocks:
         raise _unlock_budget_error(ledger_path, used, max_unlocks)
     return used
 
@@ -176,15 +158,338 @@ def _charge_unlock_event(ledger_path: Path, event: dict,
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
             fh.seek(0)
-            used = sum(1 for line in fh if line.strip())
+            events = _validated_ledger_events(fh.readlines())
+            used = len(events)
+            event_id = event.get("event_id")
+            if (
+                not isinstance(event_id, str)
+                or any(existing["event_id"] == event_id for existing in events)
+            ):
+                raise RuntimeError("refusing to charge a duplicate or malformed event_id")
             if used >= max_unlocks:
                 raise _unlock_budget_error(ledger_path, used, max_unlocks)
+            fh.seek(0, os.SEEK_END)
             fh.write(json.dumps(event, sort_keys=True) + "\n")
             fh.flush()
             os.fsync(fh.fileno())
         finally:
             fcntl.flock(fh, fcntl.LOCK_UN)
 
+
+
+def verify_holdout_unlock(
+    config: dict, request: dict, pool: dict, frozen: dict,
+) -> dict:
+    """Fail closed unless the trusted driver recorded this exact release.
+
+    This check runs in the trusted evaluator before it loads any dataset
+    records. The candidate worker never receives the ledger path or event ID.
+    """
+    import re
+
+    from research.tasks import validate_manifest_contract
+
+    task = config.get("task", "constitution")
+    if task not in ("constitution", "syndrome"):
+        raise RuntimeError(f"unknown holdout task {task!r}")
+    validate_manifest_contract(task, frozen)
+    validate_manifest_contract(task, pool, selection_pool=True)
+    if pool.get("selection_parent_manifest_sha256") != frozen.get("manifest_sha256"):
+        raise RuntimeError("holdout pool is not bound to the frozen parent manifest")
+
+    unlock = config.get("unlock")
+    if not isinstance(unlock, dict) or unlock.get("task") != task:
+        raise RuntimeError("holdout configuration has no matching unlock binding")
+    event_id = unlock.get("event_id")
+    candidate_sha = unlock.get("candidate_sha256")
+    commit = unlock.get("champion_commit")
+    if not isinstance(event_id, str) or re.fullmatch(r"[0-9a-f]{32}", event_id) is None:
+        raise RuntimeError("holdout unlock event_id is malformed")
+    if not isinstance(candidate_sha, str) or re.fullmatch(r"[0-9a-f]{64}", candidate_sha) is None:
+        raise RuntimeError("holdout candidate SHA is malformed")
+    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise RuntimeError("holdout champion commit is malformed")
+    if unlock.get("pool_manifest_sha256") != pool.get("manifest_sha256"):
+        raise RuntimeError("holdout unlock is bound to a different pool manifest")
+    if unlock.get("selection_parent_manifest_sha256") != frozen.get("manifest_sha256"):
+        raise RuntimeError("holdout unlock is bound to a different frozen manifest")
+
+    preflight = unlock.get("candidate_preflight")
+    fit_artifacts = unlock.get("fit_artifacts")
+    if not isinstance(preflight, dict) or not isinstance(fit_artifacts, dict):
+        raise RuntimeError("holdout unlock is missing candidate validation evidence")
+    for digest in (
+        preflight.get("synthetic_manifest_sha256"),
+        preflight.get("weights_sha256"),
+        preflight.get("architecture_sha256"),
+        fit_artifacts.get("weights_sha256"),
+        fit_artifacts.get("architecture_sha256"),
+    ):
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise RuntimeError("holdout unlock contains a malformed artifact SHA")
+    expected_output_key = "syndrome_probs" if task == "syndrome" else "category_probs"
+    fit_shape = fit_artifacts.get("output_shape")
+    preflight_shape = preflight.get("output_shape")
+    if (
+        fit_artifacts.get("output_key") != expected_output_key
+        or preflight.get("output_key") != expected_output_key
+        or not isinstance(fit_shape, list)
+        or len(fit_shape) != 2
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in fit_shape
+        )
+        or not isinstance(preflight_shape, list)
+        or len(preflight_shape) != 2
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+            for value in preflight_shape
+        )
+        or fit_shape[1] != preflight_shape[1]
+    ):
+        raise RuntimeError("holdout unlock fit artifact has an invalid output contract")
+    if request.get("weights_sha256") != fit_artifacts["weights_sha256"]:
+        raise RuntimeError("holdout request weights differ from the charged artifacts")
+    if request.get("architecture_sha256") != fit_artifacts["architecture_sha256"]:
+        raise RuntimeError("holdout request architecture differs from the charged artifacts")
+
+    raw_ledger = unlock.get("ledger_path")
+    if not isinstance(raw_ledger, str) or not raw_ledger:
+        raise RuntimeError("holdout unlock ledger path is missing")
+    ledger_path = Path(raw_ledger)
+    expected_ledger = global_ledger_path(Path(config["worktree_path"]), task)
+    if ledger_path.is_symlink() or not ledger_path.is_file():
+        raise RuntimeError("holdout unlock ledger is unavailable")
+    try:
+        resolved_ledger = ledger_path.resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError("holdout unlock ledger is unavailable") from exc
+    if resolved_ledger != expected_ledger.resolve():
+        raise RuntimeError("holdout unlock ledger path does not match the task ledger")
+    try:
+        fd = os.open(
+            ledger_path,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fcntl.flock(handle, fcntl.LOCK_SH)
+            try:
+                events = _validated_ledger_events(handle.readlines())
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+    except OSError as exc:
+        raise RuntimeError("holdout unlock ledger is unavailable") from exc
+
+    _ledger_file, max_unlocks = ledger_params(task)
+    if len(events) > max_unlocks:
+        raise RuntimeError("holdout unlock ledger exceeds the task budget")
+    matches = [event for event in events if event.get("event_id") == event_id]
+    if len(matches) != 1:
+        raise RuntimeError("holdout unlock event is missing or duplicated")
+    event = matches[0]
+    expected_fields = {
+        "event": "holdout_unlock_intent",
+        "event_id": event_id,
+        "task": task,
+        "candidate_sha256": candidate_sha,
+        "champion_commit": commit,
+        "candidate_preflight": preflight,
+        "fit_artifacts": fit_artifacts,
+        "pool_manifest_sha256": pool["manifest_sha256"],
+        "selection_parent_manifest_sha256": frozen["manifest_sha256"],
+    }
+    if any(event.get(key) != value for key, value in expected_fields.items()):
+        raise RuntimeError("holdout unlock event does not match this evaluation request")
+    return event
+
+
+def _assert_candidate_commit_binding(
+    worktree: Path, editable: str, commit: str, candidate_sha256: str,
+) -> None:
+    import re
+
+    from research.train_worker import _candidate_path
+
+    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise RuntimeError("champion commit must be a full lowercase 40-character SHA")
+    from research.train_worker import (
+        MAX_CANDIDATE_SOURCE_BYTES,
+        _read_regular_file_limited,
+    )
+
+    candidate_path = _candidate_path({
+        "worktree_path": str(worktree), "editable": editable,
+    })
+    size = subprocess.run(
+        ["git", "-C", str(worktree), "cat-file", "-s", f"{commit}:{editable}"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if size.returncode != 0:
+        raise RuntimeError(f"candidate {editable!r} is absent from commit {commit[:12]} &")
+    try:
+        committed_size = int(size.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError("could not determine committed candidate size") from exc
+    if committed_size > MAX_CANDIDATE_SOURCE_BYTES:
+        raise RuntimeError(
+            f"committed candidate exceeds the {MAX_CANDIDATE_SOURCE_BYTES}-byte limit"
+        )
+    result = subprocess.run(
+        ["git", "-C", str(worktree), "show", f"{commit}:{editable}"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        timeout=15,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"candidate {editable!r} is absent from commit {commit[:12]}…"
+        )
+    committed_sha = hashlib.sha256(result.stdout).hexdigest()
+    current_source = _read_regular_file_limited(
+        candidate_path,
+        max_bytes=MAX_CANDIDATE_SOURCE_BYTES,
+        label="candidate source",
+    )
+    current_sha = hashlib.sha256(current_source).hexdigest()
+    if current_sha != candidate_sha256 or committed_sha != candidate_sha256:
+        raise RuntimeError(
+            "candidate file SHA does not match both the worktree and the "
+            "recorded champion commit; refusing finalization"
+        )
+
+
+def _bounded_artifact_sha256(path: Path, maximum: int, label: str) -> str:
+    import stat
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(f"trusted artifact {label} cannot be opened safely") from exc
+    digest = hashlib.sha256()
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"trusted artifact {label} is not a regular file")
+        if info.st_size > maximum:
+            raise RuntimeError(f"trusted artifact {label} exceeds its size limit")
+        remaining = info.st_size
+        while remaining:
+            chunk = os.read(fd, min(65_536, remaining))
+            if not chunk:
+                raise RuntimeError(f"trusted artifact {label} was truncated")
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if os.read(fd, 1):
+            raise RuntimeError(f"trusted artifact {label} grew while being read")
+        return digest.hexdigest()
+    finally:
+        os.close(fd)
+
+def _trusted_artifact_pair(
+    result: dict, expected_dir: Path, *, task: str,
+) -> tuple[dict, dict[str, Path]]:
+    from research.model_export import MAX_ARCHITECTURE_BYTES, MAX_WEIGHTS_BYTES
+    expected_dir = Path(expected_dir).resolve(strict=True)
+    paths: dict[str, Path] = {}
+    digests: dict[str, str] = {}
+    for field, digest_field, maximum in (
+        ("weights_path", "weights_sha256", MAX_WEIGHTS_BYTES),
+        ("architecture_path", "architecture_sha256", MAX_ARCHITECTURE_BYTES),
+    ):
+        raw_value = result.get(field)
+        if not isinstance(raw_value, str):
+            raise RuntimeError(f"trusted artifact {field} path is missing")
+        raw_path = Path(raw_value)
+        if not raw_path.is_absolute() or raw_path.is_symlink():
+            raise RuntimeError(f"trusted artifact {field} is a symlink or non-absolute path")
+        try:
+            parent = raw_path.parent.resolve(strict=True)
+        except OSError as exc:
+            raise RuntimeError(f"trusted artifact {field} is unavailable") from exc
+        if not parent.is_relative_to(expected_dir):
+            raise RuntimeError(f"trusted artifact {field} is outside its output directory")
+        path = parent / raw_path.name
+        digest = _bounded_artifact_sha256(path, maximum, field)
+        expected_digest = result.get(digest_field)
+        if not isinstance(expected_digest, str) or digest != expected_digest:
+            raise RuntimeError(f"trusted artifact {field} SHA does not match")
+        paths[field] = path
+        digests[field] = digest
+    attestation = result.get("trusted_validation")
+    if not isinstance(attestation, dict):
+        raise RuntimeError("sandbox did not return trusted artifact validation")
+    expected_output_key = "syndrome_probs" if task == "syndrome" else "category_probs"
+    shape = attestation.get("output_shape")
+    if (
+        attestation.get("task") != task
+        or attestation.get("weights_sha256") != digests["weights_path"]
+        or attestation.get("architecture_sha256") != digests["architecture_path"]
+        or attestation.get("output_key") != expected_output_key
+        or not isinstance(shape, list)
+        or len(shape) != 2
+        or any(type(value) is not int or value < 1 for value in shape)
+    ):
+        raise RuntimeError("sandbox artifact validation attestation is malformed")
+    return attestation, paths
+
+def _validate_preflight_artifacts(
+    result: dict, task: str, candidate_sha256: str,
+    preflight_config: dict,
+) -> dict:
+    if result.get("candidate_sha256") != candidate_sha256 or result.get("task") != task:
+        raise RuntimeError("synthetic candidate preflight did not bind task and candidate SHA")
+    attestation, _paths = _trusted_artifact_pair(
+        result, Path(preflight_config["output_dir"]), task=task,
+    )
+    if (
+        result.get("output_key") != attestation["output_key"]
+        or result.get("output_shape") != attestation["output_shape"]
+    ):
+        raise RuntimeError("candidate preflight output differs from trusted validation")
+    return {
+        "output_key": attestation["output_key"],
+        "output_shape": attestation["output_shape"],
+        "weights_sha256": attestation["weights_sha256"],
+        "architecture_sha256": attestation["architecture_sha256"],
+        "sandbox_image_id": result.get("sandbox_image_id"),
+    }
+
+def _validate_fitted_artifacts(
+    result: dict,
+    *,
+    task: str,
+    editable: str,
+    candidate_sha256: str,
+    commit: str,
+    pool: dict,
+    output_dir: Path,
+    preflight_config: dict,
+) -> dict:
+    report = result.get("finalize")
+    if not isinstance(report, dict):
+        raise RuntimeError("finalize worker returned no fit report")
+    expected = {
+        "candidate_file": editable,
+        "candidate_sha256": candidate_sha256,
+        "git_commit": commit,
+        "pool_manifest_sha256": pool["manifest_sha256"],
+        "selection_parent_manifest_sha256": pool["selection_parent_manifest_sha256"],
+    }
+    if any(report.get(key) != value for key, value in expected.items()):
+        raise RuntimeError("finalize worker report does not match the validated fit inputs")
+    attestation, _paths = _trusted_artifact_pair(result, output_dir, task=task)
+    actual_output = report.get("candidate_output")
+    if (
+        not isinstance(actual_output, dict)
+        or actual_output.get("output_key") != attestation["output_key"]
+        or actual_output.get("output_shape") != attestation["output_shape"]
+    ):
+        raise RuntimeError("fitted artifact output differs from trusted sandbox validation")
+    return {
+        "weights_sha256": attestation["weights_sha256"],
+        "architecture_sha256": attestation["architecture_sha256"],
+        "output_key": attestation["output_key"],
+        "output_shape": attestation["output_shape"],
+    }
 
 def refit_and_score(
     worktree: Path,
@@ -204,28 +509,120 @@ def refit_and_score(
 
     The driver never imports the candidate module: the champion's code runs
     in the fit subprocess only, and the holdout is scored in an evaluator
-    subprocess. `records`, `spawn` and `spawn_holdout` exist so tests can
-    inject a parsed fixture and observe the spawns without a real workbook or
-    interpreter. `task` selects the data/scoring adapter AND the unlock
-    ledger (per-task file and budget — see ledger_params)."""
+    subprocess. `records` supports synthetic constitution tests only; syndrome
+    finalization always reads dataset bytes bound to its frozen manifest.
+    `spawn` and `spawn_holdout` let tests observe the child boundaries.
+    `task` selects the data/scoring adapter and unlock ledger."""
     from research.frozen import TIME_BUDGET_SECONDS
-    from research.tasks import adapter_for
+    from research.spawn import (
+        run_sandboxed_candidate,
+        sandbox_image_identity,
+        sandbox_worker_process_timeout,
+        stage_candidate_source,
+    )
+    from research.tasks import (
+        adapter_for,
+        validate_manifest_contract,
+        write_synthetic_preflight_inputs,
+    )
+    from research.train_worker import (
+        MAX_CANDIDATE_SOURCE_BYTES,
+        _candidate_path,
+        _read_regular_file_limited,
+    )
 
     adapter = adapter_for(task)
-    worktree = Path(worktree)
+    if adapter.name != task:
+        raise ValueError(f"task adapter mismatch for {task!r}")
+    if task == "syndrome" and records is not None:
+        raise ValueError(
+            "syndrome finalization requires dataset bytes verified against the "
+            "frozen manifest; in-memory records are not accepted"
+        )
+    editable = adapter.resolve_editable(editable)
+    worktree = Path(worktree).resolve(strict=True)
     out_dir = Path(out_dir)
-    budget = TIME_BUDGET_SECONDS if budget_seconds is None else budget_seconds
-
-    candidate_path = worktree / editable
-    expected_sha = _sha256(candidate_path)
+    budget = TIME_BUDGET_SECONDS if budget_seconds is None else float(budget_seconds)
+    candidate_path = _candidate_path({
+        "worktree_path": str(worktree), "editable": editable,
+    })
+    candidate_source = _read_regular_file_limited(
+        candidate_path,
+        max_bytes=MAX_CANDIDATE_SOURCE_BYTES,
+        label="candidate source",
+    )
+    expected_sha = hashlib.sha256(candidate_source).hexdigest()
+    _assert_git_binding({
+        "worktree_path": str(worktree),
+        "editable": editable,
+        "git_commit": commit,
+    })
+    _assert_candidate_commit_binding(worktree, editable, commit, expected_sha)
     frozen = adapter.load_manifest(manifest_path)
+    validate_manifest_contract(task, frozen)
+
+    # Check available budget before running candidate code or reading records.
+    _ledger_file, max_unlocks = ledger_params(task)
+    ledger = global_ledger_path(worktree, task)
+    _assert_unlock_budget(ledger, max_unlocks=max_unlocks)
+    # Preflight executes the candidate only in Docker on generated synthetic
+    # data. One immutable source snapshot is reused for the actual pool fit.
+    sandbox_temp = tempfile.TemporaryDirectory(prefix="research-finalize-sandbox-")
+    sandbox_root = Path(sandbox_temp.name)
+    source_stage = stage_candidate_source(
+        worktree, editable, expected_sha, sandbox_root / "source",
+    )
+    preflight_manifest, preflight_records = write_synthetic_preflight_inputs(
+        task, frozen, sandbox_root / "preflight-input",
+    )
+    preflight_manifest_sha256 = _sha256(preflight_manifest)
+    # Preflight gives the trusted worker time to start, build and export, but
+    # its candidate.train call still receives exactly zero training seconds.
+    preflight_budget = TIME_BUDGET_SECONDS
+    preflight_config = {
+        "worktree_path": str(worktree),
+        "editable": editable,
+        "task": task,
+        "candidate_sha256": expected_sha,
+        "seed": seed,
+        "time_budget_seconds": preflight_budget,
+        "train_batch_size": 8,
+        "fit_manifest_path": str(preflight_manifest),
+        "fit_records_path": str(preflight_records),
+        "output_dir": str(sandbox_root / "preflight-output"),
+        "output_stem": "contract",
+    }
+    try:
+        preflight_result = run_sandboxed_candidate(
+            preflight_config,
+            preflight=True,
+            timeout=sandbox_worker_process_timeout(preflight_budget),
+            source_root=source_stage,
+        )
+        preflight = _validate_preflight_artifacts(
+            preflight_result, task, expected_sha, preflight_config,
+        )
+        image_id = sandbox_image_identity()
+        if image_id != preflight.get("sandbox_image_id"):
+            raise RuntimeError("candidate sandbox image changed after preflight")
+    except BaseException:
+        sandbox_temp.cleanup()
+        raise
+
+
     dataset_records = None if records is None else list(records)
     if records is None:
-        records = adapter.load_records(dataset_path)
+        if task == "syndrome":
+            records = adapter.load_records_verified(
+                dataset_path, frozen["dataset_sha256"]
+            )
+        else:
+            records = adapter.load_records(dataset_path)
     pool = adapter.pool_manifest(
         frozen, records,
         notes=f"source-level champion {commit[:8]} refit: selection pool train+dev",
     ).data
+    validate_manifest_contract(task, pool, selection_pool=True)
     champion_dir = out_dir / "champion"
     champion_dir.mkdir(parents=True, exist_ok=True)
     pool_path = champion_dir / "pool-manifest.json"
@@ -238,35 +635,18 @@ def refit_and_score(
         [r for r in records if r.subject_index in pool_rows]
     ))
 
-    # ---- pay BEFORE spawning: the unlock event is the grant of read access,
-    # not a successful read — a crashed worker has still consumed it. Count
-    # and append happen inside one exclusive critical section, so concurrent
-    # drivers cannot both slip under the budget (H-03).
-    ledger_file, max_unlocks = ledger_params(task)
-    ledger = global_ledger_path(worktree, task)
-    event = {
-        "event_id": uuid.uuid4().hex,
-        "event": "holdout_unlock_intent",
-        "task": task,
-        "unlocked_at": _iso(),
-        "champion_commit": commit,
-        "candidate_sha256": expected_sha,
-        "pool_manifest_sha256": pool["manifest_sha256"],
-        "selection_parent_manifest_sha256": frozen["manifest_sha256"],
-    }
-    _charge_unlock_event(ledger, event, max_unlocks=max_unlocks)
-
     config = {
         "worktree_path": str(worktree),
         "editable": editable,
         "task": task,
         "candidate_sha256": expected_sha,
         "git_commit": commit,
+        "sandbox_source_path": str(source_stage),
+        "candidate_preflight": preflight,
+        "data_parent_manifest_sha256": frozen["manifest_sha256"],
         "seed": seed,
         "time_budget_seconds": budget,
         "train_batch_size": 32,
-        "ledger_path": str(ledger),
-        "unlock_event_id": event["event_id"],
         "data": {
             "pool_manifest_path": str(pool_path),
             "pool_records_path": str(pool_records_path),
@@ -275,14 +655,68 @@ def refit_and_score(
     }
     config_path = out_dir / "finalize-worker-config.json"
     config_path.write_text(json.dumps(config, indent=2))
-    fitted = (spawn or _spawn_worker)(config, config_path)
-
+    try:
+        fitted = (spawn or _spawn_worker)(config, config_path)
+        fit_artifacts = _validate_fitted_artifacts(
+            fitted,
+            task=task,
+            editable=editable,
+            candidate_sha256=expected_sha,
+            commit=commit,
+            pool=pool,
+            output_dir=champion_dir,
+            preflight_config=preflight_config,
+        )
+    finally:
+        sandbox_temp.cleanup()
+    # Fit failure and malformed state_dict/architecture never spend an unlock.
+    # Bind again after the worker and before opening the ledger for append.
+    current_source = _read_regular_file_limited(
+        candidate_path,
+        max_bytes=MAX_CANDIDATE_SOURCE_BYTES,
+        label="candidate source",
+    )
+    if hashlib.sha256(current_source).hexdigest() != expected_sha:
+        raise RuntimeError("candidate changed during finalization; refusing unlock")
+    _assert_git_binding({
+        "worktree_path": str(worktree),
+        "editable": editable,
+        "git_commit": commit,
+    })
+    _assert_candidate_commit_binding(worktree, editable, commit, expected_sha)
+    event = {
+        "event_id": uuid.uuid4().hex,
+        "event": "holdout_unlock_intent",
+        "task": task,
+        "unlocked_at": _iso(),
+        "champion_commit": commit,
+        "candidate_sha256": expected_sha,
+        "candidate_preflight": {
+            **preflight,
+            "synthetic_manifest_sha256": preflight_manifest_sha256,
+        },
+        "fit_artifacts": fit_artifacts,
+        "pool_manifest_sha256": pool["manifest_sha256"],
+        "selection_parent_manifest_sha256": frozen["manifest_sha256"],
+    }
+    _charge_unlock_event(ledger, event, max_unlocks=max_unlocks)
     holdout_config = {
         "worktree_path": str(worktree),
         "task": task,
         "data": {
             "pool_manifest_path": str(pool_path),
             "frozen_manifest_path": str(manifest_path),
+        },
+        "unlock": {
+            "ledger_path": str(ledger),
+            "event_id": event["event_id"],
+            "task": task,
+            "candidate_sha256": expected_sha,
+            "champion_commit": commit,
+            "pool_manifest_sha256": pool["manifest_sha256"],
+            "selection_parent_manifest_sha256": frozen["manifest_sha256"],
+            "candidate_preflight": event["candidate_preflight"],
+            "fit_artifacts": fit_artifacts,
         },
         "out_dir": str(out_dir),
     }
@@ -345,7 +779,10 @@ def _spawn_worker(config: dict, config_path: Path) -> dict:
 def _spawn_holdout_evaluator(config: dict, request: dict) -> dict:
     """Score the holdout in an isolated evaluator subprocess (state_dict
     only, holdout rebuilt from the frozen parent manifest)."""
-    from research.spawn import bootstrap_command
+    from research.spawn import (
+        apply_evaluator_resource_limits,
+        bootstrap_command,
+    )
 
     worktree = config["worktree_path"]
     with tempfile.TemporaryDirectory(prefix="research-holdout-io-") as io_dir:
@@ -362,6 +799,7 @@ def _spawn_holdout_evaluator(config: dict, request: dict) -> dict:
             result = subprocess.run(
                 command, cwd=worktree, text=True, capture_output=True,
                 timeout=600.0, env=_child_env(),
+                preexec_fn=apply_evaluator_resource_limits,
             )
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError("holdout evaluator exceeded 600s") from exc
@@ -406,15 +844,20 @@ def _assert_git_binding(config: dict) -> str:
                 f"git {' '.join(args)} failed in {worktree}: "
                 f"{result.stderr.strip()[:200]}"
             )
-        return result.stdout.strip()
+        return result.stdout.rstrip("\r\n")
+
+    import re
 
     head = git("rev-parse", "HEAD")
     expected_commit = config.get("git_commit")
-    if expected_commit and head != expected_commit:
+    if (
+        not isinstance(expected_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", expected_commit) is None
+        or head != expected_commit
+    ):
         raise RuntimeError(
-            f"worktree HEAD {head[:12]}… is not the recorded commit "
-            f"{expected_commit[:12]}…; refusing to fit code from an "
-            "unrecorded tree state"
+            f"worktree HEAD {head[:12]}… is not the full recorded champion "
+            "commit; refusing to fit code from an unrecorded tree state"
         )
     # tracked-file drift is the threat: an uncommitted edit to any frozen
     # module would make the fitted code something no commit recorded.
@@ -434,99 +877,129 @@ def _assert_git_binding(config: dict) -> str:
 
 
 def _worker(config: dict, records=None) -> dict:
-    """Fit the champion on the pool (worker side). No holdout is read here:
-    this process's config carries no frozen-manifest path, no dataset path
-    and no holdout rows — the holdout is scored by the evaluator subprocess."""
-    from research.tasks import adapter_for
-    from research.train_worker import import_candidate
+    """Fit only the train+dev pool inside the candidate Docker sandbox.
 
-    adapter = adapter_for(config.get("task", "constitution"))
+    This worker does not receive the unlock ledger or any holdout path. The
+    driver charges only after this fit and the trusted artifact round-trip.
+    """
+    from research.spawn import run_sandboxed_candidate, sandbox_worker_process_timeout
+    from research.tasks import adapter_for, validate_manifest_contract
+    from research.train_worker import (
+        MAX_CANDIDATE_SOURCE_BYTES,
+        _read_regular_file_limited,
+    )
 
-    # the code↔SHA binding is checked BEFORE the agent-authored module is
-    # imported: what fits is provably what the record binds
-    candidate_path = Path(config["worktree_path"]) / config["editable"]
-    actual_sha = _sha256(candidate_path)
+    task = config.get("task", "constitution")
+    adapter = adapter_for(task)
+    source_root = Path(config["sandbox_source_path"]).resolve(strict=True)
+    parts = Path(config["editable"]).parts
+    if (
+        len(parts) != 3 or parts[0] != "src"
+        or any(part in ("", ".", "..") for part in parts)
+    ):
+        raise RuntimeError(f"invalid editable path {config['editable']!r}")
+    candidate_path = source_root.joinpath(*parts[1:])
+    if candidate_path.is_symlink() or not candidate_path.is_file():
+        raise RuntimeError("staged candidate source is missing or not a regular file")
+    candidate_source = _read_regular_file_limited(
+        candidate_path,
+        max_bytes=MAX_CANDIDATE_SOURCE_BYTES,
+        label="candidate source",
+    )
+    actual_sha = hashlib.sha256(candidate_source).hexdigest()
     expected_sha = config["candidate_sha256"]
     if actual_sha != expected_sha:
         raise RuntimeError(
-            f"candidate file {candidate_path} hashes to {actual_sha[:12]}… but "
-            f"the finalize record binds {expected_sha[:12]}…; refusing to fit "
-            "code that is not the recorded one"
+            f"staged candidate hashes to {actual_sha[:12]}… but the finalize "
+            f"record binds {expected_sha[:12]}…; refusing to run"
         )
     _assert_git_binding(config)
 
-    # ---- ledger re-check (the worker entry cannot be bypassed by invoking
-    # `python -m research.finalize` by hand): budget must not be exhausted
-    # and THIS run's intent event must already be recorded
-    ledger = Path(config["ledger_path"])
-    _, max_unlocks = ledger_params(config.get("task", "constitution"))
-    _assert_worker_budget(ledger, max_unlocks=max_unlocks)
-    if not ledger_contains(ledger, config["unlock_event_id"]):
+    pool = adapter.load_manifest(config["data"]["pool_manifest_path"])
+    validate_manifest_contract(task, pool, selection_pool=True)
+    if pool["split"]["holdout"] or pool["split"]["dev"]:
         raise RuntimeError(
-            f"unlock intent event {config['unlock_event_id'][:8]}… is not in "
-            f"{ledger}; refusing to fit — the holdout read permission is "
-            "granted by the ledger, not by this worker's success"
+            "pool manifest must contain train rows only and no holdout/dev"
         )
-
+    parent_sha = config.get("data_parent_manifest_sha256")
+    if pool.get("selection_parent_manifest_sha256") != parent_sha:
+        raise RuntimeError("pool manifest is not bound to the selected parent manifest")
     if records is None:
         records = adapter.records_from_json(
             Path(config["data"]["pool_records_path"]).read_text()
         )
-    pool = adapter.load_manifest(config["data"]["pool_manifest_path"])
-    if pool["split"]["holdout"]:
-        raise RuntimeError(
-            "pool manifest still carries a holdout partition; refusing to fit "
-            "against data the pool contract must not contain"
-        )
-    seed = int(config["seed"])
-    budget = float(config["time_budget_seconds"])
     pool_rows = set(pool["subject_row_by_id"].values())
-    leaked = sorted({r.subject_index for r in records} - pool_rows)
+    leaked = sorted({record.subject_index for record in records} - pool_rows)
     if leaked:
         raise RuntimeError(
             f"pool records contain rows outside the pool manifest: {leaked[:3]} "
             "— refusing to fit on data the pool contract did not trim"
         )
-    import torch
 
-    from research.model_export import save_eval_model
-
-    torch.manual_seed(seed)  # before training_fold_data and build_model (H-06)
-    fold = adapter.training_fold_data(pool, records, config)
-    started = time.monotonic()
-    candidate = import_candidate(config)
-    model = candidate.build_model(fold)
-    candidate.train(model, fold, budget, seed)
-    fit_seconds = round(time.monotonic() - started, 2)
-
-    saved = save_eval_model(
-        model, Path(config["out_dir"]) / "champion", "weights"
-    )
+    pool_records_path = config["data"]["pool_records_path"]
+    temp_records = None
+    injected_records = records is not None
+    if injected_records:
+        temp_records = tempfile.TemporaryDirectory(prefix="research-pool-input-")
+        pool_records_path = str(Path(temp_records.name) / "pool-records.json")
+        Path(pool_records_path).write_text(adapter.records_to_json(records))
+    budget = float(config["time_budget_seconds"])
+    train_config = {
+        "worktree_path": str(config["worktree_path"]),
+        "editable": config["editable"],
+        "task": task,
+        "candidate_sha256": actual_sha,
+        "seed": int(config["seed"]),
+        "time_budget_seconds": budget,
+        "train_batch_size": int(config.get("train_batch_size", 32)),
+        "fit_manifest_path": config["data"]["pool_manifest_path"],
+        "fit_records_path": pool_records_path,
+        "output_dir": str(Path(config["out_dir"]) / "champion"),
+        "output_stem": "weights",
+    }
+    try:
+        fitted = run_sandboxed_candidate(
+            train_config,
+            timeout=sandbox_worker_process_timeout(budget),
+            source_root=source_root,
+            expected_image_id=config["candidate_preflight"]["sandbox_image_id"],
+        )
+    finally:
+        if temp_records is not None:
+            temp_records.cleanup()
+    worktree_commit = _assert_git_binding(config)
     finalize = {
         "candidate_file": config["editable"],
         "candidate_sha256": actual_sha,
-        "worktree_commit": _assert_git_binding(config),
+        "worktree_commit": worktree_commit,
         "git_commit": config["git_commit"],
         "pool_manifest_sha256": pool["manifest_sha256"],
         "selection_parent_manifest_sha256": pool["selection_parent_manifest_sha256"],
         "refit_partition": "train+dev",
         "refit_rows": len(pool["split"]["train"]),
-        "seed": seed,
+        "seed": int(config["seed"]),
         "time_budget_seconds": budget,
-        "fit_seconds": fit_seconds,
-        "input_spec_version": fold.input_spec.version,
-        **saved,
+        "fit_seconds": fitted["fit_seconds"],
+        "input_spec_version": fitted["input_spec_version"],
+        "candidate_output": fitted["candidate_output"],
+        "sandbox_image_id": fitted["sandbox_image_id"],
+        "weights_sha256": fitted["weights_sha256"],
+        "architecture_sha256": fitted["architecture_sha256"],
     }
     champion_dir = Path(config["out_dir"]) / "champion"
+    finalize.update({
+        "weights_path": fitted["weights_path"],
+        "architecture_path": fitted["architecture_path"],
+    })
     (champion_dir / "finalize.json").write_text(json.dumps(finalize, indent=2))
-    return {"finalize": finalize, **saved}
+    return {"finalize": finalize, **fitted}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="research.finalize")
     parser.add_argument("--config", required=True,
-                        help="JSON written by the driver: worktree, editable, "
-                             "candidate SHA, ledger binding, data paths")
+                        help="JSON written by the trusted driver: worktree, "
+                             "editable, candidate SHA, and trimmed pool paths")
     args = parser.parse_args(argv)
     config = json.loads(Path(args.config).read_text())
     try:

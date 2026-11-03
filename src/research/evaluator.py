@@ -35,29 +35,225 @@ import traceback
 from pathlib import Path
 
 
-def _sha256(path: str | Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def _read_regular_file_no_follow(path: str | Path, label: str) -> bytes:
+    """Read a regular file through a checked, no-follow descriptor."""
+    import os
+    import stat
+
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise OSError("O_NOFOLLOW is required for selection artifact reads")
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError(f"{label} must be a regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return stream.read()
+    finally:
+        os.close(descriptor)
 
 
-def integrity_snapshot(config: dict) -> dict:
-    """Hash every input the trainer could tamper with during train()."""
-    snapshot = {
-        "manifest_sha256": _sha256(config["data"]["manifest_path"]),
-        "dataset_sha256": _sha256(config["data"]["dataset_path"]),
+def read_verified_dataset_bytes(
+    path: str | Path, expected_sha256: str, label: str = "dataset",
+) -> bytes:
+    """Read the exact regular-file bytes bound by a frozen manifest."""
+    if (
+        not isinstance(expected_sha256, str)
+        or len(expected_sha256) != 64
+        or any(char not in "0123456789abcdef" for char in expected_sha256)
+    ):
+        raise ValueError(f"{label} manifest SHA-256 is malformed")
+    payload = _read_regular_file_no_follow(path, label)
+    actual_sha256 = hashlib.sha256(payload).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"{label} SHA-256 does not match frozen manifest dataset_sha256"
+        )
+    return payload
+
+
+def _validate_selection_manifest(task: str, manifest: dict) -> None:
+    from research.tasks import validate_manifest_contract
+
+    validate_manifest_contract(task, manifest, selection_pool=True)
+    if manifest["split"]["holdout"] != []:
+        raise ValueError("selection manifest must have an empty holdout partition")
+    if task != "syndrome":
+        return
+
+    row_map = manifest["subject_row_by_id"]
+    subject_users = manifest.get("subject_user_by_id")
+    user_partitions = manifest.get("user_partition_by_id")
+    user_strata = manifest.get("user_stratum_by_id")
+    if not all(
+        isinstance(value, dict)
+        for value in (subject_users, user_partitions, user_strata)
+    ):
+        raise ValueError("selection manifest lacks frozen pool user metadata")
+    if set(subject_users) != set(row_map):
+        raise ValueError("selection subject-user mapping does not match selection rows")
+    if set(user_partitions) != set(user_strata):
+        raise ValueError("selection user partitions and strata have different users")
+    frozen_users = set(user_partitions)
+    present_users = set(subject_users.values())
+    if not present_users <= frozen_users:
+        raise ValueError("selection rows reference an unfrozen user")
+    if any(
+        not isinstance(user_id, str) or not user_id for user_id in frozen_users
+    ):
+        raise ValueError("selection manifest contains an invalid frozen user")
+    if any(
+        partition not in {"train", "dev"}
+        for partition in user_partitions.values()
+    ):
+        raise ValueError("selection user metadata must not contain holdout users")
+    if any(
+        not isinstance(stratum, str) or not stratum
+        for stratum in user_strata.values()
+    ):
+        raise ValueError("selection manifest contains an invalid frozen user stratum")
+    for partition in ("train", "dev"):
+        if any(
+            user_partitions[subject_users[subject_id]] != partition
+            for subject_id in manifest["split"][partition]
+        ):
+            raise ValueError(
+                f"selection user partitions disagree with split {partition!r}"
+            )
+    for name in (
+        "selection_parent_manifest_sha256",
+        "selection_parent_dataset_sha256",
+    ):
+        value = manifest.get(name)
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(char not in "0123456789abcdef" for char in value)
+        ):
+            raise ValueError(f"selection manifest lacks a valid {name}")
+
+
+def _decode_selection_manifest(payload: bytes, task: str) -> dict:
+    manifest = json.loads(payload.decode("utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("selection manifest must be a JSON object")
+    expected = manifest.pop("manifest_sha256", None)
+    actual = hashlib.sha256(
+        json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    if expected != actual:
+        raise ValueError(
+            f"manifest hash mismatch: expected {expected}, computed {actual}; refusing"
+        )
+    manifest["manifest_sha256"] = expected
+    _validate_selection_manifest(task, manifest)
+    return manifest
+
+
+def _validate_selection_records(task: str, manifest: dict, records: list) -> None:
+    expected_rows = set(manifest["subject_row_by_id"].values())
+    actual_rows = [record.subject_index for record in records]
+    if len(actual_rows) != len(set(actual_rows)):
+        raise ValueError("selection dataset contains duplicate subject rows")
+    if set(actual_rows) != expected_rows:
+        raise ValueError("selection dataset rows do not match the selection manifest")
+    if task == "syndrome":
+        subject_by_row = {
+            row: subject_id
+            for subject_id, row in manifest["subject_row_by_id"].items()
+        }
+        user_by_subject = manifest["subject_user_by_id"]
+        for record in records:
+            subject_id = subject_by_row[record.subject_index]
+            if record.user_id != user_by_subject[subject_id]:
+                raise ValueError("selection record user does not match manifest")
+
+
+def load_selection_inputs(
+    config: dict,
+    *,
+    adapter=None,
+    records_override=None,
+    parse_records: bool = True,
+    manifest_validator=None,
+) -> tuple[dict, list | None, dict]:
+    """Validate selection manifest bytes before reading exact selection data bytes."""
+    from research.tasks import adapter_for
+
+    task = config.get("task", "constitution")
+    adapter = adapter or adapter_for(task)
+    data = config["data"]
+    manifest_bytes = _read_regular_file_no_follow(
+        data["manifest_path"], "selection manifest"
+    )
+    manifest = _decode_selection_manifest(manifest_bytes, task)
+    if manifest_validator is not None:
+        manifest_validator(manifest)
+
+    dataset_bytes = read_verified_dataset_bytes(
+        data["dataset_path"], manifest["dataset_sha256"], "selection dataset"
+    )
+    dataset_sha256 = hashlib.sha256(dataset_bytes).hexdigest()
+
+    records = None
+    if parse_records:
+        if records_override is None:
+            records = adapter.records_from_json(dataset_bytes.decode("utf-8"))
+        else:
+            records = records_override
+            serialized = adapter.records_to_json(records).encode("utf-8")
+            if hashlib.sha256(serialized).hexdigest() != dataset_sha256:
+                raise ValueError("provided records do not match selection dataset bytes")
+        _validate_selection_records(task, manifest, records)
+
+    hashes = {
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "dataset_sha256": dataset_sha256,
     }
+    return manifest, records, hashes
+
+
+def _sha256(path: str | Path) -> str:
+    return hashlib.sha256(_read_regular_file_no_follow(path, str(path))).hexdigest()
+
+
+def integrity_snapshot(config: dict, *, input_hashes: dict | None = None) -> dict:
+    """Hash validated selection artifacts and the editable candidate source."""
+    if input_hashes is None:
+        _manifest, _records, input_hashes = load_selection_inputs(
+            config, parse_records=False
+        )
+    snapshot = dict(input_hashes)
     worktree = config.get("worktree_path")
     if worktree:
-        editable = config.get("editable", "src/research/candidate.py")
-        candidate_path = Path(worktree) / editable
-        if candidate_path.exists():
-            snapshot["candidate_sha256"] = _sha256(candidate_path)
+        editable = config.get("editable")
+        if editable is None:
+            from research.tasks import adapter_for
+
+            editable = adapter_for(config.get("task", "constitution")).default_editable
+            config = {**config, "editable": editable}
+        from research.train_worker import (
+            MAX_CANDIDATE_SOURCE_BYTES,
+            _candidate_path,
+            _read_regular_file_limited,
+        )
+
+        source = _read_regular_file_limited(
+            _candidate_path(config),
+            max_bytes=MAX_CANDIDATE_SOURCE_BYTES,
+            label="candidate source",
+        )
+        snapshot["candidate_sha256"] = hashlib.sha256(source).hexdigest()
     return snapshot
 
 
-def assert_integrity(config: dict, request: dict) -> None:
-    """Refuse to score if the training inputs changed after training began."""
+def assert_integrity(
+    config: dict, request: dict, *, input_hashes: dict | None = None
+) -> None:
+    """Refuse to score if validated training inputs changed after training."""
     recorded = request.get("integrity") or {}
-    actual = integrity_snapshot(config)
+    actual = integrity_snapshot(config, input_hashes=input_hashes)
     changed = sorted(
         k for k in set(recorded) | set(actual)
         if recorded.get(k) != actual.get(k)
@@ -121,60 +317,81 @@ def install_candidate_import_guard(candidate_path: Path | None = None) -> None:
     sys.addaudithook(_hook)
 
 
-def _load_model(request: dict):
+def _load_model(request: dict, *, task: str):
     from research.model_export import load_eval_model
 
     assert_weights_unmodified(request)
-    return load_eval_model(request["weights_path"], request["architecture_path"])
+    return load_eval_model(
+        request["weights_path"], request["architecture_path"], task=task
+    )
 
 
 def _editable_path(config: dict) -> Path | None:
-    """The candidate file this run's config binds, when the config carries it."""
+    """The task-specific candidate file bound by this run's config."""
     worktree = config.get("worktree_path")
     editable = config.get("editable")
+    if worktree and editable is None:
+        from research.tasks import adapter_for
+
+        editable = adapter_for(config.get("task", "constitution")).default_editable
     if worktree and editable:
         return Path(worktree) / editable
     return None
 
 
 def score_fold(config: dict, request: dict, records=None) -> dict:
-    """Rebuild the fold from the frozen manifest and score the saved model.
-
-    The training subprocess's in-memory objects are never consulted: the fold
-    is rebuilt (deterministic — identical config yields an identical fold
-    manifest, scaler and batches), and the model is rebuilt from state_dict +
-    the frozen architecture description. `records` exists so tests can inject
-    a parsed fixture. The task's adapter (config["task"]) owns the fold and
-    scoring seams."""
+    """Rebuild and score one fold from validated selection-only inputs."""
     from research.tasks import adapter_for
 
-    adapter = adapter_for(config.get("task", "constitution"))
-    assert_integrity(config, request)
-    if records is None:
-        records = adapter.load_eval_records(config)
-    fold_data, fold_manifest = adapter.build_fold(
-        config, config["data"]["manifest_path"], config["data"]["dataset_path"],
-        request["fold"], request["folds"], request["repeat"], records=records,
+    task = config.get("task", "constitution")
+    adapter = adapter_for(task)
+    if config.get("editable") is None:
+        config = {**config, "editable": adapter.default_editable}
+    manifest, loaded_records, input_hashes = load_selection_inputs(
+        config,
+        adapter=adapter,
+        records_override=records,
     )
-    model = _load_model(request)
+    assert_integrity(config, request, input_hashes=input_hashes)
+    records = loaded_records
+    fold_data, fold_manifest = adapter.build_fold(
+        config,
+        manifest,
+        request["fold"],
+        request["folds"],
+        request["repeat"],
+        records=records,
+    )
+    model = _load_model(request, task=task)
     install_candidate_import_guard(_editable_path(config))
     report = adapter.evaluate_model(model, fold_manifest, fold_data.dev, "dev")
     return {"primary_value": float(report.primary_value)}
-
-
 def score_holdout(config: dict, request: dict, records=None) -> dict:
-    """The single holdout read of a finalize run, in this isolated process.
+    """Validate the charged event before materializing any holdout records."""
+    from research.finalize import verify_holdout_unlock
+    from research.tasks import adapter_for, validate_manifest_contract
 
-    The model is loaded state_dict-only and handed to the task's adapter,
-    which rebuilds the holdout view from the frozen parent manifest and
-    computes the task's report and baselines under that view. Baselines are
-    computed in the same isolated process, under the same view."""
-    from research.tasks import adapter_for
-
-    adapter = adapter_for(config.get("task", "constitution"))
-    if records is None:
+    task = config.get("task", "constitution")
+    adapter = adapter_for(task)
+    if config.get("editable") is None:
+        config = {**config, "editable": adapter.default_editable}
+    frozen = adapter.load_manifest(config["data"]["frozen_manifest_path"])
+    pool = adapter.load_manifest(config["data"]["pool_manifest_path"])
+    validate_manifest_contract(task, frozen)
+    validate_manifest_contract(task, pool, selection_pool=True)
+    verify_holdout_unlock(config, request, pool, frozen)
+    if task == "syndrome":
+        if records is not None or config["data"].get("records_path"):
+            raise ValueError(
+                "syndrome holdout requires records loaded from the dataset bytes "
+                "bound to the frozen manifest"
+            )
+        records = adapter.load_records_verified(
+            config["data"]["dataset_path"], frozen["dataset_sha256"]
+        )
+    elif records is None:
         records = adapter.load_eval_records(config)
-    model = _load_model(request)
+    model = _load_model(request, task=task)
     install_candidate_import_guard(_editable_path(config))
     return adapter.score_holdout(config, request, records, model)
 

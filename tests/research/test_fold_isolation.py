@@ -20,8 +20,10 @@ import random
 import pytest
 
 from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord
-from data.real_split import build_real_manifest, fold_manifest
-from research.frozen import build_fold
+from data.real_split import build_real_manifest, fold_manifest, pool_manifest
+from data.tcm_sd import subject_partitions
+from research.frozen import build_fold, selection_fold_ids
+from research.task_sd import FEATURE_GROUP, SyndromeRecord, build_syndrome_manifest
 
 pytestmark = pytest.mark.synthetic
 
@@ -55,6 +57,60 @@ def _manifest_path(tmp_path, records):
     return path, base
 
 
+def test_constitution_selection_pool_preserves_frozen_split_seed():
+    records = fake_records()
+    base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
+    selection = pool_manifest(base, records).data
+    assert selection["split"]["seed"] == base["split"]["seed"]
+
+
+def test_selection_fold_keeps_repeat_cases_of_each_user_together():
+    records = [
+        SyndromeRecord(
+            subject_index=i,
+            user_id=f"su-{i:04d}",
+            features={FEATURE_GROUP: [float(i % 7), float((i + 1) % 7)]},
+            label=i % 5,
+            norm_syndrome="y0",
+            provenance={"source": "test-fixture"},
+        )
+        for i in range(1, 61)
+    ]
+    initial_parts = subject_partitions(records)
+    shared_user = sorted(initial_parts["train"] | initial_parts["dev"])[0]
+    source = next(record for record in records if record.user_id == shared_user)
+    records.append(
+        SyndromeRecord(
+            subject_index=61,
+            user_id=shared_user,
+            features=dict(source.features),
+            label=source.label,
+            norm_syndrome=source.norm_syndrome,
+            provenance={"source": "test-fixture", "repeat": True},
+        )
+    )
+    frozen_parts = subject_partitions(records)
+    manifest = build_syndrome_manifest(
+        records,
+        dataset_sha256="b" * 64,
+        n_classes=5,
+        label_taxonomy_version="tcm-sd-fold-test-v0",
+        label_tier="SMOKE_ONLY",
+        frozen_user_partitions=frozen_parts,
+    ).data
+
+    train_ids, dev_ids = selection_fold_ids(manifest, fold=1, folds=5, repeat=0)
+    shared_ids = {
+        subject_id
+        for subject_id, user_id in manifest["subject_user_by_id"].items()
+        if user_id == shared_user
+    }
+
+    assert len(shared_ids) == 2
+    assert shared_ids <= set(train_ids) or shared_ids <= set(dev_ids)
+    assert not (shared_ids & set(train_ids) and shared_ids & set(dev_ids))
+
+
 def test_build_fold_hands_the_candidate_only_fold_records(tmp_path):
     records = fake_records()
     path, base = _manifest_path(tmp_path, records)
@@ -63,8 +119,13 @@ def test_build_fold_hands_the_candidate_only_fold_records(tmp_path):
         "train_provider": {"batch_size": 8},
         "trainer": {"seed": 0},
     }
+    selection = pool_manifest(base, records).data
+    selection_rows = set(selection["subject_row_by_id"].values())
+    selection_records = [
+        record for record in records if record.subject_index in selection_rows
+    ]
     fold_data, fold = build_fold(
-        config, str(path), "unused", fold=0, folds=4, repeat=0, records=records
+        config, selection, fold=0, folds=4, repeat=0, records=selection_records
     )
     fold_rows = set(fold["subject_row_by_id"].values())
     held = set(fold_data.train.records_by_row) | set(fold_data.dev.records_by_row)
@@ -83,8 +144,13 @@ def test_fold_manifest_does_not_leak_holdout_identity(tmp_path):
         "train_provider": {"batch_size": 8},
         "trainer": {"seed": 0},
     }
+    selection = pool_manifest(base, records).data
+    selection_rows = set(selection["subject_row_by_id"].values())
+    selection_records = [
+        record for record in records if record.subject_index in selection_rows
+    ]
     _, fold = build_fold(
-        config, str(path), "unused", fold=1, folds=4, repeat=0, records=records
+        config, selection, fold=1, folds=4, repeat=0, records=selection_records
     )
     assert fold["split"]["holdout"] == []
     expected = set(fold["split"]["train"]) | set(fold["split"]["dev"])

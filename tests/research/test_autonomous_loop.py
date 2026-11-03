@@ -43,7 +43,7 @@ from tests.research.test_doctor import ToyAdapter, build
 
 pytestmark = pytest.mark.synthetic
 
-EDITABLE = "src/research/candidate.py"
+EDITABLE = "src/research/candidate_toy.py"
 
 
 def _git_repo(tmp_path: Path) -> Path:
@@ -54,11 +54,22 @@ def _git_repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
     target = repo / EDITABLE
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Three stable lines, so a replacement hunk can carry context on BOTH sides.
-    # A hunk with no trailing context asserts "the file ends here", which is why
-    # an append-only patch applies to a one-line file exactly once and then
-    # fails — the same trap a real proposer has to avoid.
-    target.write_text("# config\nWIDTH = 32\n# end\n")
+    # The fixture must satisfy the guard's candidate contract (#59 refuses a file
+    # that does not define build_model/train), and keep a stable 3-line shape so a
+    # replacement hunk can carry context on BOTH sides. A hunk with no trailing
+    # context asserts "the file ends here", which is why an append-only patch
+    # applies to a one-line file exactly once and then fails — the same trap a real
+    # proposer has to avoid.
+    target.write_text(
+        '"""Test candidate: satisfies the guard contract."""\n'
+        "WIDTH = 32\n"
+        "\n"
+        "def build_model(fold):\n"
+        "    raise NotImplementedError\n"
+        "\n"
+        "def train(model, fold, budget_seconds=1.0, seed=0):\n"
+        "    return None\n"
+    )
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
     return repo
@@ -95,10 +106,10 @@ def _width_patch(repo: Path, value: int) -> str:
         f"--- a/{EDITABLE}\n"
         f"+++ b/{EDITABLE}\n"
         "@@ -1,3 +1,3 @@\n"
-        " # config\n"
+        ' \"\"\"Test candidate: satisfies the guard contract.\"\"\"\n'
         f"-WIDTH = {match.group(1)}\n"
         f"+WIDTH = {value}\n"
-        " # end\n"
+        " \n"
     )
 
 
@@ -111,6 +122,15 @@ class FakeLoop(SourceResearchLoop):
         self.runner_calls: list[Path] = []
 
     def _run_runner(self, config_path: Path, on_progress=None, on_spawn=None) -> dict:
+        """Mirror the REAL runner's result contract.
+
+        #59 made run_round consume `uncertainty_semantics` (and record the round
+        as a crash when the key is missing), so a stub that returns only the old
+        fields silently turns every round into REVERT. The constant is imported
+        rather than copied, so a rename cannot drift the stub away from the engine.
+        """
+        from research.runner import CV_UNCERTAINTY_SEMANTICS
+
         self.runner_calls.append(config_path)
         value = self._scores.pop(0) if self._scores else 0.5
         # the real runner prints one progress line per fold; this stub does the
@@ -123,8 +143,10 @@ class FakeLoop(SourceResearchLoop):
                              "folds": self.folds, "score": value, "seconds": 1.0})
         return {
             "primary_value": value, "primary_std": 0.02, "primary_sem": 0.01,
+            "uncertainty_semantics": CV_UNCERTAINTY_SEMANTICS,
             "folds": [value], "n_folds": 1, "overran": False,
-            "fold_seconds": [1.0], "budget_seconds": 1.0,
+            "fold_seconds": [1.0], "worker_compute_seconds": [1.0],
+            "budget_seconds": 1.0,
         }
 
 
@@ -234,15 +256,20 @@ def test_unavailable_agent_fails_closed(tmp_path):
 
 
 def test_operator_stop_ends_the_campaign_without_extra_rounds(tmp_path):
-    _repo, session, loop, ctx, *_ = _setup(tmp_path, scores=[0.3, 0.4, 0.5])
+    repo, session, loop, ctx, *_ = _setup(tmp_path, scores=[0.3, 0.4, 0.5])
 
     def stop_then_propose(state: dict) -> Hypothesis:
         session.request_stop("operator request")
         return Hypothesis(hypothesis="h", controlled_change="c",
                           expected_observation="e", patch=_patch("A = 1"))
 
-    proposer = DeterministicStubProposer(steps=[stub_step(_patch("A = 1"), "h", "c", "e"),
-                                               stop_then_propose])
+    # the fixture is the contract-compliant candidate now, so the first round must
+    # use the width patch (the old `_patch` context no longer exists in that file;
+    # a rejected round would train nothing and make this assertion vacuous)
+    proposer = DeterministicStubProposer(steps=[
+        state_aware_step(lambda state: _width_patch(repo, 64), "h", "c", "e"),
+        stop_then_propose,
+    ])
     summary = loop.run_autonomous(session, proposer, allow_stub=True,
                                   doctor_context=ctx, max_rounds=5)
     # round 0 ran; the stop requested while round 1's proposal was being made is

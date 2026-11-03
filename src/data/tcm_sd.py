@@ -25,6 +25,7 @@ LICENSE = "CC BY-NC-SA 4.0 (non-commercial research use only)"
 UPSTREAM_URL = "https://github.com/Borororo/ZY-BERT"
 
 RECORD_FILES = ("train.json", "dev.json", "test.json")
+DEVELOPMENT_RECORD_FILES = ("train.json", "dev.json")
 VOCAB_FILE = "syndrome_vocab.txt"
 KNOWLEDGE_FILE = "syndrome_knowledge.json"
 
@@ -115,15 +116,30 @@ def verify_tcm_sd_hashes(raw_dir: Path, names: tuple[str, ...] = RECORD_FILES) -
 
 def load_tcm_sd_records(raw_dir: Path) -> list[TcmSdRecord]:
     """Load all official-split records after hash verification (read-only).
-
     Records whose user_id is in EXCLUDED_LEAK_RECORDS are skipped at this
     boundary (R1 F2), so every consumer downstream sees the same cleaned
     stream; the raw files themselves stay untouched.
     """
+    return _load_tcm_sd_record_files(raw_dir, RECORD_FILES)
+
+
+def load_tcm_sd_development_records(raw_dir: Path) -> list[TcmSdRecord]:
+    """Load only train/dev records for development evaluation.
+
+    This entry point deliberately excludes the consumed final test split:
+    it verifies and opens exactly DEVELOPMENT_RECORD_FILES.
+    """
+    return _load_tcm_sd_record_files(raw_dir, DEVELOPMENT_RECORD_FILES)
+
+
+def _load_tcm_sd_record_files(
+    raw_dir: Path, record_files: tuple[str, ...],
+) -> list[TcmSdRecord]:
+    """Parse only the explicitly named, hash-verified record files."""
     raw_dir = Path(raw_dir)
-    verify_tcm_sd_hashes(raw_dir, RECORD_FILES)
+    verify_tcm_sd_hashes(raw_dir, record_files)
     records: list[TcmSdRecord] = []
-    for name in RECORD_FILES:
+    for name in record_files:
         with (raw_dir / name).open(encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -146,7 +162,6 @@ def load_tcm_sd_records(raw_dir: Path) -> list[TcmSdRecord]:
                     )
                 )
     return records
-
 
 def load_syndrome_vocab(raw_dir: Path) -> list[str]:
     """Load the frozen 148-syndrome taxonomy, order preserved."""
@@ -182,6 +197,17 @@ def load_syndrome_knowledge(raw_dir: Path) -> dict[str, SyndromeKnowledge]:
     return knowledge
 
 
+def user_majority_strata(records: list[TcmSdRecord]) -> dict[str, str]:
+    """Return each user’s majority syndrome with a lexical tie-break."""
+    counts: dict[str, Counter[str]] = {}
+    for record in records:
+        counts.setdefault(record.user_id, Counter())[record.norm_syndrome] += 1
+    return {
+        user_id: min((-count, label) for label, count in label_counts.items())[1]
+        for user_id, label_counts in counts.items()
+    }
+
+
 def subject_partitions(
     records: list[TcmSdRecord], seed: int = SPLIT_SEED
 ) -> dict[str, frozenset[str]]:
@@ -194,12 +220,8 @@ def subject_partitions(
     shuffle, targeting 0.82/0.10/0.08 by user count. Same records + same
     seed => same partitions.
     """
-    counts: dict[str, Counter[str]] = {}
-    for r in records:
-        counts.setdefault(r.user_id, Counter())[r.norm_syndrome] += 1
     strata: dict[str, list[str]] = {}
-    for user_id, label_counts in counts.items():
-        majority = min((-n, label) for label, n in label_counts.items())[1]
+    for user_id, majority in user_majority_strata(records).items():
         strata.setdefault(majority, []).append(user_id)
 
     parts: dict[str, list[str]] = {"train": [], "dev": [], "test": []}
@@ -216,6 +238,27 @@ def subject_partitions(
         "dev": frozenset(parts["dev"]),
         "test": frozenset(parts["test"]),
     }
+
+
+def subject_partition_sha256(partitions: dict[str, frozenset[str]]) -> str:
+    """Hash the complete, canonical user-to-partition assignment."""
+    expected = {"train", "dev", "test"}
+    if set(partitions) != expected:
+        raise ValueError(f"partitions must have keys {sorted(expected)}")
+    assignment: dict[str, str] = {}
+    for partition, users in partitions.items():
+        for user_id in users:
+            if not user_id:
+                raise ValueError("partition contains an empty user_id")
+            if user_id in assignment:
+                raise ValueError(
+                    f"user_id {user_id!r} appears in multiple partitions"
+                )
+            assignment[user_id] = partition
+    payload = json.dumps(
+        sorted(assignment.items()), ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def build_clinical_text(record: TcmSdRecord) -> str:

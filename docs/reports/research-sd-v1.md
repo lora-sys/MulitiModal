@@ -1,5 +1,12 @@
 # #53 阶段 1 源码级 AutoResearch 战役报告（sd-v1）
 
+> **Protocol comparability: NOT_COMPARABLE_TO_PROTOCOL_V2.** The scores in this
+> sd-v1 report are historical results under its earlier fold and observed-class
+> metric semantics. They are not a v2 baseline and must not be compared with
+> v2 scores. The Issue #56 protocol-v2 development/CV evaluation is complete, with the
+> synthetic regression suite passing with skips. The full host Docker worker
+> chain remains **NOT_RUN**; see docs/reports/issue-56-protocol-v2.md.
+
 日期：2026-11-02。分支 `feature/tcm-sd-syndrome-v1`。任务：TCM-SD 中文证候倾向
 （148 类单标签，短文本场景为主口径）。引擎：`src/research/`（任务参数化后），
 worktree `/home/lora/workspace/ar-sd`，分支 `autoresearch/sd-v1`。

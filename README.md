@@ -11,6 +11,7 @@ Phase 1 工程闭环（#51/#48/#39/#49/#40/#44/#45）+ 证据注册表与 GO 门
 - 分支：`feature/clean-slate`（空起点；旧历史仅见 GitHub commit `9fc5087d`，已删除，不作依赖）；中医证候线在 `feature/tcm-sd-syndrome-v1`
 - 主 Epic：#22（双模型 + AutoResearch/RSI V1）；证候 Epic：#52（#53 阶段 1 已交付，#54 阶段 2 Blocked）
 - **证候线交付（2026-11-02，#53 阶段 1）**：TCM-SD 54,152 病例/52,295 用户/148 证型受试者级重划分 + 按场景基准评测集去重；AutoResearch 9 轮裁决出线性头冠军（0.3260 选择池），holdout 解锁 1/1：神经冠军 0.3324 vs 冻结 TF-IDF+LR **0.3732** vs Dummy 0.0020——**神经未胜过经典线性基线**（与体质线结论模式一致）；推理接口（OK/UNCERTAIN/ABSTAIN/OUT_OF_DOMAIN）+ realtime_feedback 知识参考接口交付，外部泛化 NOT_COMPUTABLE（对齐覆盖不足），GO_RESEARCH_CLAIMS 未放行。详见 [docs/reports/research-sd-v1.md](docs/reports/research-sd-v1.md)、[可视化仪表盘](docs/reports/sd-v1-dashboard.html) 与 [模型卡](docs/models/tcm-sd-syndrome-v1-card.md)
+- **#56 sandbox limits**: per-run artifacts are capped at 96 MiB and container output at 128 MiB; a host-wide quota across completed run directories remains an operator setting. See [the resource boundary report](docs/reports/issue-56-sandbox-boundary.md).
 - P0 优先：#48 双模型 Neural Core、#49 训练/评估基础设施；#50 中医模型先行真实训练
 - 一手需求源：`docs/source/pre-massage-fatigue-prediction-framework.pdf`（研究设计草稿，含 `[value]` 占位符；SHA-256 `29727dace…d781`）
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import stat
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -24,6 +25,24 @@ from syndrome.labels import LabelSpace
 from syndrome.metrics import macro_f1
 
 MODEL_VERSION = "tcm-sd-syndrome-bert-v1"
+TOKENIZER_ASSET_NAMES = (
+    "added_tokens.json",
+    "merges.txt",
+    "sentencepiece.bpe.model",
+    "sentencepiece.model",
+    "special_tokens_map.json",
+    "spiece.model",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "tokenizer.model",
+    "vocab.json",
+    "vocab.txt",
+)
+PREPROCESSING_CONTRACT = {
+    "id": "bert-fixed-padding-truncation-v1",
+    "padding": "max_length",
+    "truncation": True,
+}
 
 
 @dataclass
@@ -59,6 +78,66 @@ def _artifact_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _label_space_binding(label_space: LabelSpace) -> dict:
+    labels = list(label_space.labels)
+    label_ids = [
+        {"id": index, "label": label}
+        for index, label in enumerate(labels)
+    ]
+    material = json.dumps(
+        {"taxonomy_id": label_space.taxonomy_id, "label_ids": label_ids},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return {
+        "taxonomy_id": label_space.taxonomy_id,
+        "labels": labels,
+        "label_ids": label_ids,
+        "label_space_sha256": hashlib.sha256(material).hexdigest(),
+    }
+
+
+def _canonical_sha256(value: object) -> str:
+    payload = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _tokenizer_assets_sha256(directory: Path) -> str:
+    assets: dict[str, str] = {}
+    for name in TOKENIZER_ASSET_NAMES:
+        path = directory / name
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"tokenizer asset is not a regular file: {name}")
+        assets[name] = _artifact_sha256(path)
+    if not assets:
+        raise ValueError("saved tokenizer assets are unavailable")
+    return _canonical_sha256(assets)
+
+
+def _preprocessing_binding(directory: Path, max_len: int) -> dict[str, str | int]:
+    if type(max_len) is not int or max_len < 1:
+        raise ValueError("preprocessing max_len must be a positive integer")
+    tokenizer_sha256 = _tokenizer_assets_sha256(Path(directory))
+    identity = {
+        "contract": PREPROCESSING_CONTRACT,
+        "max_len": max_len,
+        "tokenizer_assets_sha256": tokenizer_sha256,
+    }
+    return {
+        "max_len": max_len,
+        "tokenizer_assets_sha256": tokenizer_sha256,
+        "preprocessing_contract": PREPROCESSING_CONTRACT["id"],
+        "preprocessing_sha256": _canonical_sha256(identity),
+    }
+
+
 def _pick_device(device: str | None) -> str:
     import torch
 
@@ -68,7 +147,9 @@ def _pick_device(device: str | None) -> str:
 
 
 class BertSyndromeClassifier:
-    """LabelSpace + 本地 bert-base-chinese 的封装。"""
+    """LabelSpace + 本地 bert-base-chinese 的封装."""
+
+    score_semantics = "raw softmax probability; NOT calibrated"
 
     def __init__(self, label_space: LabelSpace, model_path: str, seed: int = 20261101) -> None:
         import torch
@@ -89,8 +170,8 @@ class BertSyndromeClassifier:
     def _encode(self, texts: list[str], max_len: int):
         return self.tokenizer(
             texts,
-            padding="max_length",
-            truncation=True,
+            padding=PREPROCESSING_CONTRACT["padding"],
+            truncation=PREPROCESSING_CONTRACT["truncation"],
             max_length=max_len,
             return_tensors="pt",
         )
@@ -112,8 +193,13 @@ class BertSyndromeClassifier:
 
         if len(train_texts) != len(train_labels) or len(dev_texts) != len(dev_labels):
             raise ValueError("texts/labels length mismatch")
+        if type(config.max_len) is not int or config.max_len < 1:
+            raise ValueError("max_len must be a positive integer")
+        self._fit_max_len = config.max_len
+        self._train_config = asdict(config)
         self._device = _pick_device(None)
         _seed_everything(config.seed)
+        self.seed = config.seed
 
         train_enc = self._encode(train_texts, config.max_len)
         train_ds = TensorDataset(
@@ -129,7 +215,6 @@ class BertSyndromeClassifier:
         dev_labels_t = torch.tensor(dev_labels, dtype=torch.long)
 
         self.model.to(self._device)
-        self._fit_max_len = config.max_len
         optimizer = torch.optim.AdamW(
             self.model.parameters(),
             lr=config.lr,
@@ -208,6 +293,16 @@ class BertSyndromeClassifier:
                 mask = attention_mask[start : start + batch_size].to(self._device)
                 logits = self.model(input_ids=ids, attention_mask=mask).logits
                 scores = torch.softmax(logits, dim=-1)
+                expected_shape = (len(ids), len(self.label_space))
+                if tuple(scores.shape) != expected_shape:
+                    raise ValueError(
+                        f"model probabilities must have shape {expected_shape}, "
+                        f"got {tuple(scores.shape)}"
+                    )
+                if not torch.isfinite(scores).all().item():
+                    raise ValueError("model probabilities must all be finite")
+                if torch.any((scores < 0.0) | (scores > 1.0)).item():
+                    raise ValueError("model probabilities must be within [0, 1]")
                 preds.append(scores.argmax(dim=-1).cpu())
                 all_scores.append(scores.cpu())
         scores = torch.cat(all_scores).numpy()
@@ -215,13 +310,14 @@ class BertSyndromeClassifier:
 
     def predict_proba(self, texts: list[str], batch_size: int | None = None) -> np.ndarray:
         cfg_batch = batch_size or 128
-        enc = self._encode(texts, self._max_len_or_default())
+        enc = self._encode(texts, self._require_fitted_max_len())
         _, scores = self._predict_tensors(enc["input_ids"], enc["attention_mask"], cfg_batch)
         return scores
-
-    def _max_len_or_default(self) -> int:
-        return getattr(self, "_fit_max_len", 256)
-
+    def _require_fitted_max_len(self) -> int:
+        max_len = getattr(self, "_fit_max_len", None)
+        if type(max_len) is not int or max_len < 1:
+            raise RuntimeError("fitted max_len is unavailable; refusing to default")
+        return max_len
     # ------------------------------------------------------------------ 持久化
 
     def save(
@@ -231,56 +327,145 @@ class BertSyndromeClassifier:
         history: list[dict] | None = None,
         provenance: dict | None = None,
     ) -> dict:
+        max_len = self._require_fitted_max_len()
+        if config is None:
+            saved_config = dict(getattr(self, "_train_config", {}))
+        else:
+            saved_config = asdict(config)
+            if saved_config.get("max_len") != max_len:
+                raise ValueError("save config max_len does not match fitted max_len")
+        saved_config["max_len"] = max_len
+        self._train_config = saved_config
+
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
+        model_config = getattr(self.model, "config", None)
+        if model_config is None:
+            raise ValueError("model config is required to bind frozen label IDs")
+        model_config.id2label = {
+            index: label for index, label in enumerate(self.label_space.labels)
+        }
+        model_config.label2id = {
+            label: index for index, label in enumerate(self.label_space.labels)
+        }
         self.model.save_pretrained(out)
         self.tokenizer.save_pretrained(out)
+        label_binding = _label_space_binding(self.label_space)
         with open(out / "label_space.json", "w", encoding="utf-8") as fh:
-            json.dump(
-                {
-                    "taxonomy_id": self.label_space.taxonomy_id,
-                    "labels": list(self.label_space.labels),
-                },
-                fh,
-                ensure_ascii=False,
-                indent=2,
-            )
-        if config is not None:
-            with open(out / "train_config.json", "w", encoding="utf-8") as fh:
-                json.dump(asdict(config), fh, ensure_ascii=False, indent=2)
+            json.dump(label_binding, fh, ensure_ascii=False, indent=2)
+        with open(out / "train_config.json", "w", encoding="utf-8") as fh:
+            json.dump(saved_config, fh, ensure_ascii=False, indent=2)
         if history is not None:
             with open(out / "history.json", "w", encoding="utf-8") as fh:
                 json.dump(history, fh, ensure_ascii=False, indent=2)
         if provenance is not None:
             with open(out / "provenance.json", "w", encoding="utf-8") as fh:
                 json.dump(provenance, fh, ensure_ascii=False, indent=2)
-
         weight_file = out / "model.safetensors"
         weight_sha = _artifact_sha256(weight_file) if weight_file.exists() else "NOT_AVAILABLE"
+        preprocessing = _preprocessing_binding(out, max_len)
         meta = {
             "model_version": MODEL_VERSION,
             "weight_sha256": weight_sha,
-            "seed": self.seed,
+            "seed": config.seed if config is not None else self.seed,
+            "taxonomy_id": label_binding["taxonomy_id"],
+            "label_ids": label_binding["label_ids"],
+            "label_space_sha256": label_binding["label_space_sha256"],
+            **preprocessing,
         }
         with open(out / "artifact_meta.json", "w", encoding="utf-8") as fh:
             json.dump(meta, fh, ensure_ascii=False, indent=2)
         return meta
-
     @classmethod
-    def load(cls, directory: str, device: str | None = None) -> BertSyndromeClassifier:
+    def load(
+        cls,
+        directory: str,
+        expected_label_space: LabelSpace,
+        device: str | None = None,
+    ) -> BertSyndromeClassifier:
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         d = Path(directory)
         with open(d / "label_space.json", encoding="utf-8") as fh:
-            meta = json.load(fh)
-        label_space = LabelSpace(meta["labels"])
+            label_meta = json.load(fh)
+        with open(d / "artifact_meta.json", encoding="utf-8") as fh:
+            artifact_meta = json.load(fh)
+        if not isinstance(label_meta, dict) or not isinstance(artifact_meta, dict):
+            raise ValueError("saved model label metadata is malformed")
+        expected_binding = _label_space_binding(expected_label_space)
+        for key in ("taxonomy_id", "labels", "label_ids", "label_space_sha256"):
+            if label_meta.get(key) != expected_binding[key]:
+                raise ValueError(
+                    "saved model label order does not match the frozen taxonomy"
+                )
+        for key in ("taxonomy_id", "label_ids", "label_space_sha256"):
+            if artifact_meta.get(key) != expected_binding[key]:
+                raise ValueError(
+                    "model artifact label IDs do not match the frozen taxonomy"
+                )
+        config_path = d / "train_config.json"
+        if not config_path.is_file():
+            raise ValueError("saved model is missing train_config.json with fitted max_len")
+        train_config = json.loads(config_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(train_config, dict)
+            or type(train_config.get("max_len")) is not int
+            or train_config["max_len"] < 1
+        ):
+            raise ValueError("saved model has no valid fitted max_len")
+        preprocessing = _preprocessing_binding(d, train_config["max_len"])
+        if (
+            type(artifact_meta.get("max_len")) is not int
+            or artifact_meta["max_len"] != train_config["max_len"]
+        ):
+            raise ValueError("saved model artifact max_len does not match train_config.json")
+        for key in (
+            "tokenizer_assets_sha256",
+            "preprocessing_contract",
+            "preprocessing_sha256",
+        ):
+            if artifact_meta.get(key) != preprocessing[key]:
+                raise ValueError(
+                    "saved tokenizer assets or preprocessing do not match artifact metadata"
+                )
+        label_space = expected_label_space
+        model = AutoModelForSequenceClassification.from_pretrained(str(d))
+        model_config = getattr(model, "config", None)
+        id2label = getattr(model_config, "id2label", None)
+        label2id = getattr(model_config, "label2id", None)
+        try:
+            actual_id2label = {
+                int(index): label for index, label in id2label.items()
+            }
+            actual_label2id = {
+                label: int(index) for label, index in label2id.items()
+            }
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError(
+                "model config label IDs do not match the frozen taxonomy"
+            ) from None
+        expected_id2label = {
+            index: label for index, label in enumerate(label_space.labels)
+        }
+        expected_label2id = {
+            label: index for index, label in enumerate(label_space.labels)
+        }
+        if (
+            actual_id2label != expected_id2label
+            or actual_label2id != expected_label2id
+        ):
+            raise ValueError(
+                "model config label IDs do not match the frozen taxonomy"
+            )
         cls_new = cls.__new__(cls)
         import torch
 
         cls_new.label_space = label_space
         cls_new.tokenizer = AutoTokenizer.from_pretrained(str(d))
-        cls_new.model = AutoModelForSequenceClassification.from_pretrained(str(d))
-        cls_new.seed = meta.get("seed", -1)
+        cls_new.model = model
+        cls_new.seed = artifact_meta["seed"]
+        cls_new._fit_max_len = train_config["max_len"]
+        cls_new._train_config = train_config
         cls_new._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         cls_new.model.to(cls_new._device)
         return cls_new
