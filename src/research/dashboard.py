@@ -277,6 +277,9 @@ td.num{font-variant-numeric:tabular-nums;font-weight:600}
 .kv{margin-top:10px;color:var(--muted);font-size:12.5px}
 .kv b{color:var(--ink)}
 svg text{font-family:var(--font)}
+/* ECharts needs an explicit container height; without it init() finds no size and
+   draws nothing (silently, which is how this rendered as an empty card) */
+#chart{height:250px;width:100%}
 footer{padding:18px 32px 28px;color:var(--faint);font-size:10px;font-weight:600;
        letter-spacing:.12em;text-transform:uppercase}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -472,7 +475,13 @@ function obsReveal(node, draw){
     if (entries.some(e => e.isIntersecting)) { revealed = true; io.disconnect(); run(); }
   }, {threshold: 0.3});
   io.observe(node);
-  if (revealed) run();
+  // A reveal mechanism that can leave the card permanently blank is a bug, not a
+  // feature: headless capture, a print stylesheet and some in-app browsers never
+  // deliver an IntersectionObserver callback. Draw anyway shortly after, and let
+  // the observer only make it earlier.
+  setTimeout(() => {
+    if (!revealed) { revealed = true; io.disconnect(); run(); }
+  }, 400);
 }
 
 function drawChart(rows, replay){
@@ -513,7 +522,11 @@ function drawChart(rows, replay){
         axisLine: {show: false}, axisTick: {show: false}, splitLine: {show: false},
         axisLabel: {color: G18.FAINT, fontFamily: "Inter", fontSize: 9, fontWeight: 600,
           interval: Math.max(0, Math.ceil(labels.length / 6) - 1)}},
-      yAxis: {show: false, max: top * 1.06},
+      // A metric that moves in the third decimal collapses onto the top edge if the
+      // axis starts at zero (measured: 0.6016 vs 0.5869 sat flat against the grid
+      // line). The axis is hidden, so pad the data range instead of anchoring to 0.
+      yAxis: {show: false, min: (value) => value.min - (value.max - value.min) * 4,
+              max: (value) => value.max + (value.max - value.min) * 0.15},
       series: [
         {name: "metric", type: "line", data: metric, smooth: 0.2, symbol: "none",
          lineStyle: {color: G18.INK, width: 2.6},
