@@ -108,6 +108,12 @@ def symptom_section(service: SyndromeService, artifact_dir: str) -> None:
         spec = None
     if spec is None:
         print(f"后端工件不存在（{artifact_dir}）：backend_availability=NOT_AVAILABLE")
+    else:
+        service.registry.register(spec, default=True)
+        print(
+            f"已注册默认后端：model_id={spec.model_id} "
+            f"model_version={spec.model_version} artifacts={len(spec.artifacts)} 个"
+        )
     for label, text in (
         ("真实症状输入", "最近总是失眠心悸，食欲差"),
         ("空症状（fail-closed）", ""),

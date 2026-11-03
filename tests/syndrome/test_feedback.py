@@ -174,3 +174,58 @@ def test_knowledge_with_missing_provenance_fails_closed():
     assert r.references == []
     assert r.status == "OK"
     assert any("fail-closed" in n for n in r.notes)
+
+
+def test_topic_and_range_tables_stay_in_parity():
+    """METRIC_TOPICS 与 PLAUSIBLE_RANGES 必须覆盖同一指标集：
+    缺范围表的指标会在运行时退化为 unknown_metric，属配置错误。"""
+    from syndrome.feedback import METRIC_TOPICS, PLAUSIBLE_RANGES
+
+    assert set(METRIC_TOPICS) == set(PLAUSIBLE_RANGES)
+
+
+def test_interleaved_sources_do_not_false_flag_regression(fake_topic_knowledge):
+    """多设备交错流：来源内时间前进而跨源包间乱序，不得误标 timestamp_regression。"""
+    result = realtime_feedback(
+        [
+            sample(source="band", timestamp="2026-11-01T10:00:10+08:00"),
+            sample(source="ring", timestamp="2026-11-01T10:00:08+08:00"),
+            sample(source="band", timestamp="2026-11-01T10:00:20+08:00"),
+        ],
+        fake_topic_knowledge,
+    )
+    dispositions = [m["disposition"] for m in result.measured]
+    assert dispositions == ["accepted", "accepted", "accepted"]
+    assert result.status == "OK"
+
+
+def test_same_source_regression_still_rejected(fake_topic_knowledge):
+    result = realtime_feedback(
+        [
+            sample(source="band", timestamp="2026-11-01T10:00:20+08:00"),
+            sample(source="band", timestamp="2026-11-01T10:00:10+08:00"),
+        ],
+        fake_topic_knowledge,
+    )
+    assert result.measured[1]["disposition"] == "timestamp_regression"
+
+
+def test_rejected_samples_leave_notes_per_disposition(fake_topic_knowledge):
+    result = realtime_feedback(
+        [
+            sample(metric="未知指标"),
+            sample(quality="DEGRADED"),
+            sample(value=999.0),
+        ],
+        fake_topic_knowledge,
+    )
+    notes = "\n".join(result.notes)
+    assert "未知指标" in notes
+    assert "质量异常" in notes
+    assert "越界" in notes
+
+
+def test_non_mapping_topic_knowledge_treated_as_unavailable():
+    result = realtime_feedback([sample()], ["not-a-mapping"])  # type: ignore[arg-type]
+    assert result.references == []
+    assert any("NOT_AVAILABLE" in n for n in result.notes)

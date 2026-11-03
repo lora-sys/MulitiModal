@@ -20,6 +20,17 @@
   - 不从生理数值推断证候（realtime_feedback 结构性禁止，见 `src/syndrome/feedback.py`）；
   - 不用于商业部署（数据许可 CC BY-NC-SA 4.0 仅限非商业科研用途）。
 
+## 产品接口（#58 双模式服务）
+
+`src/syndrome/service.py`（schema `tcm-service-schema-v1`）提供两种模式：
+症状分析（症状文本 → 可插拔后端的 Top-k 候选，全部 `PREDICTED` + `calibrated:false`，
+阈值从工件透传不重选）与实时知识（测量 → `MEASURED` 回执 + 非诊断性 `KNOWLEDGE`
+主题知识，结构性不调用证候分类器、不输出个人证候标签）。后端通过版本化
+`ModelRegistry` 条目替换（线性 / 神经同接口）；本模型卡描述的 TF-IDF+LR 与后续
+神经模型均为该 registry 的条目。默认后端在本数据集（CC BY-NC-SA 4.0）上训练，
+派生知识同许可，商业部署需独立许可与医疗内容审核门槛。详见
+`docs/reports/issue-58-dual-mode-interface.md`。
+
 ## 数据
 
 | 项 | 值 |

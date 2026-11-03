@@ -21,6 +21,11 @@
 threshold / threshold_scope / selection 绑定字段（见响应 provenance），绝不
 重选或绕过阈值；scope 缺失时显式标记 UNVERIFIED。
 
+工件信任边界：registry_entry.json + 工件哈希可防**意外损坏**（磁盘位翻转、
+截断、部分写入），但不能防**恶意替换**——registry_entry.json 本身未签名，
+重写条目与工件可一致地绕过校验。信任根是保存 registry_entry.json 的运行目录；
+需要对抗恶意篡改时须把条目哈希绑定到外部运行 manifest。
+
 Fail-closed 路径：空症状（ABSTAIN）、后端不可用（NOT_AVAILABLE + ABSTAIN）、
 低质量/越界/未知指标/缺值/时间戳回退测量（拒收，仅留实测回执）、知识条目出处
 缺失（排除该条目）、schema 版本不匹配（拒绝请求）。
@@ -36,9 +41,13 @@ from pathlib import Path
 
 from syndrome.feedback import (
     SOURCE_KNOWLEDGE,
+    SOURCE_MEASURED,
     MeasurementSample,
     TopicKnowledge,
     realtime_feedback,
+)
+from syndrome.feedback import (
+    _parse_timestamp as _parse_request_timestamp,
 )
 from syndrome.inference import ProbabilisticPredictor, SyndromeInference
 from syndrome.labels import LABEL_TAXONOMY_ID, STATUS_ABSTAIN, LabelSpace
@@ -163,16 +172,26 @@ class RealtimeKnowledgeRequest:
 
 def _measurement_from_dict(data: Mapping) -> MeasurementSample:
     try:
-        return MeasurementSample(
-            source=data["source"],
-            metric=data["metric"],
-            value=data["value"],
-            unit=data["unit"],
-            timestamp=data["timestamp"],
-            quality=data["quality"],
-        )
+        source, metric = data["source"], data["metric"]
+        value, unit = data["value"], data["unit"]
+        timestamp, quality = data["timestamp"], data["quality"]
     except (KeyError, TypeError) as exc:
         raise ValueError(f"malformed measurement record: missing {exc}") from exc
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, (int, float))
+    ):
+        raise ValueError(
+            f"measurement {source}/{metric}: value must be a number or null, "
+            f"got {type(value).__name__}"
+        )
+    return MeasurementSample(
+        source=source,
+        metric=metric,
+        value=value,
+        unit=unit,
+        timestamp=timestamp,
+        quality=quality,
+    )
 
 
 def _require_schema(data: object) -> None:
@@ -181,6 +200,12 @@ def _require_schema(data: object) -> None:
     version = data.get("schema_version", SERVICE_SCHEMA_VERSION)
     if version != SERVICE_SCHEMA_VERSION:
         raise ValueError(f"unsupported schema_version: {version!r}")
+
+
+def _require_mode(data: Mapping, expected: str) -> None:
+    mode = data.get("mode")
+    if mode is not None and mode != expected:
+        raise ValueError(f"mode mismatch: expected {expected}, got {mode!r}")
 
 
 # --------------------------------------------------------------------------- 响应
@@ -226,8 +251,13 @@ class SymptomAnalysisResponse:
     @classmethod
     def from_dict(cls, data: Mapping) -> SymptomAnalysisResponse:
         _require_schema(data)
+        _require_mode(data, MODE_SYMPTOM)
+        try:
+            status = data["status"]
+        except KeyError as exc:
+            raise ValueError(f"symptom response missing field: {exc}") from exc
         return cls(
-            status=data["status"],
+            status=status,
             candidates=list(data.get("candidates", [])),
             evidence=list(data.get("evidence", [])),
             missing_information=list(data.get("missing_information", [])),
@@ -256,6 +286,7 @@ class RealtimeKnowledgeResponse:
     message: str = ""
     syndrome_judgment: None = None
     classifier_invoked: bool = False
+    knowledge_availability: str = BACKEND_AVAILABLE
     provenance: dict = field(default_factory=dict)
     schema_version: str = SERVICE_SCHEMA_VERSION
     mode: str = MODE_REALTIME
@@ -273,20 +304,27 @@ class RealtimeKnowledgeResponse:
             "message": self.message,
             "syndrome_judgment": self.syndrome_judgment,
             "classifier_invoked": self.classifier_invoked,
+            "knowledge_availability": self.knowledge_availability,
             "provenance": dict(self.provenance),
         }
 
     @classmethod
     def from_dict(cls, data: Mapping) -> RealtimeKnowledgeResponse:
         _require_schema(data)
+        _require_mode(data, MODE_REALTIME)
+        try:
+            status, session_id = data["status"], data["session_id"]
+        except KeyError as exc:
+            raise ValueError(f"realtime response missing field: {exc}") from exc
         return cls(
-            status=data["status"],
-            session_id=data["session_id"],
+            status=status,
+            session_id=session_id,
             measured=list(data.get("measured", [])),
             measured_summary=data.get("measured_summary"),
             knowledge=list(data.get("knowledge", [])),
             notes=list(data.get("notes", [])),
             message=data.get("message", ""),
+            knowledge_availability=data.get("knowledge_availability", BACKEND_AVAILABLE),
             provenance=dict(data.get("provenance", {})),
         )
 
@@ -338,6 +376,11 @@ class ModelRegistry:
             )
         if spec.model_id in self._specs:
             raise ValueError(f"backend model_id already registered: {spec.model_id!r}")
+        if default and self.default_model_id is not None:
+            raise ValueError(
+                f"default backend already registered: {self.default_model_id!r}; "
+                "reassigning the default must be explicit (new registry)"
+            )
         self._specs[spec.model_id] = spec
         if default or self.default_model_id is None:
             self.default_model_id = spec.model_id
@@ -422,6 +465,9 @@ def _spec_from_entry(directory: Path, entry: dict) -> BackendSpec:
     artifacts = entry.get("artifacts")
     if not isinstance(artifacts, dict) or not artifacts:
         raise ValueError("backend artifact manifest is missing artifact hashes")
+    for required in (PREDICTOR_ARTIFACT_NAME, LABELS_ARTIFACT_NAME):
+        if required not in artifacts:
+            raise ValueError(f"backend artifact manifest missing required entry: {required}")
     model_id = entry.get("model_id")
     if not isinstance(model_id, str) or not model_id:
         raise ValueError("backend artifact model_id is missing")
@@ -444,6 +490,13 @@ def _spec_from_entry(directory: Path, entry: dict) -> BackendSpec:
 def _load_tfidf_logreg(directory: Path, entry: dict) -> LoadedBackend:
     import joblib
 
+    # manifest 必须绑定实际加载的全部文件：缺条目的文件即使存在也拒载
+    # （否则 labels.json 可被换名/重排而哈希校验仍"通过"）。
+    for required in (PREDICTOR_ARTIFACT_NAME, LABELS_ARTIFACT_NAME):
+        if required not in entry["artifacts"]:
+            raise ValueError(
+                f"backend artifact manifest missing required entry: {required}"
+            )
     for name, sha256 in entry["artifacts"].items():
         path = directory / name
         if not path.is_file():
@@ -486,11 +539,13 @@ class SyndromeService:
         reconnect_gap_seconds: float = 300.0,
         provenance: dict | None = None,
     ) -> None:
-        self.registry = registry or ModelRegistry()
+        self.registry = registry if registry is not None else ModelRegistry()
         self.knowledge = knowledge
         self.topic_knowledge = topic_knowledge
         self.reconnect_gap_seconds = reconnect_gap_seconds
         self._base_provenance = dict(provenance or {})
+        # model_id → 已加载推理实例。缓存按进程生命周期存活、不自动失效：
+        # 更换工件目录须重建 service（科研场景一次性会话，非长驻服务）。
         self._inferences: dict[str, SyndromeInference] = {}
 
     # ------------------------------------------------------------------ 症状分析
@@ -512,7 +567,19 @@ class SyndromeService:
                 backend_availability=BACKEND_NOT_AVAILABLE,
                 provenance=dict(self._base_provenance),
             )
-        inference = self._inference(spec)
+        try:
+            inference = self._inference(spec)
+        except Exception as exc:  # noqa: BLE001 - 任何工件加载失败都必须 fail-closed
+            return SymptomAnalysisResponse(
+                status=STATUS_ABSTAIN,
+                message=(
+                    f"后端工件加载失败（{BACKEND_NOT_AVAILABLE}），不作证候判断：{exc}"
+                ),
+                model_id=spec.model_id,
+                model_version=spec.model_version,
+                backend_availability=BACKEND_NOT_AVAILABLE,
+                provenance=dict(self._base_provenance),
+            )
         result = inference.predict_one(request.symptom_text, request.fields)
         return SymptomAnalysisResponse(
             status=result.status,
@@ -574,25 +641,39 @@ class SyndromeService:
             raise TypeError("realtime_knowledge expects a RealtimeKnowledgeRequest")
         if request.schema_version != SERVICE_SCHEMA_VERSION:
             raise ValueError(f"unsupported schema_version: {request.schema_version!r}")
-        if not request.session_id.strip():
-            return RealtimeKnowledgeResponse(
-                status=STATUS_ABSTAIN,
-                session_id=request.session_id,
-                message="缺少有效 session_id，不作处理（ABSTAIN）",
-                provenance=dict(self._base_provenance),
-            )
         feedback = realtime_feedback(
             request.measurements,
             self.topic_knowledge,
             reconnect_gap_seconds=self.reconnect_gap_seconds,
         )
+        # 请求级 timestamp 用与测量相同的 fail-closed 规则解析：无效不崩溃、不臆断时区。
+        request_ts = _parse_request_timestamp(request.timestamp)
+        if request_ts is None:
+            feedback.notes.append("请求 timestamp 无法解析为带时区的 ISO 8601：按 UNVERIFIED 处理")
+        # session_id 缺失同样只降级为 ABSTAIN，实测回执照常保留。
+        status = feedback.status
+        if not request.session_id.strip():
+            status = STATUS_ABSTAIN
+            feedback.notes.append("缺少有效 session_id：状态降级为 ABSTAIN，回执保留")
+        knowledge_available = (
+            BACKEND_AVAILABLE if self.topic_knowledge else BACKEND_NOT_AVAILABLE
+        )
         return RealtimeKnowledgeResponse(
-            status=feedback.status,
+            status=status,
             session_id=request.session_id,
             measured=list(feedback.measured),
-            measured_summary=dict(request.physio_summary) if request.physio_summary else None,
+            measured_summary=(
+                {
+                    "source_tag": SOURCE_MEASURED,
+                    "asserted_by": "caller",
+                    "summary": dict(request.physio_summary),
+                }
+                if request.physio_summary
+                else None
+            ),
             knowledge=list(feedback.references),
             notes=list(feedback.notes),
+            knowledge_availability=knowledge_available,
             message=(
                 "实测指标摘要与非诊断性主题知识；无个人证候判断（#53/#58 契约）"
             ),
@@ -601,6 +682,9 @@ class SyndromeService:
                 "topic_mapping": "METRIC_TOPICS (metric-name-level, value-independent)",
                 "n_topic_knowledge_entries": (
                     len(self.topic_knowledge) if self.topic_knowledge else 0
+                ),
+                "request_timestamp_status": (
+                    "PARSED" if request_ts is not None else "UNVERIFIED"
                 ),
             },
         )
