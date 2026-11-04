@@ -214,10 +214,58 @@ def test_monitor_serves_read_only_results(tmp_path):
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(request, timeout=3)
         assert error.value.code == 501
+        # the page picks its view from ?view=; the route must not 404 on it
+        with urllib.request.urlopen(url + "/?view=history", timeout=5) as response:
+            assert response.status == 200
+            assert b"view-history" in response.read()
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_monitor_exposes_per_round_fold_scores_and_device(tmp_path):
+    """The dashboard shows per-fold scores, device and protocol hashes, not
+    just one number per round."""
+    import subprocess
+
+    from research.dashboard import read_run
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "synthetic@example.invalid"],
+                   cwd=repo, check=True)
+    target = repo / "src/research/train.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("# synthetic candidate\n")
+    subprocess.run(["git", "add", "src/research/train.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "synthetic candidate"], cwd=repo, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo,
+                                     text=True).strip()
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "round-000.json").write_text(json.dumps({
+        "macro_f1": 0.5, "fold_std": 0.01, "fold_count": 2, "repeats": 1,
+        "folds": [{"fold": 0, "repeat": 0, "macro_f1": 0.48, "n_validation": 10,
+                   "train_seconds": 1.5},
+                  {"fold": 1, "repeat": 0, "macro_f1": 0.52, "n_validation": 10,
+                   "train_seconds": 1.7}],
+        "device": "cuda", "gpu": "TEST GPU", "budget_seconds": 60, "seed": 7,
+        "dataset_sha256": "a" * 64, "manifest_sha256": "b" * 64, "evidence": "LOCAL_EXPERIMENTAL",
+    }))
+    (run / "results.tsv").write_text(
+        "commit\tmetric\tvalue\tdirection\tdecision\tdescription\tpeak_vram_mb\t"
+        "protocol_sha256\tevidence\tpromotion\n"
+        f"{commit}\tsyndrome/macro_f1\t0.5\tmaximize\tKEEP\tbaseline\tNOT_AVAILABLE\t"
+        + "c" * 64 + "\tLOCAL_EXPERIMENTAL\tstrict\n"
+    )
+    view = read_run(run)
+    assert view["rounds"][0]["detail"]["folds"][1]["macro_f1"] == 0.52
+    assert view["rounds"][0]["detail"]["device"] == "cuda"
+    assert view["device"] == "cuda"
+    assert view["rounds"][0]["value"] == 0.5
 
 
 def test_record_binds_score_to_committed_training_file(tmp_path):
