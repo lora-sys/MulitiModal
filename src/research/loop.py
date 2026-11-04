@@ -27,20 +27,18 @@ name must start with `autoresearch/`. The loop refuses to operate anywhere else.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 from research.guard import (
     PatchRejected,
     apply_patch,
-    editable_complexity,
-    validate_frozen_imports,
-    validate_source_ast,
     validate_source_patch,
 )
 from runtime.manifest import MANIFEST_FILE, RunManifestStore
-from runtime.tcm_eval import PRIMARY_METRIC
 
 #: Minimum score gain per net unit of complexity added to the editable file,
 #: where the unit is one AST statement/expression node (see
@@ -58,11 +56,9 @@ from runtime.tcm_eval import PRIMARY_METRIC
 #: declared, not fitted — raising it would re-price every archived round.
 #:
 #: It is a FLOOR on the gain, not a price added to the margin. Pricing
-#: complexity at a fixed absolute rate instead (the first cut used 0.002/line)
-#: makes any real change unaffordable: a 15-line architecture edit would have
-#: needed +0.03 on a selection whose standard error is 0.016, i.e. the rule
-#: would have vetoed everything except micro-edits while looking like a
-#: complexity criterion. As a floor it does what upstream means: a big sloppy
+#: complexity at a fixed absolute rate instead makes real changes too
+#: costly; a 20-node patch must earn +0.02. As a floor it does what upstream
+#: means: a big sloppy
 #: patch must show a big gain, while a targeted small one only has to clear
 #: the noise margin.
 MIN_GAIN_PER_ADDED_NODE = 0.001
@@ -75,6 +71,71 @@ MIN_GAIN_PER_ADDED_NODE = 0.001
 COMPLEXITY_METRIC = "ast_statement_expr_nodes+string_payloads"
 
 DEFAULT_EDITABLE = "src/research/candidate.py"
+MAX_PATCH_BYTES = 2 * 1024 * 1024
+SOURCE_PREFLIGHT_MEMORY_BYTES = 512 * 1024 * 1024
+SOURCE_PREFLIGHT_CPU_SECONDS = 5
+SOURCE_PREFLIGHT_WALL_SECONDS = 10
+
+def _set_source_preflight_limits() -> None:
+    import resource
+    resource.setrlimit(
+        resource.RLIMIT_AS,
+        (SOURCE_PREFLIGHT_MEMORY_BYTES, SOURCE_PREFLIGHT_MEMORY_BYTES),
+    )
+    resource.setrlimit(
+        resource.RLIMIT_CPU,
+        (SOURCE_PREFLIGHT_CPU_SECONDS, SOURCE_PREFLIGHT_CPU_SECONDS),
+    )
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+def _source_preflight(worktree: Path, editable: str, mode: str) -> dict:
+    from research.train_worker import (
+        MAX_CANDIDATE_SOURCE_BYTES,
+        _candidate_path,
+        _read_regular_file_limited,
+    )
+    try:
+        path = _candidate_path({
+            "worktree_path": str(worktree),
+            "editable": editable,
+        })
+        source = _read_regular_file_limited(
+            path,
+            max_bytes=MAX_CANDIDATE_SOURCE_BYTES,
+            label="candidate source",
+        )
+    except RuntimeError as exc:
+        raise PatchRejected(str(exc)) from exc
+    source_root = Path(__file__).resolve().parents[1]
+    bootstrap = (
+        "import sys; sys.path.insert(0, " + repr(str(source_root)) + "); "
+        "from research.source_preflight import main; "
+        "raise SystemExit(main())"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", bootstrap, mode],
+            cwd=source_root.parent,
+            env={"PATH": os.defpath, "PYTHONHASHSEED": "0"},
+            input=source,
+            capture_output=True,
+            timeout=SOURCE_PREFLIGHT_WALL_SECONDS,
+            preexec_fn=_set_source_preflight_limits,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise PatchRejected(
+            "candidate source preflight exceeded the 10-second wall limit"
+        ) from exc
+    try:
+        payload = json.loads(result.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        detail = result.stderr.decode("utf-8", errors="replace")[-300:]
+        raise PatchRejected(
+            f"candidate source preflight failed ({result.returncode}): {detail}"
+        ) from exc
+    if result.returncode != 0 or not payload.get("ok"):
+        raise PatchRejected(str(payload.get("error", "candidate source preflight failed")))
+    return payload
 
 
 class GitWorktree:
@@ -162,32 +223,62 @@ class SourceResearchLoop:
         out_dir: str | Path,
         manifest_path: str | Path,
         dataset_path: str | Path,
-        editable: str = DEFAULT_EDITABLE,
         folds: int = 4,
         repeats: int = 2,
-        margin_sem: float = 1.0,
+        margin_fold_sd_multiplier: float = 1.0,
         seed: int = 0,
         timeout_s: float | None = None,
         max_wall_clock_s: float = 6 * 3600,
+        task: str = "constitution",
+        budget_s: float | None = None,
+        editable: str | None = None,
     ) -> None:
+        from research.runner import (
+            DEFAULT_EVALUATOR_TIMEOUT_SECONDS,
+            source_loop_round_timeout_seconds,
+        )
+        from research.tasks import adapter_for
+
+        adapter = adapter_for(task)
+
         self.worktree = worktree
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_path = str(manifest_path)
         self.dataset_path = str(dataset_path)
-        self.editable = editable
+        self.editable = adapter.resolve_editable(editable)
         self.folds = folds
         self.repeats = repeats
-        self.margin_sem = margin_sem
+        self.margin_fold_sd_multiplier = margin_fold_sd_multiplier
         self.seed = seed
-        from research.frozen import TIME_BUDGET_GRACE_SECONDS, TIME_BUDGET_SECONDS
+        # the task selects the data/scoring seams the runner and evaluator
+        # subprocesses will use, and the metric name the manifest records
+        self.task = task
+        self.primary_metric = adapter.primary_metric
+        from research.frozen import TIME_BUDGET_SECONDS
 
-        self.budget = TIME_BUDGET_SECONDS
-        # a candidate that hangs is killed here: folds*repeats*(budget+grace)
-        # plus room for data loading; the runner's own check is the honest
-        # record, this is the enforcement
-        self.timeout_s = timeout_s if timeout_s is not None else (
-            folds * repeats * (TIME_BUDGET_SECONDS + TIME_BUDGET_GRACE_SECONDS) + 120
+        # campaign-level choice, never a per-round fitted value: every
+        # candidate in the campaign gets the SAME compute budget, so relative
+        # ranking stays fair; the default keeps the frozen 20 s fit budget.
+        self.budget = TIME_BUDGET_SECONDS if budget_s is None else float(budget_s)
+        self.evaluator_timeout_s = DEFAULT_EVALUATOR_TIMEOUT_SECONDS
+        derived_timeout_s = source_loop_round_timeout_seconds(
+            folds, repeats, self.budget, self.evaluator_timeout_s
+        )
+        # This is the outer round deadline. It includes each worker's already
+        # bounded startup/export/cleanup, the evaluator timeout, and bounded
+        # orchestration headroom; it does not increase the candidate fit budget.
+        self.timeout_source = (
+            "explicit_override" if timeout_s is not None
+            else "derived_from_stage_limits"
+        )
+        if timeout_s is not None and float(timeout_s) < derived_timeout_s:
+            raise ValueError(
+                f"timeout_s {float(timeout_s):.0f}s is shorter than the "
+                f"stage-derived round deadline {derived_timeout_s:.0f}s"
+            )
+        self.timeout_s = (
+            float(timeout_s) if timeout_s is not None else derived_timeout_s
         )
         self.max_wall_clock_s = max_wall_clock_s
         self.store = RunManifestStore(self.out_dir / MANIFEST_FILE)
@@ -195,7 +286,9 @@ class SourceResearchLoop:
     # -- driver-facing state ------------------------------------------------
 
     def complexity(self) -> int:
-        return editable_complexity(self.worktree.path, self.editable)
+        return int(_source_preflight(
+            self.worktree.path, self.editable, "complexity"
+        )["complexity"])
 
     def champion(self) -> dict | None:
         return self.store.champion()
@@ -212,9 +305,13 @@ class SourceResearchLoop:
             "time_budget_seconds": self.budget,
             "folds": self.folds,
             "repeats": self.repeats,
-            "margin_sem": self.margin_sem,
+            "round_timeout_seconds": self.timeout_s,
+            "round_timeout_source": self.timeout_source,
+            "candidate_compute_budget_seconds": self.budget,
+            "fold_evaluator_timeout_seconds": self.evaluator_timeout_s,
+            "margin_fold_sd_multiplier": self.margin_fold_sd_multiplier,
             "min_gain_per_added_node": MIN_GAIN_PER_ADDED_NODE,
-            "primary_metric": PRIMARY_METRIC,
+            "primary_metric": self.primary_metric,
             "primary_direction": "max",
             "champion_commit": champion.get("git_commit_sha") if champion else None,
             "best_metric": champion.get("best_so_far") if champion else None,
@@ -237,14 +334,15 @@ class SourceResearchLoop:
 
     @staticmethod
     def decide(
-        value: float, sem: float, growth: int, best: float | None,
-        margin_sem: float = 1.0,
+        value: float, fold_sd: float | None, growth: int, best: float | None,
+        margin_fold_sd_multiplier: float = 1.0,
     ) -> tuple[bool, str]:
         """KEEP/REVERT, with the two upstream criteria made measurable.
 
-        * A candidate must beat the champion by more than `margin_sem` standard
-          errors of the measured mean — the margin is about the quantity being
-          compared, so more folds sharpen it instead of leaving it fixed.
+        * A candidate must beat the champion by more than
+          margin_fold_sd_multiplier times the observed descriptive fold SD.
+          Repeated folds overlap and are dependent, so this is a selection
+          margin over measured dispersion, not a SEM or significance test.
         * It must ALSO pay for the net complexity it adds, in AST
           statement/expression nodes (see guard.editable_complexity). Upstream
           weighs a gain against the complexity that bought it, and a rule that
@@ -257,9 +355,11 @@ class SourceResearchLoop:
           calls are refused outright, so deleting real code and re-adding it
           inside an `exec` string cannot buy negative growth.
         """
-        margin = margin_sem * sem
         if best is None:
             return True, f"baseline {value:.6f}"
+        if fold_sd is None:
+            return False, "fold dispersion unavailable; refusing candidate comparison"
+        margin = margin_fold_sd_multiplier * fold_sd
         gain = value - best
         if grow_floor := MIN_GAIN_PER_ADDED_NODE * max(0, growth):
             pass
@@ -304,6 +404,10 @@ class SourceResearchLoop:
         entry: dict = {
             "run_id": run_id,
             "round_index": index,
+            "round_timeout_seconds": self.timeout_s,
+            "round_timeout_source": self.timeout_source,
+            "candidate_compute_budget_seconds": self.budget,
+            "fold_evaluator_timeout_seconds": self.evaluator_timeout_s,
             "intent": intent,
             "proposer": proposer,
             # a batch-supplied list was written before this round's state
@@ -319,6 +423,7 @@ class SourceResearchLoop:
             "started_at": _iso(),
         }
 
+        complexity_after = None
         def finish(decision: str, status: str, reason: str, **extra) -> dict:
             entry.update(
                 decision=decision, status=status, reason=reason,
@@ -335,22 +440,21 @@ class SourceResearchLoop:
             return entry
 
         try:
+            if len(patch.encode("utf-8")) > MAX_PATCH_BYTES:
+                raise PatchRejected(
+                    f"candidate patch exceeds the {MAX_PATCH_BYTES}-byte limit"
+                )
             validate_source_patch(patch, self.editable)
             self.worktree.apply(patch, self.editable)
-            validate_frozen_imports(
-                (self.worktree.path / self.editable).read_text(encoding="utf-8")
+            checked = _source_preflight(
+                self.worktree.path, self.editable, "validate"
             )
-            # zero tolerance for exec/eval/compile/__import__ calls: a dynamic
-            # execution would hide logic from this file's own guards and from
-            # the complexity metric
-            validate_source_ast(
-                (self.worktree.path / self.editable).read_text(encoding="utf-8")
-            )
+            complexity_after = int(checked["complexity"])
         except PatchRejected as exc:
             self.worktree.reset_to(parent_sha)
             return finish("REVERT", "rejected", f"guard: {exc}")
-
-        complexity_after = self.complexity()
+        if complexity_after is None:
+            raise RuntimeError("candidate source preflight returned no complexity")
         growth = complexity_after - complexity_before
         entry["complexity"] = {
             "metric": COMPLEXITY_METRIC,
@@ -364,7 +468,9 @@ class SourceResearchLoop:
             "data": {"manifest_path": self.manifest_path, "dataset_path": self.dataset_path},
             "train_provider": {"batch_size": 32},
             "trainer": {"seed": self.seed},
+            "task": self.task,
             "time_budget_seconds": self.budget,
+            "evaluator_timeout_s": self.evaluator_timeout_s,
             # the runner and its evaluator subprocess bind the integrity
             # snapshot (and the candidate-file hash) to this worktree
             "worktree_path": str(self.worktree.path),
@@ -389,21 +495,27 @@ class SourceResearchLoop:
                 "REVERT", "overran",
                 f"fold time exceeded the {self.budget:.0f}s budget "
                 f"(fold_seconds {result['fold_seconds']})",
-                metrics={"primary_metric": PRIMARY_METRIC,
+                metrics={"primary_metric": self.primary_metric,
                          "primary_value": result["primary_value"]},
             )
 
         value = float(result["primary_value"])
-        sem = float(result["primary_sem"])
+        raw_fold_sd = result["primary_std"]
+        fold_sd = None if raw_fold_sd is None else float(raw_fold_sd)
+        uncertainty_semantics = result["uncertainty_semantics"]
         entry["integrity_snapshot_scope"] = result.get(
             "integrity_snapshot_scope",
             "unrecorded — the runner did not report its snapshot coverage",
         )
         previous_best = champion.get("best_so_far") if champion else None
-        keep, reason = self.decide(value, sem, growth, previous_best, self.margin_sem)
+        keep, reason = self.decide(
+            value, fold_sd, growth, previous_best,
+            self.margin_fold_sd_multiplier,
+        )
         entry["metrics"] = {
-            "primary_metric": PRIMARY_METRIC, "primary_value": value,
-            "primary_std": result["primary_std"], "primary_sem": sem,
+            "primary_metric": self.primary_metric, "primary_value": value,
+            "primary_std": fold_sd,
+            "uncertainty_semantics": uncertainty_semantics,
             "folds": result["folds"], "fold_seconds": result["fold_seconds"],
         }
         if keep:
@@ -414,9 +526,17 @@ class SourceResearchLoop:
         return finish(
             "KEEP" if keep else "REVERT", "completed", reason,
             git_commit_sha=sha, git_parent_sha=parent_sha,
-            selection={"folds": self.folds, "repeats": self.repeats,
-                       "margin_sem": self.margin_sem, "sem": sem,
-                       "margin": self.margin_sem * sem},
+            selection={
+                "folds": self.folds,
+                "repeats": self.repeats,
+                "margin_fold_sd_multiplier": self.margin_fold_sd_multiplier,
+                "fold_sd": fold_sd,
+                "margin": (
+                    None if fold_sd is None
+                    else self.margin_fold_sd_multiplier * fold_sd
+                ),
+                "uncertainty_semantics": uncertainty_semantics,
+            },
         )
 
     def _run_runner(self, config_path: Path) -> dict:
@@ -438,8 +558,10 @@ class SourceResearchLoop:
             )
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(
-                f"runner exceeded the hard timeout {self.timeout_s:.0f}s "
-                "(a candidate that hangs is a crash, not a slow winner)"
+                f"runner exceeded the round orchestration deadline "
+                f"{self.timeout_s:.0f}s (candidate compute remains "
+                f"{self.budget:.0f}s/fold; evaluator limit is "
+                f"{self.evaluator_timeout_s:.0f}s/fold)"
             ) from exc
         if result.returncode != 0:
             # stderr-first: a failed child's stdout may carry candidate

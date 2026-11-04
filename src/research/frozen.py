@@ -69,6 +69,12 @@ FORBIDDEN_SYMBOLS = (
     "exec(",
     "compile(",
     "__import__",
+    # R1 F4: the syndrome task's frozen scoring/split machinery is equally
+    # out of reach for a candidate patch (candidate_sd.py's editable scope).
+    "SyndromeTrustedEvaluator",
+    "build_syndrome_manifest",
+    "task_sd",
+    "subject_partitions",
 )
 #: `eval(` is deliberately NOT a text symbol: the substring matches the
 #: legitimate `model.eval()` training idiom. Dynamic-eval calls are rejected
@@ -114,13 +120,141 @@ class FoldData:
 def selection_fold_ids(
     manifest: dict, fold: int, folds: int, repeat: int
 ) -> tuple[list[str], list[str]]:
-    """Derive one selection fold's (train, dev) subject ids from the pool.
+    """Derive one selection fold's (train, dev) ids from the pool.
 
     The single derivation both the runner (which prepares the training
     subprocess's trimmed inputs) and the evaluator (which rebuilds the fold
     for scoring) must agree on: identical (manifest, fold, folds, repeat)
     yield identical partitions.
+
+    Syndrome manifests carry the complete frozen user partition and a
+    subject-to-user map. Their folds are assigned over that complete train +
+    dev user set, then mapped to the rows still present in the manifest. Fold
+    membership never changes when scenario filtering removes a user's last
+    row. If that leaves a validation fold without records, selection fails
+    closed instead of moving another user between folds.
     """
+    if folds < 2 or fold < 0 or fold >= folds or repeat < 0:
+        raise ValueError(
+            f"invalid selection fold coordinates: fold={fold}, folds={folds}, "
+            f"repeat={repeat}"
+        )
+    if manifest.get("task") == "syndrome":
+        from research.task_sd import SELECTION_FOLD_VERSION
+
+        subject_rows = manifest.get("subject_row_by_id")
+        subject_users = manifest.get("subject_user_by_id")
+        user_partitions = manifest.get("user_partition_by_id")
+        user_strata = manifest.get("user_stratum_by_id")
+        if not all(
+            isinstance(value, dict)
+            for value in (
+                subject_rows,
+                subject_users,
+                user_partitions,
+                user_strata,
+            )
+        ):
+            raise ValueError(
+                "syndrome manifest lacks frozen user partition metadata"
+            )
+        subject_ids = set(subject_rows)
+        if set(subject_users) != subject_ids:
+            raise ValueError(
+                "syndrome subject-to-user mapping does not match subject rows"
+            )
+        if set(user_strata) != set(user_partitions):
+            raise ValueError(
+                "syndrome frozen user strata do not cover frozen partitions"
+            )
+        if any(
+            not isinstance(stratum, str) or not stratum
+            for stratum in user_strata.values()
+        ):
+            raise ValueError("syndrome manifest has an invalid frozen user stratum")
+        valid_parts = {"train", "dev", "holdout"}
+        if not set(user_partitions.values()) <= valid_parts:
+            raise ValueError("syndrome manifest has an unknown user partition")
+        if not set(subject_users.values()) <= set(user_partitions):
+            raise ValueError(
+                "syndrome subject-to-user mapping references an unfrozen user"
+            )
+        expected_parts = {
+            "train": "train",
+            "dev": "dev",
+            "holdout": "holdout",
+        }
+        for split_name, user_part in expected_parts.items():
+            split_ids = set(manifest["split"][split_name])
+            if not split_ids <= subject_ids:
+                raise ValueError(
+                    f"syndrome split {split_name!r} has unmapped subjects"
+                )
+            mismatched = [
+                sid
+                for sid in split_ids
+                if user_partitions[subject_users[sid]] != user_part
+            ]
+            if mismatched:
+                raise ValueError(
+                    f"syndrome user partition disagrees with split "
+                    f"{split_name!r}: {mismatched[:3]}"
+                )
+
+        pool_by_stratum: dict[str, list[str]] = {}
+        for user_id, user_part in user_partitions.items():
+            if user_part in {"train", "dev"}:
+                pool_by_stratum.setdefault(user_strata[user_id], []).append(user_id)
+        pool_users = [
+            user_id for users in pool_by_stratum.values() for user_id in users
+        ]
+        pool_ids = sorted(
+            set(manifest["split"]["train"]) | set(manifest["split"]["dev"])
+        )
+        pool_user_ids = {subject_users[subject_id] for subject_id in pool_ids}
+        if len(pool_users) < folds:
+            raise ValueError(
+                f"too few frozen pool users ({len(pool_users)}) for {folds} folds"
+            )
+        if len(pool_user_ids) < folds:
+            raise ValueError(
+                f"selection fold has only {len(pool_user_ids)} users with "
+                f"scenario records for {folds} folds; every fold needs "
+                "validation records and a non-empty training set"
+            )
+        split_seed = manifest["split"]["seed"]
+        if isinstance(split_seed, bool) or not isinstance(split_seed, int):
+            raise ValueError("syndrome manifest has an invalid split seed")
+        fold_of_user = {}
+        for stratum in sorted(pool_by_stratum):
+            users = sorted(pool_by_stratum[stratum])
+            rng = random.Random(
+                f"{split_seed}|{SELECTION_FOLD_VERSION}|{repeat}|{stratum}"
+            )
+            rng.shuffle(users)
+            offset = rng.randrange(folds)
+            for index, user_id in enumerate(users):
+                fold_of_user[user_id] = (offset + index) % folds
+        observed_folds = {
+            fold_of_user[subject_users[subject_id]] for subject_id in pool_ids
+        }
+        empty_folds = sorted(set(range(folds)) - observed_folds)
+        if empty_folds:
+            raise ValueError(
+                "frozen selection fold assignment has no observed users in "
+                f"folds {empty_folds}; scenario filtering cannot rebalance users"
+            )
+
+        train_ids = [
+            sid for sid in pool_ids
+            if fold_of_user[subject_users[sid]] != fold
+        ]
+        dev_ids = [
+            sid for sid in pool_ids
+            if fold_of_user[subject_users[sid]] == fold
+        ]
+        return train_ids, dev_ids
+
     pool = sorted(list(manifest["split"]["train"]) + list(manifest["split"]["dev"]))
     rng = random.Random(manifest["split"]["seed"] + repeat)
     rng.shuffle(pool)
@@ -132,44 +266,35 @@ def selection_fold_ids(
 
 def build_fold(
     config: dict,
-    manifest_path,
-    dataset_path,
+    manifest: dict,
     fold: int,
     folds: int,
     repeat: int,
-    records=None,
+    records: list,
 ) -> tuple[FoldData, dict]:
-    """Draw one selection fold from the pool (train + dev) of the frozen split.
-
-    Returns the candidate-facing `FoldData` together with the fold's manifest,
-    which the CALLER keeps: the candidate must not be able to hand itself a
-    manifest, and the runner needs one to score the fitted model.
-
-    `data.real_split.fold_manifest` refits the scaler on this fold's train rows,
-    empties the holdout partition, and prunes subject_row_by_id to the fold's
-    own train∪dev rows, so "selection never sees the holdout" is a property of
-    the objects the candidate is given rather than a convention it is trusted
-    to respect. The records handed to the providers are filtered the same way:
-    unfiltered, they would carry every subject's scores — holdout rows
-    included — within reach of `fold.train.records_by_row`.
-
-    `records` is the adapter's full record list; it exists so tests and the
-    evaluator can inject a parsed fixture instead of re-reading the workbook.
-    """
-    from data.mendeley import load_mendeley_scores
-    from data.real_split import fold_manifest, load_real_manifest
+    """Draw one fold from a validated selection-only manifest and records."""
+    from data.real_split import fold_manifest
+    from research.tasks import validate_manifest_contract
     from runtime.real_data import RealBatchProvider, real_input_spec
 
-    manifest = load_real_manifest(manifest_path)
+    task = config.get("task", "constitution")
+    validate_manifest_contract(task, manifest, selection_pool=True)
+    if manifest["split"]["holdout"] != []:
+        raise ValueError("selection manifest must have an empty holdout partition")
     if records is None:
-        records = load_mendeley_scores(dataset_path)
+        raise ValueError("fold records must come from validated selection inputs")
+    expected_rows = set(manifest["subject_row_by_id"].values())
+    record_rows = [record.subject_index for record in records]
+    if len(record_rows) != len(set(record_rows)) or set(record_rows) != expected_rows:
+        raise ValueError("fold records do not match the selection manifest rows")
+
     train_ids, dev_ids = selection_fold_ids(manifest, fold, folds, repeat)
     data = fold_manifest(
         manifest, records, train_ids, dev_ids,
         notes=f"source-level selection fold {fold} repeat {repeat}",
     ).data
     fold_rows = set(data["subject_row_by_id"].values())
-    fold_records = [r for r in records if r.subject_index in fold_rows]
+    fold_records = [record for record in records if record.subject_index in fold_rows]
     batch_size = int(config.get("train_provider", {}).get("batch_size", 32))
     fold_data = FoldData(
         train=RealBatchProvider(data, fold_records, "train", batch_size=batch_size),

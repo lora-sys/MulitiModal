@@ -1,48 +1,28 @@
-"""Finalize isolation and the holdout unlock ledger (adversarial review, two
-rounds).
-
-Round 1 pinned: the driver must not import the candidate, and unlocks must be
-capped. Round 2 (F-03/F-04/F-09) pins the closed design:
-
-* the fit worker ONLY fits — its config carries no frozen-manifest path, no
-  dataset path and the pool manifest carries no holdout; the holdout is
-  scored in an isolated evaluator subprocess from state_dict + the frozen
-  architecture rebuild;
-* the unlock event is appended BEFORE the fit worker spawns, under an flock,
-  into the repo-global ledger (not inside --out): a crashed worker has still
-  consumed the event, because the event is the grant of read permission, not
-  a successful read. The worker entry re-checks the budget and its specific
-  event, so invoking `python -m research.finalize` by hand cannot bypass it;
-* the worker verifies the worktree HEAD is the recorded commit and the tree
-  is clean beyond the editable file, so the fitted code is the committed,
-  recorded one (F-09).
-
-The driver-isolation assertion is on the sys.modules DELTA: earlier tests in
-the same process may legitimately hold research.candidate in their cache.
-"""
-
+"""Synthetic finalization order, manifest binding, and holdout release tests."""
 from __future__ import annotations
 
 import json
-import tempfile
 import random
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord, records_to_json
-from data.real_split import (
-    build_real_manifest,
-    load_real_manifest,
-    pool_manifest,
-)
+from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord
+from data.real_split import build_real_manifest
 from research.finalize import _sha256
 
 pytestmark = pytest.mark.synthetic
-
 DATASET_SHA = "f" * 64
+CANDIDATE_SOURCE = (
+    "def build_model(fold):\n"
+    "    return None\n\n"
+    "def train(model, fold, budget_seconds, seed):\n"
+    "    return None\n"
+)
+WEIGHTS_SHA = "a" * 64
+ARCHITECTURE_SHA = "b" * 64
+IMAGE_ID = "sha256:" + "1" * 64
 
 
 def fake_records(n=40, seed=3):
@@ -50,18 +30,16 @@ def fake_records(n=40, seed=3):
     records = []
     for i in range(1, n + 1):
         scores = [None] + [float(rng.randint(10, 90)) for _ in range(8)]
-        records.append(
-            SubjectRecord(
-                subject_index=i,
-                features={
-                    name: [rng.random() for _ in range(size)]
-                    for name, size in FEATURE_GROUP_SIZES.items()
-                },
-                scores=scores,
-                score_mask=[s is not None for s in scores],
-                provenance={"source": "test-fixture"},
-            )
-        )
+        records.append(SubjectRecord(
+            subject_index=i,
+            features={
+                name: [rng.random() for _ in range(size)]
+                for name, size in FEATURE_GROUP_SIZES.items()
+            },
+            scores=scores,
+            score_mask=[value is not None for value in scores],
+            provenance={"source": "synthetic-test-fixture"},
+        ))
     return records
 
 
@@ -73,12 +51,10 @@ def _git_init(repo: Path) -> None:
 
 
 def _worktree(tmp_path, records):
-    """A git worktree with the candidate committed: the F-09 binding needs a
-    real HEAD and status even in the worker-level tests."""
     worktree = tmp_path / "wt"
-    (worktree / "src" / "research").mkdir(parents=True)
     candidate = worktree / "src" / "research" / "candidate.py"
-    candidate.write_text("WIDTH = 32\n")
+    candidate.parent.mkdir(parents=True)
+    candidate.write_text(CANDIDATE_SOURCE)
     _git_init(worktree)
     subprocess.run(["git", "add", "-A"], cwd=worktree, check=True)
     subprocess.run(["git", "commit", "-qm", "base"], cwd=worktree, check=True)
@@ -92,418 +68,536 @@ def _worktree(tmp_path, records):
     return worktree, candidate, manifest_path, frozen, head
 
 
-def _config(tmp_path, worktree, candidate, records, head=None):
-    frozen = load_real_manifest(tmp_path / "frozen.json")
-    pool = pool_manifest(frozen, records, notes="test").data
-    pool_path = tmp_path / "pool.json"
-    pool_path.write_text(json.dumps(pool, ensure_ascii=False))
+def _patch_preflight(monkeypatch):
+    from research import finalize as finalize_mod
+    from research import spawn as spawn_mod
+
+    def sandbox_run(config, *, preflight=False, **kwargs):
+        assert preflight is True
+        assert config["time_budget_seconds"] > 0
+        assert kwargs["timeout"] == spawn_mod.sandbox_worker_process_timeout(
+            config["time_budget_seconds"]
+        )
+        return {
+            "candidate_sha256": config["candidate_sha256"],
+            "task": config["task"],
+            "output_key": "category_probs",
+            "output_shape": [8, 9],
+            "weights_sha256": WEIGHTS_SHA,
+            "architecture_sha256": ARCHITECTURE_SHA,
+            "sandbox_image_id": IMAGE_ID,
+        }
+
+    monkeypatch.setattr(spawn_mod, "run_sandboxed_candidate", sandbox_run)
+    monkeypatch.setattr(spawn_mod, "sandbox_image_identity", lambda: IMAGE_ID)
+    monkeypatch.setattr(
+        finalize_mod,
+        "_validate_preflight_artifacts",
+        lambda result, task, candidate_sha, config: {
+            "output_key": "category_probs",
+            "output_shape": [8, 9],
+            "weights_sha256": WEIGHTS_SHA,
+            "architecture_sha256": ARCHITECTURE_SHA,
+            "sandbox_image_id": IMAGE_ID,
+        },
+    )
+
+
+def _fit_result(config):
+    pool = json.loads(Path(config["data"]["pool_manifest_path"]).read_text())
     return {
+        "finalize": {
+            "candidate_file": config["editable"],
+            "candidate_sha256": config["candidate_sha256"],
+            "git_commit": config["git_commit"],
+            "pool_manifest_sha256": pool["manifest_sha256"],
+            "selection_parent_manifest_sha256": pool[
+                "selection_parent_manifest_sha256"
+            ],
+            "candidate_output": {
+                "output_key": "category_probs",
+                "output_shape": [32, 9],
+            },
+            "fit_seconds": 0.01,
+        },
+        "weights_path": str(Path(config["out_dir"]) / "champion" / "weights.pt"),
+        "architecture_path": str(
+            Path(config["out_dir"]) / "champion" / "weights-architecture.json"
+        ),
+        "weights_sha256": WEIGHTS_SHA,
+        "architecture_sha256": ARCHITECTURE_SHA,
+    }
+
+
+def _patch_fitted_validator(monkeypatch, before_charge=None):
+    from research import finalize as finalize_mod
+
+    def validate(result, **kwargs):
+        if before_charge is not None:
+            before_charge()
+        return {
+            "output_key": "category_probs",
+            "output_shape": [32, 9],
+            "weights_sha256": WEIGHTS_SHA,
+            "architecture_sha256": ARCHITECTURE_SHA,
+        }
+
+    monkeypatch.setattr(finalize_mod, "_validate_fitted_artifacts", validate)
+
+
+def _refit_kwargs(worktree, manifest_path, head, records, out_dir):
+    return {
+        "worktree": worktree,
+        "out_dir": out_dir,
+        "manifest_path": manifest_path,
+        "dataset_path": "synthetic-unused",
+        "editable": "src/research/candidate.py",
+        "commit": head,
+        "records": records,
+        "task": "constitution",
+    }
+
+
+@pytest.mark.parametrize("failure", ["task", "schema", "candidate_sha"])
+def test_bad_task_schema_or_candidate_commit_fails_before_ledger(
+    tmp_path, monkeypatch, failure,
+):
+    from research import finalize as finalize_mod
+
+    records = fake_records()
+    worktree, candidate, manifest_path, _frozen, head = _worktree(tmp_path, records)
+    kwargs = _refit_kwargs(worktree, manifest_path, head, records, tmp_path / "out")
+    if failure == "task":
+        kwargs["task"] = "unknown"
+        match = "unknown research task"
+    elif failure == "schema":
+        manifest_path.write_text(json.dumps({"task_type": "wrong"}))
+        match = "manifest"
+    else:
+        candidate.write_text(CANDIDATE_SOURCE + "# changed after commit\n")
+        match = "candidate file SHA"
+
+    with pytest.raises((RuntimeError, ValueError), match=match):
+        finalize_mod.refit_and_score(**kwargs)
+    assert not (worktree / "runs" / "holdout-unlock-ledger.jsonl").exists()
+
+
+def test_container_preflight_failure_does_not_charge_unlock(tmp_path, monkeypatch):
+    from research import finalize as finalize_mod
+    from research import spawn as spawn_mod
+
+    records = fake_records()
+    worktree, _candidate, manifest_path, _frozen, head = _worktree(tmp_path, records)
+    ledger = finalize_mod.global_ledger_path(worktree)
+    called = []
+
+    def failed_preflight(config, *, preflight=False, **_kwargs):
+        assert preflight is True
+        called.append("container-preflight")
+        raise RuntimeError("synthetic container syntax rejection")
+
+    monkeypatch.setattr(spawn_mod, "run_sandboxed_candidate", failed_preflight)
+    kwargs = _refit_kwargs(worktree, manifest_path, head, None, tmp_path / "out")
+    kwargs["dataset_path"] = tmp_path / "unread-real-data"
+    with pytest.raises(RuntimeError, match="container syntax rejection"):
+        finalize_mod.refit_and_score(**kwargs)
+    assert called == ["container-preflight"]
+    assert not ledger.exists()
+
+
+def test_fit_failure_does_not_charge_unlock(tmp_path, monkeypatch):
+    from research import finalize as finalize_mod
+
+    records = fake_records()
+    worktree, _candidate, manifest_path, _frozen, head = _worktree(tmp_path, records)
+    _patch_preflight(monkeypatch)
+    kwargs = _refit_kwargs(worktree, manifest_path, head, records, tmp_path / "out")
+    ledger = finalize_mod.global_ledger_path(worktree)
+
+    def failed_fit(config, config_path):
+        assert not ledger.exists()
+        assert "ledger" not in json.dumps(config)
+        assert "holdout" not in json.dumps(config)
+        raise RuntimeError("synthetic fit failure")
+
+    with pytest.raises(RuntimeError, match="synthetic fit failure"):
+        finalize_mod.refit_and_score(**kwargs, spawn=failed_fit)
+    assert not ledger.exists()
+
+
+def test_fit_worker_timeout_covers_trusted_worker_startup_export_and_cleanup(
+    tmp_path, monkeypatch,
+):
+    from research import finalize as finalize_mod
+    from research import spawn as spawn_mod
+    from research.tasks import adapter_for
+
+    records = fake_records()
+    worktree, candidate, manifest_path, frozen, head = _worktree(tmp_path, records)
+    adapter = adapter_for("constitution")
+    selection = adapter.pool_manifest(
+        adapter.load_manifest(manifest_path), records, notes="synthetic timeout test",
+    ).data
+    pool_path = tmp_path / "pool-manifest.json"
+    pool_path.write_text(json.dumps(selection, ensure_ascii=False))
+    pool_rows = set(selection["subject_row_by_id"].values())
+    pool_records = [record for record in records if record.subject_index in pool_rows]
+
+    source_root = tmp_path / "sandbox-source"
+    staged_candidate = source_root / "research" / "candidate.py"
+    staged_candidate.parent.mkdir(parents=True)
+    staged_candidate.write_bytes(candidate.read_bytes())
+    output_dir = tmp_path / "out"
+    (output_dir / "champion").mkdir(parents=True)
+    budget = 20.0
+    candidate_output = {"output_key": "category_probs", "output_shape": [32, 9]}
+    observed = {}
+
+    def sandbox_run(config, *, timeout, **kwargs):
+        observed["timeout"] = timeout
+        observed["candidate_output"] = config.get("candidate_output")
+        return {
+            "fit_seconds": 0.01,
+            "input_spec_version": "synthetic-v1",
+            "candidate_output": candidate_output,
+            "sandbox_image_id": IMAGE_ID,
+            "weights_sha256": WEIGHTS_SHA,
+            "architecture_sha256": ARCHITECTURE_SHA,
+            "weights_path": str(output_dir / "champion" / "weights.pt"),
+            "architecture_path": str(
+                output_dir / "champion" / "weights-architecture.json"
+            ),
+        }
+
+    monkeypatch.setattr(spawn_mod, "run_sandboxed_candidate", sandbox_run)
+    config = {
         "worktree_path": str(worktree),
+        "sandbox_source_path": str(source_root),
         "editable": "src/research/candidate.py",
         "candidate_sha256": _sha256(candidate),
-        "git_commit": head or "0123456789abcdef",
-        "seed": 0,
-        "time_budget_seconds": 0.05,
+        "git_commit": head,
+        "task": "constitution",
+        "seed": 5,
+        "time_budget_seconds": budget,
         "train_batch_size": 8,
-        "ledger_path": str(tmp_path / "ledger" / "holdout-unlock-ledger.jsonl"),
-        "unlock_event_id": "a" * 32,
+        "out_dir": str(output_dir),
+        "candidate_preflight": {"sandbox_image_id": IMAGE_ID},
+        "data_parent_manifest_sha256": frozen.data["manifest_sha256"],
         "data": {
             "pool_manifest_path": str(pool_path),
             "pool_records_path": str(tmp_path / "pool-records.json"),
         },
-        "out_dir": str(tmp_path / "out"),
-    }, pool
+    }
+
+    result = finalize_mod._worker(config, records=pool_records)
+
+    assert observed["timeout"] == spawn_mod.sandbox_worker_process_timeout(budget)
+    assert observed["timeout"] > budget
+    assert result["finalize"]["candidate_output"] == candidate_output
 
 
-def _write_ledger_event(config, event_id=None) -> None:
-    """Record ONLY this run's intent event: the worker's budget check needs
-    room for it (a full ledger refuses any further fit)."""
-    from research.finalize import UNLOCK_LEDGER_FILE
-
-    ledger = Path(config["ledger_path"])
-    ledger.parent.mkdir(parents=True, exist_ok=True)
-    (ledger.parent / UNLOCK_LEDGER_FILE).write_text(
-        json.dumps({"event_id": event_id or config["unlock_event_id"]}) + "\n"
-    )
-
-
-def test_refit_spawns_a_worker_and_never_imports_the_candidate(tmp_path):
+def test_invalid_trusted_artifact_does_not_charge_unlock(tmp_path, monkeypatch):
     from research import finalize as finalize_mod
 
     records = fake_records()
-    worktree, candidate, manifest_path, frozen, _head = _worktree(tmp_path, records)
-    spawned: list[dict] = []
+    worktree, _candidate, manifest_path, _frozen, head = _worktree(tmp_path, records)
+    _patch_preflight(monkeypatch)
+    kwargs = _refit_kwargs(worktree, manifest_path, head, records, tmp_path / "out")
+    ledger = finalize_mod.global_ledger_path(worktree)
 
-    def spawn(config, config_path):
-        # the fit worker's config carries NO dataset path and NO frozen
-        # manifest path: the fitting code cannot reach the holdout (F-03/F-08)
-        assert "dataset_path" not in config["data"]
-        assert "frozen_manifest_path" not in config["data"]
-        assert config["candidate_sha256"] == _sha256(candidate)
-        spawned.append(config)
-        return {
-            "finalize": {"candidate_sha256": "x"},
-            "weights_path": "unused.pt", "architecture_path": "unused.json",
-            "weights_sha256": "0" * 64, "architecture_sha256": "0" * 64,
-        }
+    def invalid_validator(*args, **kwargs):
+        assert not ledger.exists()
+        raise RuntimeError("synthetic artifact contract mismatch")
 
-    def spawn_holdout(config, request):
-        # the holdout is scored by an evaluator subprocess whose config has
-        # the frozen manifest and pool manifest — never the fit worker's
-        assert config["data"]["frozen_manifest_path"]
-        assert "pool_records_path" not in config["data"]
-        return {"holdout": {"partition": "holdout"}, "baselines": {}}
+    monkeypatch.setattr(finalize_mod, "_validate_fitted_artifacts", invalid_validator)
+    with pytest.raises(RuntimeError, match="artifact contract mismatch"):
+        finalize_mod.refit_and_score(
+            **kwargs, spawn=lambda config, _path: _fit_result(config),
+        )
+    assert not ledger.exists()
 
-    # earlier test modules in this process may legitimately hold research.
-    # candidate in sys.modules, so the assertion is on the DELTA, not the set
-    modules_before = set(sys.modules)
-    out = finalize_mod.refit_and_score(
-        worktree=worktree, out_dir=tmp_path / "out",
-        manifest_path=manifest_path, dataset_path="unused",
-        editable="src/research/candidate.py", commit="0123456789abcdef",
-        records=records, spawn=spawn, spawn_holdout=spawn_holdout,
+
+def test_budget_exhaustion_refuses_before_preflight_and_dataset_read(
+    tmp_path, monkeypatch,
+):
+    from research import finalize as finalize_mod
+    from research import spawn as spawn_mod
+
+    records = fake_records()
+    worktree, _candidate, manifest_path, _frozen, head = _worktree(tmp_path, records)
+    ledger = finalize_mod.global_ledger_path(worktree)
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(
+        json.dumps({"event_id": "1" * 32}) + "\n"
+        + json.dumps({"event_id": "2" * 32}) + "\n"
     )
-    assert len(spawned) == 1 and out["finalize"]["candidate_sha256"] == "x"
-    assert out["holdout"]["partition"] == "holdout"
-    assert out["finalize"]["holdout_rows_untouched"] == len(
+    called = []
+    monkeypatch.setattr(
+        spawn_mod, "run_sandboxed_candidate",
+        lambda *args, **kwargs: called.append("candidate"),
+    )
+    kwargs = _refit_kwargs(worktree, manifest_path, head, None, tmp_path / "out")
+    kwargs["dataset_path"] = tmp_path / "missing-real-dataset"
+    with pytest.raises(RuntimeError, match="unlock budget"):
+        finalize_mod.refit_and_score(**kwargs)
+    assert called == []
+    assert finalize_mod.unlock_count(ledger) == 2
+
+
+def test_success_charges_after_fit_validation_before_holdout(
+    tmp_path, monkeypatch,
+):
+    from research import finalize as finalize_mod
+    from research import train_worker
+
+    monkeypatch.setattr(
+        train_worker,
+        "validate_candidate_source",
+        lambda _source: pytest.fail("candidate validation must run in the sandbox"),
+    )
+    records = fake_records()
+    worktree, candidate, manifest_path, frozen, head = _worktree(tmp_path, records)
+    _patch_preflight(monkeypatch)
+    kwargs = _refit_kwargs(worktree, manifest_path, head, records, tmp_path / "out")
+    ledger = finalize_mod.global_ledger_path(worktree)
+    validation_seen = []
+
+    def before_charge():
+        validation_seen.append(True)
+        assert not ledger.exists()
+
+    _patch_fitted_validator(monkeypatch, before_charge=before_charge)
+
+    def fit(config, _config_path):
+        assert not ledger.exists()
+        assert "ledger" not in json.dumps(config)
+        assert "holdout" not in json.dumps(config)
+        return _fit_result(config)
+
+    def holdout(config, request):
+        assert validation_seen == [True]
+        assert finalize_mod.unlock_count(ledger) == 1
+        event = json.loads(ledger.read_text().splitlines()[0])
+        assert event["task"] == "constitution"
+        assert event["candidate_sha256"] == _sha256(candidate)
+        assert event["champion_commit"] == head
+        assert event["pool_manifest_sha256"] == json.loads(
+            Path(config["data"]["pool_manifest_path"]).read_text()
+        )["manifest_sha256"]
+        assert config["unlock"]["event_id"] == event["event_id"]
+        assert "records_path" in config["data"]
+        assert "pool_records_path" not in config["data"]
+        return {"holdout": {"synthetic": True}, "baselines": {}}
+
+    result = finalize_mod.refit_and_score(
+        **kwargs, spawn=fit, spawn_holdout=holdout,
+    )
+    assert validation_seen == [True]
+    assert result["holdout"]["synthetic"] is True
+    assert result["finalize"]["holdout_rows_untouched"] == len(
         frozen.data["split"]["holdout"]
     )
-    config = spawned[0]
-    # the pool manifest handed to the worker holds pool rows only, and no
-    # holdout partition at all (F-05)
-    pool = json.loads(Path(config["data"]["pool_manifest_path"]).read_text())
-    expected = set(frozen.data["split"]["train"]) | set(frozen.data["split"]["dev"])
-    assert set(pool["subject_row_by_id"]) == expected
-    assert pool["split"]["holdout"] == []
-    # the driver never imports the agent-authored module
-    assert "research.candidate" not in set(sys.modules) - modules_before
+    assert finalize_mod.unlock_count(ledger) == 1
 
 
-def _ledger(out_dir: Path) -> Path:
-    return out_dir / "holdout-unlock-ledger.jsonl"
-
-
-def test_the_unlock_is_billed_before_the_worker_spawns(tmp_path):
-    """F-04: the intent event is appended before spawn — a worker that
-    crashes, hangs or is killed has still consumed the unlock event. Two
-    failed runs consume both events; the third attempt is refused without
-    spawning a worker."""
+def _holdout_fixture(tmp_path):
     from research import finalize as finalize_mod
+    from research.tasks import adapter_for
 
     records = fake_records()
-    worktree, _candidate, manifest_path, _frozen, _head = _worktree(tmp_path, records)
-    seen_events: list[str] = []
-
-    def crashing_spawn(config, config_path):
-        seen_events.append(config["unlock_event_id"])
-        raise RuntimeError("worker crashed mid-fit")
-
-    kwargs = dict(
-        worktree=worktree, out_dir=tmp_path / "out",
-        manifest_path=manifest_path, dataset_path="unused",
-        editable="src/research/candidate.py", commit="0123456789abcdef",
-        records=records, spawn=crashing_spawn,
-    )
-    with pytest.raises(RuntimeError, match="crashed"):
-        finalize_mod.refit_and_score(**kwargs)
-    with pytest.raises(RuntimeError, match="crashed"):
-        finalize_mod.refit_and_score(**kwargs)
-    assert len(seen_events) == 2
-    ledger = finalize_mod.global_ledger_path(worktree)
-    events = [json.loads(line) for line in ledger.read_text().splitlines() if line]
-    assert [e["event_id"] for e in events] == seen_events
-    assert events[0]["event"] == "holdout_unlock_intent"
-    # the third attempt is refused BEFORE any worker spawns, appending nothing
-    refused: list = []
-    with pytest.raises(RuntimeError, match="unlock budget"):
-        finalize_mod.refit_and_score(
-            **{**kwargs, "spawn": lambda c, p: refused.append(c)}
-        )
-    assert refused == []
-    assert finalize_mod.unlock_count(ledger) == 2
-
-
-def test_worker_budget_allows_the_final_legal_unlock():
-    """Round-4 review finding 1: the intent event for THIS run is charged
-    before the worker spawns, so a legal final unlock makes the ledger hold
-    exactly MAX_UNLOCKS events when the worker starts. The driver-side
-    check (run before charging) must refuse at >= MAX_UNLOCKS; the
-    worker-side check (run after charging) must refuse only an OVER-spend."""
-    import inspect
-
-    from research import finalize as finalize_mod
-
-    full = [{"event_id": "a" * 32}, {"event_id": "b" * 32}]
-    with tempfile.TemporaryDirectory() as tmp:
-        ledger = Path(tmp) / "ledger.jsonl"
-        ledger.write_text("".join(json.dumps(e) + "\n" for e in full))
-        # driver side: no slot left before charging
-        with pytest.raises(RuntimeError, match="unlock budget"):
-            finalize_mod._assert_unlock_budget(ledger)
-        # worker side: this run's own charge has filled the budget — legal
-        assert finalize_mod._assert_worker_budget(ledger) == 2
-        over = ledger.read_text() + json.dumps({"event_id": "c" * 32}) + "\n"
-        ledger.write_text(over)
-        with pytest.raises(RuntimeError, match="unlock budget"):
-            finalize_mod._assert_worker_budget(ledger)
-    # and the worker entry uses the worker-side check, not the driver's
-    worker_src = inspect.getsource(finalize_mod._worker)
-    assert "_assert_worker_budget(ledger)" in worker_src
-    assert "_assert_unlock_budget(ledger)" not in worker_src
-
-
-def test_the_ledger_is_global_and_not_inside_out(tmp_path):
-    """F-04: the ledger path does not drift with --out; it resolves through
-    the worktree's git common dir, so a new out_dir cannot reset the count."""
-    from research import finalize as finalize_mod
-
-    records = fake_records()
-    worktree, _candidate, manifest_path, _frozen, _head = _worktree(tmp_path, records)
-    ledger = finalize_mod.global_ledger_path(worktree)
-    assert ledger.name == "holdout-unlock-ledger.jsonl"
-    assert ledger.parent.name == "runs"
-    assert ledger == worktree / "runs" / "holdout-unlock-ledger.jsonl"
-
-    # two unlocks via different out dirs consume the SAME budget
-    kwargs = dict(
-        worktree=worktree, manifest_path=manifest_path, dataset_path="unused",
-        editable="src/research/candidate.py", commit="0123456789abcdef",
-        records=records,
-        spawn=lambda config, path: {
-            "finalize": {}, "weights_path": "w", "architecture_path": "a",
-            "weights_sha256": "0" * 64, "architecture_sha256": "0" * 64,
+    worktree, candidate, frozen_path, _frozen_built, head = _worktree(tmp_path, records)
+    adapter = adapter_for("constitution")
+    frozen = adapter.load_manifest(frozen_path)
+    pool = adapter.pool_manifest(frozen, records, notes="synthetic").data
+    pool_path = tmp_path / "pool.json"
+    pool_path.write_text(json.dumps(pool, ensure_ascii=False))
+    ledger = finalize_mod.global_ledger_path(worktree, "constitution")
+    event_id = "e" * 32
+    preflight = {
+        "output_key": "category_probs",
+        "output_shape": [8, 9],
+        "weights_sha256": "e" * 64,
+        "architecture_sha256": "d" * 64,
+        "sandbox_image_id": IMAGE_ID,
+        "synthetic_manifest_sha256": "c" * 64,
+    }
+    fit_artifacts = {
+        "output_key": "category_probs",
+        "output_shape": [32, 9],
+        "weights_sha256": WEIGHTS_SHA,
+        "architecture_sha256": ARCHITECTURE_SHA,
+    }
+    unlock = {
+        "ledger_path": str(ledger),
+        "event_id": event_id,
+        "task": "constitution",
+        "candidate_sha256": _sha256(candidate),
+        "champion_commit": head,
+        "pool_manifest_sha256": pool["manifest_sha256"],
+        "selection_parent_manifest_sha256": frozen["manifest_sha256"],
+        "candidate_preflight": preflight,
+        "fit_artifacts": fit_artifacts,
+    }
+    event = {
+        "event": "holdout_unlock_intent",
+        "event_id": event_id,
+        "task": "constitution",
+        "candidate_sha256": _sha256(candidate),
+        "champion_commit": head,
+        "candidate_preflight": preflight,
+        "fit_artifacts": fit_artifacts,
+        "pool_manifest_sha256": pool["manifest_sha256"],
+        "selection_parent_manifest_sha256": frozen["manifest_sha256"],
+    }
+    config = {
+        "worktree_path": str(worktree),
+        "task": "constitution",
+        "unlock": unlock,
+        "data": {
+            "pool_manifest_path": str(pool_path),
+            "frozen_manifest_path": str(frozen_path),
         },
-        spawn_holdout=lambda config, req: {"holdout": {}, "baselines": {}},
+    }
+    request = {
+        "weights_path": "synthetic-weights.pt",
+        "architecture_path": "synthetic-architecture.json",
+        "weights_sha256": WEIGHTS_SHA,
+        "architecture_sha256": ARCHITECTURE_SHA,
+    }
+    return finalize_mod, worktree, ledger, config, request, event
+
+
+@pytest.mark.parametrize("ledger_mode", ["missing", "wrong_candidate", "wrong_pool"])
+def test_holdout_refuses_before_loading_records(tmp_path, monkeypatch, ledger_mode):
+    from research import evaluator as evaluator_mod
+    from research.tasks import ConstitutionAdapter
+
+    _finalize_mod, _worktree, ledger, config, request, event = _holdout_fixture(tmp_path)
+    records_loaded = []
+    monkeypatch.setattr(
+        ConstitutionAdapter, "load_eval_records",
+        lambda self, config: records_loaded.append(True),
     )
-    finalize_mod.refit_and_score(out_dir=tmp_path / "out-a", **kwargs)
-    finalize_mod.refit_and_score(out_dir=tmp_path / "out-b", **kwargs)
-    assert finalize_mod.unlock_count(ledger) == 2
-    with pytest.raises(RuntimeError, match="unlock budget"):
-        finalize_mod.refit_and_score(out_dir=tmp_path / "out-c", **kwargs)
-    # and --out never grew a ledger of its own
-    assert not _ledger(tmp_path / "out-a").exists()
-    assert not _ledger(tmp_path / "out-b").exists()
+    if ledger_mode != "missing":
+        if ledger_mode == "wrong_candidate":
+            event["candidate_sha256"] = "0" * 64
+        else:
+            event["pool_manifest_sha256"] = "0" * 64
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(json.dumps(event) + "\n")
+    with pytest.raises(RuntimeError, match="holdout unlock"):
+        evaluator_mod.score_holdout(config, request)
+    assert records_loaded == []
 
 
-def test_the_worker_refits_without_reading_the_holdout(tmp_path):
-    from research.finalize import _worker
+def test_valid_holdout_event_allows_synthetic_provider_after_validation(
+    tmp_path, monkeypatch,
+):
+    from research import evaluator as evaluator_mod
+    from research.tasks import ConstitutionAdapter
 
-    records = fake_records(40)
-    worktree, candidate, manifest_path, frozen, head = _worktree(tmp_path, records)
-    config, pool = _config(tmp_path, worktree, candidate, records, head=head)
-    _write_ledger_event(config)
-    pool_records = [
-        r for r in records
-        if r.subject_index in set(pool["subject_row_by_id"].values())
-    ]
-    (tmp_path / "pool-records.json").write_text(records_to_json(pool_records))
-    out = _worker(config, records=pool_records)
-    finalize = out["finalize"]
-    assert finalize["refit_partition"] == "train+dev"
-    assert finalize["refit_rows"] == len(pool["split"]["train"])
-    assert finalize["candidate_sha256"] == _sha256(candidate)
-    assert finalize["worktree_commit"] == head
-    assert finalize["selection_parent_manifest_sha256"] == (
-        pool["selection_parent_manifest_sha256"]
-    )
-    # fit-only: no holdout report is produced in the worker (F-03)
-    assert "holdout" not in out
-    weights = Path(config["out_dir"]) / "champion" / "weights.pt"
-    assert weights.exists()
-    import torch
-
-    state = torch.load(weights, weights_only=True)
-    assert isinstance(state, dict) and state
-
-
-def test_the_worker_refuses_code_that_does_not_match_the_recorded_sha(tmp_path):
-    from research.finalize import _worker
-
-    records = fake_records(40)
-    worktree, candidate, manifest_path, frozen, head = _worktree(tmp_path, records)
-    config, _pool = _config(tmp_path, worktree, candidate, records, head=head)
-    _write_ledger_event(config)
-    config["candidate_sha256"] = "0" * 64
-    with pytest.raises(RuntimeError, match="refusing to fit"):
-        _worker(config, records=records)
-
-
-def test_the_worker_refuses_a_missing_ledger_event(tmp_path):
-    """F-04: `python -m research.finalize` by hand cannot skip the ledger."""
-    from research import finalize as finalize_mod
-    from research.finalize import _worker
-
-    records = fake_records(40)
-    worktree, candidate, manifest_path, frozen, head = _worktree(tmp_path, records)
-    config, _pool = _config(tmp_path, worktree, candidate, records, head=head)
-    # budget has room, but only some OTHER run's event is on file
-    ledger = Path(config["ledger_path"])
+    _finalize_mod, _worktree, ledger, config, request, event = _holdout_fixture(tmp_path)
     ledger.parent.mkdir(parents=True, exist_ok=True)
-    ledger.write_text(json.dumps({"event_id": "c" * 32}) + "\n")
-    with pytest.raises(RuntimeError, match="unlock intent event"):
-        _worker(config, records=records)
-    # with the event recorded but the budget exhausted, the worker still
-    # refuses: the worker entry enforces the budget itself
-    ledger = Path(config["ledger_path"])
-    event_id = config["unlock_event_id"]
-    extras = "\n".join(
-        json.dumps({"event_id": "z" * 32})
-        for _ in range(finalize_mod.MAX_UNLOCKS)
+    ledger.write_text(json.dumps(event) + "\n")
+    records_loaded = []
+    monkeypatch.setattr(
+        evaluator_mod, "_load_model", lambda _request, *, task: object()
     )
-    ledger.write_text(json.dumps({"event_id": event_id}) + "\n" + extras + "\n")
-    with pytest.raises(RuntimeError, match="unlock budget"):
-        _worker(config, records=records)
+    monkeypatch.setattr(
+        ConstitutionAdapter, "load_eval_records",
+        lambda self, config: records_loaded.append(True) or ["synthetic"],
+    )
+    monkeypatch.setattr(
+        ConstitutionAdapter, "score_holdout",
+        lambda self, config, request, records, model: {
+            "holdout": {"synthetic": True}, "baselines": {},
+        },
+    )
+    result = evaluator_mod.score_holdout(config, request)
+    assert records_loaded == [True]
+    assert result["holdout"]["synthetic"] is True
 
 
-def test_ledger_contains_matches_parsed_event_ids(tmp_path):
-    # H-03: substring matching confused a query with any longer event_id (or
-    # any JSON field whose value embeds one); the match is on the parsed
-    # event_id field, line by line
-    from research.finalize import ledger_contains
+def test_ledger_validation_fails_closed_on_corrupt_or_duplicate_events(tmp_path):
+    from research import finalize as finalize_mod
 
     ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text('{"event_id": "bad"}\n')
+    with pytest.raises(RuntimeError, match="event_id"):
+        finalize_mod.unlock_count(ledger)
     ledger.write_text(
-        json.dumps({"event_id": "abcdef"}) + "\n"
-        # a hand-written/corrupt line embeds the query as text: substring
-        # matching reports it, per-line json parsing must skip it
-        + '{"event_id": "abc", broken\n'
-        + json.dumps({"note": "unrelated"}) + "\n"
+        json.dumps({"event_id": "a" * 32}) + "\n"
+        + json.dumps({"event_id": "a" * 32}) + "\n"
     )
-    assert ledger_contains(ledger, "abcdef")
-    assert not ledger_contains(ledger, "abc")
-    assert not ledger_contains(ledger, "zzzz")
+    with pytest.raises(RuntimeError, match="duplicate"):
+        finalize_mod.unlock_count(ledger)
 
 
-def test_concurrent_drivers_cannot_overspend_the_ledger(tmp_path):
-    """H-03: counting and appending must be ONE exclusive critical section.
-    Two concurrent drivers with one unlock left may consume exactly it — the
-    second is refused before spawning. A json.dumps hook widens the
-    count→write window so the race is deterministic, not lucky."""
-    import textwrap
+def test_trusted_artifact_pair_caps_architecture_before_loading(tmp_path, monkeypatch):
+    import hashlib
 
-    from data.mendeley import records_to_json
-    from research import finalize as finalize_mod
+    from research import model_export
+    from research.finalize import _trusted_artifact_pair
 
-    records = fake_records(40)
-    worktree, _candidate, manifest_path, _frozen, _head = _worktree(
-        tmp_path, records
+    output_dir = tmp_path / "trusted-output"
+    output_dir.mkdir()
+    weights = output_dir / "weights.pt"
+    architecture = output_dir / "architecture.json"
+    weights.write_bytes(b"synthetic weights")
+    architecture.write_bytes(
+        b" " * (model_export.MAX_ARCHITECTURE_BYTES + 1)
     )
-    records_path = tmp_path / "records.json"
-    records_path.write_text(records_to_json(records))
-    ledger = finalize_mod.global_ledger_path(worktree)
-    ledger.parent.mkdir(parents=True, exist_ok=True)
-    # one unlock already spent: exactly ONE more charge fits the budget
-    ledger.write_text(json.dumps({"event_id": "d" * 32}) + "\n")
-
-    child = textwrap.dedent("""
-        import json as json_mod, sys, time
-        from pathlib import Path
-        _orig = json_mod.dumps
-        def slow(*a, **k):
-            time.sleep(0.6)  # widen the count->append window for BOTH drivers
-            return _orig(*a, **k)
-        json_mod.dumps = slow
-        sys.path.insert(0, sys.argv[1])
-        from research import finalize as F
-        from data.mendeley import records_from_json
-        records = records_from_json(Path(sys.argv[2]).read_text())
-        try:
-            F.refit_and_score(
-                worktree=Path(sys.argv[3]), out_dir=Path(sys.argv[4]),
-                manifest_path=Path(sys.argv[5]), dataset_path="unused",
-                editable="src/research/candidate.py",
-                commit="0123456789abcdef", records=records,
-                spawn=lambda c, p: (_ for _ in ()).throw(
-                    RuntimeError("worker crashed mid-fit")),
-            )
-            print("CHARGED")
-        except RuntimeError as exc:
-            print("REFUSED:", exc)
-    """)
-    script_path = tmp_path / "driver-child.py"
-    script_path.write_text(child)
-    src_root = str(Path(__file__).resolve().parents[2] / "src")
-    procs = []
-    for run in range(2):
-        out_dir = tmp_path / f"out-{run}"
-        procs.append(subprocess.Popen(
-            [sys.executable, str(script_path), src_root, str(records_path),
-             str(worktree), str(out_dir), str(manifest_path)],
-            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        ))
-    outputs = [proc.communicate(timeout=180)[0] for proc in procs]
-    events = [
-        json.loads(line)
-        for line in ledger.read_text().splitlines() if line.strip()
-    ]
-    assert len(events) == 2, outputs
-    # exactly one driver fits under the budget; the other is refused before
-    # its worker spawns
-    assert sum("unlock budget" in out for out in outputs) == 1, outputs
-
-
-def test_the_worker_binds_the_git_state_to_the_record(tmp_path):
-    """F-09: HEAD must be the recorded commit and the tree clean beyond the
-    editable file, or the fitted code is not the committed, recorded one."""
-    from research.finalize import _worker
-
-    records = fake_records(40)
-    repo = tmp_path / "repo"
-    (repo / "src" / "research").mkdir(parents=True)
-    candidate = repo / "src" / "research" / "candidate.py"
-    candidate.write_text("WIDTH = 32\n")
-    (repo / "src" / "other.txt").write_text("frozen machinery\n")
-    _git_init(repo)
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "base"], cwd=repo, check=True)
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
-        text=True, capture_output=True,
-    ).stdout.strip()
-
-    frozen = build_real_manifest(records, dataset_sha256=DATASET_SHA)
-    pool = pool_manifest(frozen.data, records, notes="test").data
-    (repo.parent / "ledger.jsonl").write_text(
-        json.dumps({"event_id": "b" * 32}) + "\n"
-    )
-    config = {
-        "worktree_path": str(repo),
-        "editable": "src/research/candidate.py",
-        "candidate_sha256": _sha256(candidate),
-        "git_commit": head,
-        "seed": 0,
-        "time_budget_seconds": 0.05,
-        "train_batch_size": 8,
-        "ledger_path": str(repo.parent / "ledger.jsonl"),
-        "unlock_event_id": "b" * 32,
-        "data": {
-            "pool_manifest_path": str(tmp_path / "pool.json"),
-            "pool_records_path": str(tmp_path / "pool-records.json"),
-        },
-        "out_dir": str(repo.parent / "out"),
+    result = {
+        "weights_path": str(weights),
+        "weights_sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
+        "architecture_path": str(architecture),
+        "architecture_sha256": hashlib.sha256(
+            architecture.read_bytes()
+        ).hexdigest(),
     }
-    (tmp_path / "pool.json").write_text(json.dumps(pool, ensure_ascii=False))
-    pool_records = [
-        r for r in records
-        if r.subject_index in set(pool["subject_row_by_id"].values())
-    ]
-    (tmp_path / "pool-records.json").write_text(records_to_json(pool_records))
-    out = _worker(config, records=pool_records)
-    assert out["finalize"]["worktree_commit"] == head
 
-    # a wrong recorded commit is refused
-    config["git_commit"] = "0" * 40
-    with pytest.raises(RuntimeError, match="unrecorded tree state"):
-        _worker(config, records=records)
+    with pytest.raises(RuntimeError, match="architecture.*limit"):
+        _trusted_artifact_pair(
+            result, output_dir, task="constitution"
+        )
 
-    # a dirty TRACKED file beyond the editable file is refused
-    config["git_commit"] = head
-    (repo / "src" / "other.txt").write_text("uncommitted work\n")
-    with pytest.raises(RuntimeError, match="dirty beyond the editable"):
-        _worker(config, records=records)
-    # untracked work products (the ledger, out_dir payloads) do not refuse
-    subprocess.run(["git", "checkout", "--", "src/other.txt"], cwd=repo, check=True)
-    (repo / "runs").mkdir(exist_ok=True)
-    (repo / "runs" / "holdout-unlock-ledger.jsonl").write_text("{}\n")
-    out = _worker(config, records=pool_records)
-    assert out["finalize"]["worktree_commit"] == head
+
+def test_preflight_uses_sandbox_validation_without_host_model_load(tmp_path, monkeypatch):
+    import hashlib
+
+    from research import model_export
+    from research.finalize import _validate_preflight_artifacts
+    output = tmp_path / "sandbox-output"
+    output.mkdir()
+    weights = output / "weights.pt"
+    architecture = output / "weights-architecture.json"
+    weights.write_bytes(b"opaque bounded weights")
+    architecture.write_bytes(b"opaque bounded architecture")
+    weights_sha = hashlib.sha256(weights.read_bytes()).hexdigest()
+    architecture_sha = hashlib.sha256(architecture.read_bytes()).hexdigest()
+    def host_load_forbidden(*_args, **_kwargs):
+        pytest.fail("finalize must consume the sandbox attestation, not rebuild on host")
+    monkeypatch.setattr(model_export, "load_eval_model", host_load_forbidden)
+    result = {
+        "candidate_sha256": "a" * 64,
+        "task": "constitution",
+        "output_key": "category_probs",
+        "output_shape": [8, 9],
+        "weights_path": str(weights),
+        "weights_sha256": weights_sha,
+        "architecture_path": str(architecture),
+        "architecture_sha256": architecture_sha,
+        "trusted_validation": {
+            "task": "constitution",
+            "output_key": "category_probs",
+            "output_shape": [8, 9],
+            "weights_sha256": weights_sha,
+            "architecture_sha256": architecture_sha,
+        },
+    }
+    validated = _validate_preflight_artifacts(
+        result, "constitution", "a" * 64, {"output_dir": str(output)},
+    )
+    assert validated["output_key"] == "category_probs"
+    assert validated["output_shape"] == [8, 9]
+    assert validated["weights_sha256"] == weights_sha

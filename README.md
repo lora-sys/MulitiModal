@@ -8,8 +8,10 @@ Phase 1 工程闭环（#51/#48/#39/#49/#40/#44/#45）+ 证据注册表与 GO 门
 
 **#50 交付结论（2026-10-31，v8 —— config 时代结论，已被源码级 v9/v10 取代）**：harness 时代的 24 轮 AutoResearch 在可编辑空间（lr / epochs / hidden / fusion / batch / grad_clip，仅 6 个超参取值）内没有任何配置能超过折间噪声击败基线——**空搜索空间产生不了研究**，此结论只对"只能改超参取值"的设定成立。改源码后（`src/research/`，v10，同一数据、同一冻结划分 seed 20261107），8 轮即把 12 折选择 macro-AP 从 0.3424 抬到 0.3595（+0.017，冠军 tcm-0004 = 3 成员集成、13 行实现）；随后的 phase-3 批跑（5 轮架构/损失攻击）全部 REVERT，冠军未再移动。v11（2026-11-01，隔离加固后的引擎：复杂度按 AST 节点+字符串 payload 计价、候选模型须经冻结词表导出）6 轮全部未过噪声门槛——分支冠军记为 lr 1e-2（0.3475，对起点基线 0.3424 是噪声级差异），且 v10 的集成方向在新引擎下被词表与复杂度定价双重排除（详见 [docs/reports/research-src-v11.md](docs/reports/research-src-v11.md)）。holdout 解锁预算 2/2 已用满（v10 交付 macro-AP 0.3724；2026-11-01 最终交付 v11 冠军 lr 1e-2：0.3702）：两次神经交付都高于 Dummy（0.2887）与全特征逻辑回归（0.3502），但**都没有胜过只有 2 个特征的 BMI-only 逻辑回归（0.3761，42 人上不可区分）——不得宣称神经模型优于简单基线**；v8 报告的 holdout macro-F1 0.383 优势经查是阈值产物（同一逻辑回归按训练先验阈值可得 0.3844）。详见 [docs/reports/research-src-v9.md](docs/reports/research-src-v9.md)（v8 原始报告：[docs/reports/tcm-50-real-training.md](docs/reports/tcm-50-real-training.md)）。仍是 RULE 派生标签、行序受试者身份（UNVERIFIED）、holdout 42 人，**GO_RESEARCH_CLAIMS 未放行**。数据集扩充：无公开可下载的配对数据集，唯一值得申请的 PHDA 脉诊库需人工账号申请（`docs/data/dataset-audit-report.md` §6）。
 
-- 分支：`feature/clean-slate`（空起点；旧历史仅见 GitHub commit `9fc5087d`，已删除，不作依赖）
-- 主 Epic：#22（双模型 + AutoResearch/RSI V1）
+- 分支：`feature/clean-slate`（空起点；旧历史仅见 GitHub commit `9fc5087d`，已删除，不作依赖）；中医证候线在 `feature/tcm-sd-syndrome-v1`
+- 主 Epic：#22（双模型 + AutoResearch/RSI V1）；证候 Epic：#52（#53 阶段 1 已交付，#54 阶段 2 Blocked）
+- **证候线交付（2026-11-02，#53 阶段 1）**：TCM-SD 54,152 病例/52,295 用户/148 证型受试者级重划分 + 按场景基准评测集去重；AutoResearch 9 轮裁决出线性头冠军（0.3260 选择池），holdout 解锁 1/1：神经冠军 0.3324 vs 冻结 TF-IDF+LR **0.3732** vs Dummy 0.0020——**神经未胜过经典线性基线**（与体质线结论模式一致）；推理接口（OK/UNCERTAIN/ABSTAIN/OUT_OF_DOMAIN）+ realtime_feedback 知识参考接口交付，外部泛化 NOT_COMPUTABLE（对齐覆盖不足），GO_RESEARCH_CLAIMS 未放行。详见 [docs/reports/research-sd-v1.md](docs/reports/research-sd-v1.md)、[可视化仪表盘](docs/reports/sd-v1-dashboard.html) 与 [模型卡](docs/models/tcm-sd-syndrome-v1-card.md)
+- **#56 sandbox limits**: per-run artifacts are capped at 96 MiB and container output at 128 MiB; a host-wide quota across completed run directories remains an operator setting. See [the resource boundary report](docs/reports/issue-56-sandbox-boundary.md).
 - P0 优先：#48 双模型 Neural Core、#49 训练/评估基础设施；#50 中医模型先行真实训练
 - 一手需求源：`docs/source/pre-massage-fatigue-prediction-framework.pdf`（研究设计草稿，含 `[value]` 占位符；SHA-256 `29727dace…d781`）
 

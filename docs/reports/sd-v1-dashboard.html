@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#53 阶段 1 · 中医证候模型 sd-v1 战役与最终交付</title>
+<style>
+.viz-root {
+  color-scheme: light;
+  --surface-1:      #fcfcfb;
+  --surface-2:      #f2f1ee;
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #8a8880;
+  --grid:           #e3e2de;
+  --series-1:       #2a78d6;  /* 经典线性基线 (TF-IDF/LR) */
+  --series-2:       #eb6834;  /* 神经模型 */
+  --seq-before:     #9ec5f4;  /* sequential blue step 200 */
+  --seq-after:      #2a78d6;  /* sequential blue step 450 */
+  --good:           #0ca30c;
+  --neutral-mark:   #b8b6ae;
+  font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --surface-2:      #232322;
+    --text-primary:   #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #8a8880;
+    --grid:           #35342f;
+    --series-1:       #3987e5;
+    --series-2:       #d95926;
+    --seq-before:     #5598e7;
+    --seq-after:      #86b6ef;
+    --good:           #0ca30c;
+    --neutral-mark:   #55534c;
+  }
+}
+:root[data-theme="dark"] .viz-root {
+  color-scheme: dark;
+  --surface-1: #1a1a19; --surface-2: #232322; --text-primary: #f0efec;
+  --text-secondary: #c3c2b7; --text-muted: #8a8880; --grid: #35342f;
+  --series-1: #3987e5; --series-2: #d95926; --seq-before: #5598e7;
+  --seq-after: #86b6ef; --good: #0ca30c; --neutral-mark: #55534c;
+}
+:root[data-theme="light"] .viz-root {
+  --surface-1: #fcfcfb; --surface-2: #f2f1ee; --text-primary: #0b0b0b;
+  --text-secondary: #52514e; --text-muted: #8a8880; --grid: #e3e2de;
+  --series-1: #2a78d6; --series-2: #eb6834; --seq-before: #9ec5f4;
+  --seq-after: #2a78d6; --good: #0ca30c; --neutral-mark: #b8b6ae;
+}
+.viz-root { background: var(--surface-1); color: var(--text-primary); margin: 0; padding: 28px clamp(12px, 4vw, 48px) 60px; }
+.viz-root h1 { font-size: 22px; margin: 0 0 4px; }
+.viz-root h2 { font-size: 17px; margin: 34px 0 4px; }
+.viz-root .sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 18px; }
+.viz-root .note { color: var(--text-secondary); font-size: 13px; max-width: 880px; margin: 6px 0 0; }
+.viz-root .banner { border: 1px solid var(--grid); background: var(--surface-2); border-radius: 8px; padding: 10px 14px; font-size: 13px; color: var(--text-secondary); max-width: 880px; margin: 14px 0 4px; }
+.tiles { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0 6px; }
+.tile { border: 1px solid var(--grid); border-radius: 10px; background: var(--surface-2); padding: 12px 16px; min-width: 168px; }
+.tile .k { font-size: 12px; color: var(--text-secondary); }
+.tile .v { font-size: 26px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .s { font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.tile .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: 1px; }
+.chart-card { border: 1px solid var(--grid); border-radius: 10px; background: var(--surface-1); padding: 14px 14px 8px; max-width: 920px; margin-top: 10px; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 12.5px; color: var(--text-secondary); margin: 2px 0 8px; }
+.legend .item { display: flex; align-items: center; gap: 6px; }
+.legend .box { width: 12px; height: 12px; border-radius: 3px; }
+svg { display: block; max-width: 100%; height: auto; }
+svg text { font-family: inherit; }
+.bar { cursor: default; }
+#tooltip { position: fixed; pointer-events: none; background: var(--text-primary); color: var(--surface-1); font-size: 12px; line-height: 1.45; padding: 7px 10px; border-radius: 6px; opacity: 0; transition: opacity .08s; max-width: 340px; z-index: 10; }
+table.data { border-collapse: collapse; font-size: 12.5px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+table.data th, table.data td { border: 1px solid var(--grid); padding: 5px 10px; text-align: left; }
+table.data th { background: var(--surface-2); color: var(--text-secondary); font-weight: 600; }
+footer { margin-top: 40px; font-size: 12px; color: var(--text-muted); max-width: 880px; line-height: 1.6; }
+code { background: var(--surface-2); border-radius: 4px; padding: 1px 5px; font-size: 11.5px; }
+.theme-toggle { position: fixed; top: 14px; right: 16px; border: 1px solid var(--grid); background: var(--surface-2); color: var(--text-secondary); border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+.kbadge { display:inline-block; font-size: 11px; border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+.kbadge.keep { color: var(--good); border: 1px solid var(--good); }
+.kbadge.revert { color: var(--text-muted); border: 1px solid var(--text-muted); }
+</style>
+</head>
+<body class="viz-root">
+<button class="theme-toggle" onclick="const r=document.documentElement; r.dataset.theme = r.dataset.theme==='dark'?'light':(r.dataset.theme==='light'?'dark':'dark')">主题</button>
+<div id="tooltip"></div>
+
+<h1>中医证候倾向模型 · sd-v1 战役与最终交付</h1>
+<p class="sub">Issue #53 阶段 1 · TCM-SD 54,152 病例 / 52,295 用户 / 148 证型 · 受试者级划分 seed 20261101 · 2026-11-02 · 分支 feature/tcm-sd-syndrome-v1 · PR #55</p>
+<div class="banner">口径声明：所有 macro-F1 为观察类平均（引擎 tcm-sd-eval-v1 口径；LR 对照按同口径复算）。模型输出不构成诊断准确率或临床有效性声明；数据许可 CC BY-NC-SA 4.0 仅限非商业科研。holdout 解锁预算 1/1 已用满。</div>
+
+<h2>最终 holdout（4,049 例 · 隔离评分一次）</h2>
+<div class="tiles">
+  <div class="tile"><div class="k"><span class="swatch" style="background:var(--series-2)"></span>神经冠军（AutoResearch 优化）</div><div class="v">0.3324</div><div class="s">线性头 · 选择池 refit seed 0</div></div>
+  <div class="tile"><div class="k"><span class="swatch" style="background:var(--series-1)"></span>冻结 TF-IDF+LR 基线</div><div class="v">0.3732</div><div class="s">同池训练 · 同口径评分</div></div>
+  <div class="tile"><div class="k">多数类 Dummy</div><div class="v">0.0020</div><div class="s">朴素下界</div></div>
+  <div class="tile"><div class="k">神经 − LR</div><div class="v">−0.041</div><div class="s">未胜过简单基线（与体质线结论一致）</div></div>
+</div>
+
+<div class="chart-card">
+  <h2 style="margin-top:2px">holdout 对比</h2>
+  <div class="legend">
+    <div class="item"><span class="box" style="background:var(--series-1)"></span>TF-IDF+LR（冻结）</div>
+    <div class="item"><span class="box" style="background:var(--series-2)"></span>神经冠军（线性头）</div>
+    <div class="item"><span class="box" style="background:var(--neutral-mark)"></span>多数类 Dummy</div>
+  </div>
+  <svg viewBox="0 0 880 240" role="img" aria-label="holdout macro-F1 对比条形图">
+    <g id="holdout-bars"></g>
+  </svg>
+  <p class="note">AutoResearch 把神经模型从冒烟 0.1379 提到 0.3324（+0.14）并正确识别架构方向（该特征空间线性可分），但在模板化病历文本 + 尾部类别支持度低的条件下，经典字符 n-gram 线性模型仍领先 0.041。</p>
+</div>
+
+<div class="chart-card">
+  <h2 style="margin-top:2px">AutoResearch 战役 9 轮<span class="kbadge keep">2 KEEP</span><span class="kbadge revert">7 REVERT</span></h2>
+  <div class="legend">
+    <div class="item"><span class="box" style="background:var(--good)"></span>KEEP（✓ 入账并前进）</div>
+    <div class="item"><span class="box" style="background:var(--neutral-mark)"></span>REVERT（未过噪声门槛或复杂度地板）</div>
+    <div class="item"><span class="box" style="border:1.5px dashed var(--text-secondary); background:none"></span>冠军水平 0.3260</div>
+  </div>
+  <svg viewBox="0 0 880 250" role="img" aria-label="战役 9 轮 macro-F1 条形图">
+    <g id="campaign-bars"></g>
+  </svg>
+  <p class="note">每折墙钟 90 s、3 折 × 2 重复、seed 0，全部候选由真实 agent 提案、引擎独立裁决。轮 6（两层头）+0.0056 过噪声门槛但未过复杂度地板（11 节点 × 0.001），按项目经济学判负——与体质线 v10 冠军裁决同口径，未事后放宽系数。轮 4–8 连续 REVERT 触发 PLATEAU=5 早停。</p>
+</div>
+
+<div class="chart-card">
+  <h2 style="margin-top:2px">dev 场景对比（按场景基准去重后）</h2>
+  <div class="legend">
+    <div class="item"><span class="box" style="background:var(--series-1)"></span>TF-IDF+LR</div>
+    <div class="item"><span class="box" style="background:var(--series-2)"></span>BERT 微调</div>
+  </div>
+  <svg viewBox="0 0 880 240" role="img" aria-label="dev 两场景两模型分组条形图">
+    <g id="dev-bars"></g>
+  </svg>
+  <p class="note">clinical = 主诉+现病史+四诊摘要；short = 仅主诉（主报告口径，模拟用户短输入）。病历文本高度模板化使字符 n-gram 特征极强，尾部 100+ 类支持度低限制 BERT 逐类表现。</p>
+</div>
+
+<div class="chart-card">
+  <h2 style="margin-top:2px">评测集去重的影响（TF-IDF+LR，dev）</h2>
+  <div class="legend">
+    <div class="item"><span class="box" style="background:var(--seq-before)"></span>去重前（含记忆效应）</div>
+    <div class="item"><span class="box" style="background:var(--seq-after)"></span>去重后（主口径）</div>
+  </div>
+  <svg viewBox="0 0 880 220" role="img" aria-label="去重前后配对条形图">
+    <g id="dedup-bars"></g>
+  </svg>
+  <p class="note">按场景输入文本基准单向去重：dev 中与 train 逐字节同文本的病例剔除（short 剔 2,065/5,412 = 38.1%；clinical 剔 595/5,412 = 11.0%），train 全量保留。首轮修复用临床全文基准只收回 short 泄漏的一小部分，主线复核后改为按场景基准——这是 R1 审查（GO-WITH-FINDINGS）裁决落地的关键契约修正。</p>
+</div>
+
+<h2>数据表</h2>
+<table class="data">
+  <tr><th>评测</th><th>模型 / 候选</th><th>macro-F1</th><th>n</th><th>备注</th></tr>
+  <tr><td rowspan="3">holdout（解锁 1/1）</td><td><span class="swatch" style="background:var(--series-1);display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px"></span>TF-IDF+LR（冻结，池训练）</td><td><b>0.3732</b></td><td>4,049</td><td>全类=观察类（预测覆盖全部 148 类）</td></tr>
+  <tr><td><span class="swatch" style="background:var(--series-2);display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px"></span>神经冠军（线性头，tcm-0003 refit）</td><td>0.3324</td><td>4,049</td><td>weights SHA 1a180268…，台账 00dd8687…</td></tr>
+  <tr><td>多数类 Dummy</td><td>0.0020</td><td>4,049</td><td>朴素下界</td></tr>
+  <tr><td rowspan="4">dev（去重后）</td><td>TF-IDF+LR · clinical</td><td><b>0.5754</b></td><td>4,817</td><td>Top-3 0.9520 / Top-5 0.9695</td></tr>
+  <tr><td>BERT · clinical</td><td>0.2249</td><td>4,817</td><td>重评分（选择通道为去重前 dev）</td></tr>
+  <tr><td>TF-IDF+LR · short</td><td><b>0.3449</b></td><td>3,347</td><td>Top-3 0.8500 / Top-5 0.9032</td></tr>
+  <tr><td>BERT · short</td><td>0.1658</td><td>3,347</td><td>重评分</td></tr>
+  <tr><td rowspan="9">战役（选择池 6 折）</td><td>tcm-0000 CUDA 启用 <span class="kbadge keep">KEEP</span></td><td>0.2794</td><td>—</td><td>基线锚点，复杂度 +84</td></tr>
+  <tr><td>tcm-0001 lr 1e-2 <span class="kbadge revert">REVERT</span></td><td>0.2713</td><td>—</td><td>−0.008 未过噪声门槛</td></tr>
+  <tr><td>tcm-0002 类别加权 <span class="kbadge revert">REVERT</span></td><td>0.2644</td><td>—</td><td>−0.015 未过门槛</td></tr>
+  <tr><td>tcm-0003 线性头 <span class="kbadge keep">KEEP</span></td><td><b>0.3260</b></td><td>—</td><td>+0.0466，复杂度 −54，冠军</td></tr>
+  <tr><td>tcm-0004 width 128 <span class="kbadge revert">REVERT</span></td><td>0.3259</td><td>—</td><td>线性头下参数无用</td></tr>
+  <tr><td>tcm-0005 lr 1e-3 <span class="kbadge revert">REVERT</span></td><td>0.3186</td><td>—</td><td>−0.007 未过门槛</td></tr>
+  <tr><td>tcm-0006 两层头 256 <span class="kbadge revert">REVERT</span></td><td>0.3316</td><td>—</td><td>过噪声门槛、未过复杂度地板（11×0.001）</td></tr>
+  <tr><td>tcm-0007 lr 1e-2（线性）<span class="kbadge revert">REVERT</span></td><td>0.3173</td><td>—</td><td>−0.009 未过门槛</td></tr>
+  <tr><td>tcm-0008 AdamW wd 1e-4 <span class="kbadge revert">REVERT</span></td><td>0.3245</td><td>—</td><td>−0.0015 未过门槛 → PLATEAU=5 早停</td></tr>
+</table>
+
+<h2>证据状态与治理</h2>
+<table class="data">
+  <tr><th>门 / 项</th><th>状态</th><th>说明</th></tr>
+  <tr><td>GO_ENGINEERING</td><td style="color:var(--good)">✓ 达成</td><td>真实数据全链路 + 隔离训练/评估双子进程 + hash 链台账</td></tr>
+  <tr><td>GO_REAL_DATA_TRAINING</td><td style="color:var(--good)">✓ 达成</td><td>PUBLISHED 标签、QC/去重/受试者级划分、可复现清单</td></tr>
+  <tr><td>GO_RESEARCH_CLAIMS</td><td style="color:var(--text-muted)">✗ 未放行</td><td>外部泛化 NOT_COMPUTABLE（TCMEval-SDT 对齐覆盖 18.9% 且多标签语义不匹配；TCM-Lung 无名称解码无许可）；独立用户/专家验证 NOT_AVAILABLE</td></tr>
+  <tr><td>holdout 预算</td><td>1/1 用满</td><td>SD 任务台账独立于体质任务（2/2）；再评估需新数据里程碑或用户授权</td></tr>
+  <tr><td>拒判行为</td><td>接口级</td><td>空输入 ABSTAIN；越界/乱码/证候名当输入 OUT_OF_DOMAIN（对抗探针 6/7）；已知盲点：无「证」尾别名不可拒</td></tr>
+  <tr><td>realtime_feedback</td><td>结构性隔离</td><td>只接收结构化测量摘要，返回带来源知识参考或不作证候判断；生理数值永不进证候分类器</td></tr>
+</table>
+
+<footer>
+  溯源：战役台账 runs/sd-campaign/manifest.jsonl（acam-lab，hash 链）；最终交付 runs/sd-campaign/finalize-result.json（weights SHA 1a180268f0132360…、架构 SHA 31776a27f770e9ac…）；LR 对照 runs/sd-campaign/lr-holdout-evaluation.json；数据审计 docs/data/tcm-sd-syndrome-audit.md；战役报告 docs/reports/research-sd-v1.md；模型卡 docs/models/tcm-sd-syndrome-v1-card.md。测试基线 acam-lab 393 passed + ruff 全净。复现命令见战役报告 §5。
+</footer>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+const tip = document.getElementById("tooltip");
+function showTip(html, ev) {
+  tip.innerHTML = html; tip.style.opacity = 1;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = ev.clientX + 14, y = ev.clientY + 14;
+  if (x + w > innerWidth - 8) x = ev.clientX - w - 12;
+  if (y + h > innerHeight - 8) y = ev.clientY - h - 12;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.style.opacity = 0; }
+function el(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (text != null) e.textContent = text;
+  e.classList.add("bar");
+  e.addEventListener("mousemove", ev => showTip(e.dataset.tip, ev));
+  e.addEventListener("mouseleave", hideTip);
+  return e;
+}
+function css(name) { return getComputedStyle(document.querySelector(".viz-root")).getPropertyValue(name).trim(); }
+
+// ---- holdout bars (0 .. 0.40) ----
+(function () {
+  const g = document.getElementById("holdout-bars");
+  const W = 880, H = 240, L = 210, R = 40, T = 18, B = 42, MAX = 0.40;
+  const plotW = W - L - R, plotH = H - T - B;
+  const data = [
+    { label: "TF-IDF+LR（冻结基线）", v: 0.3732, c: "var(--series-1)", tip: "<b>TF-IDF+LR</b><br>holdout macro-F1 = 0.3732<br>池 46,373 行训练 · 冻结 seed 20261101<br>解锁后同口径一次评分" },
+    { label: "神经冠军（线性头）", v: 0.3324, c: "var(--series-2)", tip: "<b>神经冠军</b> tcm-0003 refit<br>holdout macro-F1 = 0.3324<br>seed 0 · 90.67s · weights 1a180268…" },
+    { label: "多数类 Dummy", v: 0.0020, c: "var(--neutral-mark)", tip: "<b>多数类 Dummy</b><br>holdout macro-F1 = 0.0020" },
+  ];
+  const bw = 120, gap = (plotW - data.length * bw) / (data.length + 1);
+  for (let t = 0; t <= 0.4; t += 0.1) {
+    const y = T + plotH - (t / MAX) * plotH;
+    g.appendChild(el("line", { x1: L, y1: y, x2: W - R, y2: y, stroke: css("--grid"), "stroke-width": 1 }));
+    const lbl = el("text", { x: L - 8, y: y + 4, "text-anchor": "end", "font-size": 11, fill: css("--text-muted") }, t.toFixed(1));
+    lbl.classList.remove("bar"); g.appendChild(lbl);
+  }
+  data.forEach((d, i) => {
+    const x = L + gap * (i + 1) + bw * i;
+    const h = (d.v / MAX) * plotH, y = T + plotH - h;
+    g.appendChild(el("rect", { x, y, width: bw, height: Math.max(h, 1.5), rx: 4, fill: d.c, "data-tip": d.tip }));
+    const vl = el("text", { x: x + bw / 2, y: y - 6, "text-anchor": "middle", "font-size": 12.5, "font-weight": 600, fill: css("--text-primary") }, d.v.toFixed(4));
+    vl.classList.remove("bar"); g.appendChild(vl);
+    const ll = el("text", { x: x + bw / 2, y: H - 16, "text-anchor": "middle", "font-size": 11.5, fill: css("--text-secondary") }, d.label);
+    ll.classList.remove("bar"); g.appendChild(ll);
+  });
+})();
+
+// ---- campaign bars (0 .. 0.40) ----
+(function () {
+  const g = document.getElementById("campaign-bars");
+  const W = 880, H = 250, L = 46, R = 16, T = 18, B = 46, MAX = 0.40;
+  const plotW = W - L - R, plotH = H - T - B;
+  const rounds = [
+    { id: "tcm-0000", v: 0.2794, keep: true,  tip: "CUDA 启用 · <b>KEEP</b> 0.2794<br>基线锚点（65k 维 CPU 算不动）<br>复杂度 +84" },
+    { id: "tcm-0001", v: 0.2713, keep: false, tip: "lr 1e-2 · REVERT 0.2713<br>−0.008 未过噪声门槛" },
+    { id: "tcm-0002", v: 0.2644, keep: false, tip: "逆频率类别加权 · REVERT 0.2644<br>−0.015 未过门槛" },
+    { id: "tcm-0003", v: 0.3260, keep: true,  tip: "线性头（65k→148 直连）· <b>KEEP</b> 0.3260<br>+0.0466，复杂度 −54 · <b>冠军</b>" },
+    { id: "tcm-0004", v: 0.3259, keep: false, tip: "width 128 · REVERT 0.3259<br>线性头下参数无用，得分不变" },
+    { id: "tcm-0005", v: 0.3186, keep: false, tip: "lr 1e-3 · REVERT 0.3186<br>−0.007 未过门槛" },
+    { id: "tcm-0006", v: 0.3316, keep: false, tip: "两层头 256 · REVERT 0.3316<br>+0.0056 过噪声门槛<br>但 &lt; 11 节点 × 0.001 复杂度地板" },
+    { id: "tcm-0007", v: 0.3173, keep: false, tip: "lr 1e-2（线性头）· REVERT 0.3173<br>−0.009 未过门槛" },
+    { id: "tcm-0008", v: 0.3245, keep: false, tip: "AdamW wd 1e-4 · REVERT 0.3245<br>−0.0015 → PLATEAU=5 早停" },
+  ];
+  const bw = 52, gap = (plotW - rounds.length * bw) / (rounds.length + 1);
+  for (let t = 0; t <= 0.4; t += 0.1) {
+    const y = T + plotH - (t / MAX) * plotH;
+    g.appendChild(el("line", { x1: L, y1: y, x2: W - R, y2: y, stroke: css("--grid"), "stroke-width": 1 }));
+    const lbl = el("text", { x: L - 8, y: y + 4, "text-anchor": "end", "font-size": 11, fill: css("--text-muted") }, t.toFixed(1));
+    lbl.classList.remove("bar"); g.appendChild(lbl);
+  }
+  rounds.forEach((d, i) => {
+    const x = L + gap * (i + 1) + bw * i;
+    const h = (d.v / MAX) * plotH, y = T + plotH - h;
+    g.appendChild(el("rect", { x, y, width: bw, height: h, rx: 4,
+      fill: d.keep ? css("--good") : css("--neutral-mark"), "data-tip": d.tip }));
+    const ll = el("text", { x: x + bw / 2, y: H - 26, "text-anchor": "middle", "font-size": 10.5, fill: css("--text-secondary") }, d.id);
+    ll.classList.remove("bar"); g.appendChild(ll);
+    if (d.keep) {
+      const vl = el("text", { x: x + bw / 2, y: y - 6, "text-anchor": "middle", "font-size": 11.5, "font-weight": 650, fill: css("--text-primary") }, d.v.toFixed(4));
+      vl.classList.remove("bar"); g.appendChild(vl);
+    }
+  });
+  const champY = T + plotH - (0.3260 / MAX) * plotH;
+  g.appendChild(el("line", { x1: L, y1: champY, x2: W - R, y2: champY, stroke: css("--text-secondary"), "stroke-width": 1.5, "stroke-dasharray": "5 4" }));
+})();
+
+// ---- dev grouped bars (0 .. 0.60) ----
+(function () {
+  const g = document.getElementById("dev-bars");
+  const W = 880, H = 240, L = 46, R = 16, T = 18, B = 42, MAX = 0.60;
+  const plotW = W - L - R, plotH = H - T - B;
+  const groups = [
+    { name: "clinical（主诉+现病史+四诊）", lr: 0.5754, bert: 0.2249,
+      tipLr: "clinical · TF-IDF+LR = <b>0.5754</b>（n=4,817）", tipB: "clinical · BERT 微调 = 0.2249（重评分）" },
+    { name: "short（仅主诉，主口径）", lr: 0.3449, bert: 0.1658,
+      tipLr: "short · TF-IDF+LR = <b>0.3449</b>（n=3,347）", tipB: "short · BERT 微调 = 0.1658（重评分）" },
+  ];
+  const bw = 110, gap = 16, groupGap = (plotW - groups.length * (bw * 2 + gap)) / 3;
+  for (let t = 0; t <= 0.6; t += 0.1) {
+    const y = T + plotH - (t / MAX) * plotH;
+    g.appendChild(el("line", { x1: L, y1: y, x2: W - R, y2: y, stroke: css("--grid"), "stroke-width": 1 }));
+    const lbl = el("text", { x: L - 8, y: y + 4, "text-anchor": "end", "font-size": 11, fill: css("--text-muted") }, t.toFixed(1));
+    lbl.classList.remove("bar"); g.appendChild(lbl);
+  }
+  groups.forEach((d, i) => {
+    const x0 = L + groupGap * (i + 1) + (bw * 2 + gap) * i;
+    [{ v: d.lr, c: "var(--series-1)", tip: d.tipLr }, { v: d.bert, c: "var(--series-2)", tip: d.tipB }].forEach((s, j) => {
+      const x = x0 + (bw + gap) * j;
+      const h = (s.v / MAX) * plotH, y = T + plotH - h;
+      g.appendChild(el("rect", { x, y, width: bw, height: h, rx: 4, fill: s.c, "data-tip": s.tip }));
+      const vl = el("text", { x: x + bw / 2, y: y - 6, "text-anchor": "middle", "font-size": 12.5, "font-weight": 600, fill: css("--text-primary") }, s.v.toFixed(4));
+      vl.classList.remove("bar"); g.appendChild(vl);
+    });
+    const ll = el("text", { x: x0 + bw + gap / 2, y: H - 14, "text-anchor": "middle", "font-size": 11.5, fill: css("--text-secondary") }, d.name);
+    ll.classList.remove("bar"); g.appendChild(ll);
+  });
+})();
+
+// ---- dedup paired bars (0 .. 0.62) ----
+(function () {
+  const g = document.getElementById("dedup-bars");
+  const W = 880, H = 220, L = 46, R = 16, T = 18, B = 40, MAX = 0.62;
+  const plotW = W - L - R, plotH = H - T - B;
+  const groups = [
+    { name: "clinical", before: 0.5895, after: 0.5754, delta: "−0.0141",
+      tipB: "clinical 去重前 = 0.5895（含 11.0% 记忆副本）", tipA: "clinical 去重后 = <b>0.5754</b>（剔 595 例）" },
+    { name: "short", before: 0.3971, after: 0.3449, delta: "−0.0386",
+      tipB: "short 去重前 = 0.3971（含 38.1% 记忆副本）", tipA: "short 去重后 = <b>0.3449</b>（剔 2,065 例）" },
+  ];
+  const bw = 100, gap = 14, groupGap = (plotW - groups.length * (bw * 2 + gap)) / 3;
+  for (let t = 0; t <= 0.6; t += 0.1) {
+    const y = T + plotH - (t / MAX) * plotH;
+    g.appendChild(el("line", { x1: L, y1: y, x2: W - R, y2: y, stroke: css("--grid"), "stroke-width": 1 }));
+    const lbl = el("text", { x: L - 8, y: y + 4, "text-anchor": "end", "font-size": 11, fill: css("--text-muted") }, t.toFixed(1));
+    lbl.classList.remove("bar"); g.appendChild(lbl);
+  }
+  groups.forEach((d, i) => {
+    const x0 = L + groupGap * (i + 1) + (bw * 2 + gap) * i;
+    [{ v: d.before, c: "var(--seq-before)", tip: d.tipB }, { v: d.after, c: "var(--seq-after)", tip: d.tipA }].forEach((s, j) => {
+      const x = x0 + (bw + gap) * j;
+      const h = (s.v / MAX) * plotH, y = T + plotH - h;
+      g.appendChild(el("rect", { x, y, width: bw, height: h, rx: 4, fill: s.c, "data-tip": s.tip }));
+      const vl = el("text", { x: x + bw / 2, y: y - 6, "text-anchor": "middle", "font-size": 12, "font-weight": 600, fill: css("--text-primary") }, s.v.toFixed(4));
+      vl.classList.remove("bar"); g.appendChild(vl);
+    });
+    const dl = el("text", { x: x0 + bw + gap / 2, y: T + 4, "text-anchor": "middle", "font-size": 11.5, fill: css("--text-secondary") }, "Δ " + d.delta);
+    dl.classList.remove("bar"); g.appendChild(dl);
+    const ll = el("text", { x: x0 + bw + gap / 2, y: H - 12, "text-anchor": "middle", "font-size": 12, fill: css("--text-secondary") }, d.name);
+    ll.classList.remove("bar"); g.appendChild(ll);
+  });
+})();
+</script>
+</body>
+</html>

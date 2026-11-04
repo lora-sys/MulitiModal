@@ -235,7 +235,7 @@ def test_unparseable_and_over_depth_string_payloads_price_by_length(tmp_path):
 
 
 def test_simplicity_criterion_matches_upstream_intent():
-    # the margin is in standard errors of the mean, so more folds sharpen it
+    # the margin uses descriptive fold SD, not an independence-based SEM
     assert SourceResearchLoop.decide(0.30, 0.01, 0, None) == (True, "baseline 0.300000")
     # a gain inside the margin but with fewer lines is kept: upstream's
     # "removing something and getting equal or better results" is a win
@@ -331,3 +331,49 @@ def test_loop_refuses_to_start_without_frozen_data(tmp_path):
     assert loop.state()["best_metric"] is None
     assert loop.state()["history"] == []
     assert loop.state()["editable_complexity"] == 3
+def _source_loop_for_candidate(tmp_path, source):
+    from types import SimpleNamespace
+
+    candidate = tmp_path / EDITABLE
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_bytes(source)
+    loop = SourceResearchLoop.__new__(SourceResearchLoop)
+    loop.worktree = SimpleNamespace(path=tmp_path)
+    loop.editable = EDITABLE
+    return loop, candidate
+
+
+def test_loop_checks_candidate_size_before_reading_source(tmp_path, monkeypatch):
+    from research.train_worker import MAX_CANDIDATE_SOURCE_BYTES
+
+    loop, candidate = _source_loop_for_candidate(
+        tmp_path, b"x" * (MAX_CANDIDATE_SOURCE_BYTES + 1)
+    )
+    original = Path.read_text
+
+    def fail_candidate_read(path, *args, **kwargs):
+        if path == candidate:
+            pytest.fail("loop must check file size before reading candidate source")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_candidate_read)
+    with pytest.raises((PatchRejected, RuntimeError), match="limit|exceeds"):
+        loop.complexity()
+
+
+def test_loop_parses_pathological_source_in_isolated_child(tmp_path, monkeypatch):
+    from research import loop as loop_module
+
+    source = (
+        b"x = " + b"(" * 20_000 + b"1" + b")" * 20_000 + b"\n"
+    )
+    loop, _candidate = _source_loop_for_candidate(tmp_path, source)
+
+    def host_parse_forbidden(*_args, **_kwargs):
+        pytest.fail("candidate AST parsing must run outside the loop process")
+
+    monkeypatch.setattr(
+        loop_module, "editable_complexity", host_parse_forbidden, raising=False
+    )
+    with pytest.raises(PatchRejected):
+        loop.complexity()

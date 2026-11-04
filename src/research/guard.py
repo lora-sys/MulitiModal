@@ -139,9 +139,13 @@ def editable_complexity(worktree: Path, editable: str) -> int:
     compile/__import__ calls, the "simpler is better" branch is only
     reachable by genuinely removing AST constructs.
     """
-    return _ast_node_count(
-        ast.parse((worktree / editable).read_text(encoding="utf-8"))
+    return editable_complexity_source(
+        (worktree / editable).read_text(encoding="utf-8")
     )
+
+def editable_complexity_source(source: str) -> int:
+    """Count source AST nodes; callers handling untrusted code must isolate it."""
+    return _ast_node_count(ast.parse(source))
 
 
 #: recursion bounds for string-constant parsing: a hostile file can nest

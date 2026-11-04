@@ -88,9 +88,9 @@ def train(model, fold: FoldData, budget_seconds: float = TIME_BUDGET_SECONDS,
     wherever the schedule happens to be. That is what makes "train longer"
     unavailable as an improvement.
     """
+    deadline = time.monotonic() + budget_seconds
     torch.manual_seed(seed)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    deadline = time.monotonic() + budget_seconds
     model.train()
     while time.monotonic() < deadline:
         epoch_done = False

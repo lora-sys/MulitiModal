@@ -19,7 +19,7 @@ import random
 import pytest
 
 from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord
-from data.real_split import build_real_manifest
+from data.real_split import build_real_manifest, pool_manifest
 from research.candidate import FusionMLP, build_model
 from research.frozen import build_fold
 from research.model_export import (
@@ -57,15 +57,22 @@ def fake_records(n=30, seed=5):
 
 def _fold(tmp_path, records):
     base = build_real_manifest(records, dataset_sha256=DATASET_SHA).data
-    path = tmp_path / "manifest.json"
-    path.write_text(json.dumps(base, ensure_ascii=False))
+    selection = pool_manifest(base, records).data
+    selection_rows = set(selection["subject_row_by_id"].values())
+    selection_records = [
+        record for record in records if record.subject_index in selection_rows
+    ]
     config = {
-        "data": {"manifest_path": str(path), "dataset_path": "unused"},
         "train_provider": {"batch_size": 8},
         "trainer": {"seed": 0},
     }
     fold_data, _ = build_fold(
-        config, str(path), "unused", fold=0, folds=4, repeat=0, records=records
+        config,
+        selection,
+        fold=0,
+        folds=4,
+        repeat=0,
+        records=selection_records,
     )
     return fold_data
 
@@ -194,3 +201,143 @@ def test_rebuild_refuses_a_non_whitelisted_class_in_the_json(tmp_path):
     arch["modules"]["enc"] = {"class": "nn.GRU", "args": {}}
     with pytest.raises(ValueError, match="non-whitelisted"):
         rebuild_model(arch)
+
+
+def _tiny_linear_architecture():
+    import torch.nn as nn
+
+    from core.specs import InputSpecSet, ModalitySpec
+
+    input_spec = InputSpecSet(
+        version="test-input-v0",
+        modalities=(ModalitySpec("features", "tabular", 2),),
+    )
+
+    class TinyLinear(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.input_spec = input_spec
+            self.model_type = "synthetic-tiny"
+            self.linear = nn.Linear(2, 2)
+
+        def forward(self, values):
+            return self.linear(values)
+
+    return export_architecture(TinyLinear())
+
+
+def test_rebuild_allows_hashed_text_dimension_plus_availability_flag():
+    arch = _tiny_linear_architecture()
+    arch["modules"]["linear"]["args"].update(
+        in_features=65_537,
+        out_features=2,
+    )
+
+    rebuilt = rebuild_model(arch, task="syndrome")
+
+    assert rebuilt.linear.weight.shape == (2, 65_537)
+
+
+def test_rebuild_rejects_oversized_linear_before_module_allocation(monkeypatch):
+    from research import model_export
+
+    arch = _tiny_linear_architecture()
+    arch["modules"]["linear"]["args"].update(
+        in_features=65_538,
+        out_features=140,
+    )
+
+    def allocation_must_not_start(**_kwargs):
+        pytest.fail("oversized architecture reached an nn.Module constructor")
+
+    monkeypatch.setitem(
+        model_export.MODULE_BUILDERS, "nn.Linear", allocation_must_not_start
+    )
+    with pytest.raises(ValueError, match="Linear in_features"):
+        rebuild_model(arch, task="syndrome", expected_n_classes=148)
+
+
+def test_rebuild_rejects_oversized_get_attr_before_tensor_allocation(monkeypatch):
+    import torch
+    import torch.nn as nn
+
+    from core.specs import InputSpecSet, ModalitySpec
+    from research import model_export
+
+    input_spec = InputSpecSet(
+        version="test-input-v0",
+        modalities=(ModalitySpec("features", "tabular", 2),),
+    )
+
+    class TinyBuffer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.input_spec = input_spec
+            self.model_type = "synthetic-buffer"
+            self.register_buffer("offset", torch.ones(2))
+
+        def forward(self, values):
+            return values + self.offset
+
+    arch = export_architecture(TinyBuffer())
+    attr = next(node["attr"] for node in arch["graph"] if node["op"] == "get_attr")
+    attr["shape"] = [10_000_000, 10_000_000]
+
+    def allocation_must_not_start(shape, *args, **kwargs):
+        pytest.fail(f"oversized get_attr reached torch.empty: {shape!r}")
+
+    monkeypatch.setattr(model_export.torch, "empty", allocation_must_not_start)
+    with pytest.raises(ValueError, match="tensor|element|budget|shape"):
+        rebuild_model(arch, task="constitution", expected_n_classes=9)
+
+
+def test_load_eval_model_rejects_architecture_json_over_limit_before_weights(
+    tmp_path, monkeypatch,
+):
+    import torch
+
+    from research import model_export
+
+    weights = tmp_path / "weights.pt"
+    architecture = tmp_path / "architecture.json"
+    weights.write_bytes(b"synthetic")
+    architecture.write_bytes(b" " * (model_export.MAX_ARCHITECTURE_BYTES + 1))
+
+    def weights_must_not_load(*_args, **_kwargs):
+        pytest.fail("weights must not load before bounded architecture parsing")
+
+    monkeypatch.setattr(torch, "load", weights_must_not_load)
+    with pytest.raises(ValueError, match="architecture.*limit"):
+        load_eval_model(weights, architecture, task="constitution")
+
+
+def test_checkpoint_huge_tensor_shape_is_rejected_before_state_copy(tmp_path, monkeypatch):
+    import torch
+
+    from research import model_export
+
+    arch = _tiny_linear_architecture()
+    architecture_path = tmp_path / "architecture.json"
+    architecture_path.write_text(json.dumps(arch))
+    backing = torch.tensor([1.0])
+    huge_view = torch.as_strided(backing, (1_000_000_000,), (0,))
+    weights_path = tmp_path / "oversized-shape.pt"
+    torch.save(
+        {"linear.weight": huge_view, "linear.bias": torch.zeros(2)},
+        weights_path,
+    )
+    assert weights_path.stat().st_size < 1024 * 1024
+
+    def allocation_must_not_start(**_kwargs):
+        pytest.fail("checkpoint shape mismatch must fail before model construction")
+    monkeypatch.setitem(
+        model_export.MODULE_BUILDERS, "nn.Linear", allocation_must_not_start
+    )
+    def state_copy_must_not_start(*_args, **_kwargs):
+        pytest.fail("checkpoint tensor shape must be checked before state copy")
+
+    monkeypatch.setattr(
+        torch.nn.Module, "load_state_dict", state_copy_must_not_start
+    )
+    with pytest.raises(ValueError, match="shape|element|tensor|weights"):
+        load_eval_model(weights_path, architecture_path, task="constitution")

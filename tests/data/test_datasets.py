@@ -45,13 +45,13 @@ has_mendeley_file = MENDELEY_FILE.exists()
 def test_registry_records_are_valid():
     # The 2026-10-31 expansion search (docs/data/dataset-audit-report.md §6)
     # registers the candidates it could not download, so the search stays
-    # checkable instead of being re-run from memory. Exactly one record may
-    # be a train_candidate; a record with no local file must justify itself
-    # in `notes` (why it is not usable) rather than silently sit there.
+    # checkable instead of being re-run from memory. Train candidates must
+    # each carry a real local file; a record with no local file must justify
+    # itself in `notes` (why it is not usable) rather than silently sit there.
     assert {
         rid for rid, r in DATASET_REGISTRY.items()
         if r.eligibility == ELIGIBILITY_TRAIN_CANDIDATE
-    } == {"mendeley-cxtph3tjsg-v1"}
+    } == {"mendeley-cxtph3tjsg-v1", "tcm-sd-syndrome-v1"}
     for record in DATASET_REGISTRY.values():
         if record.eligibility in (ELIGIBILITY_TRAIN_CANDIDATE, ELIGIBILITY_RULES_TEST_ONLY):
             assert record.files, record.dataset_id

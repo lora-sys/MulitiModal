@@ -4,3 +4,6 @@ ruff>=0.6
 numpy>=1.26
 pandas>=2.2
 scikit-learn>=1.5
+# #53 证候模型 BERT 训练/推理（acam-lab venv 实装 5.22.1 / 1.15.0）
+transformers>=4.40
+accelerate>=0.30

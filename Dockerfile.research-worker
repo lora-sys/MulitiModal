@@ -1,0 +1,7 @@
+# Run scripts/build_research_worker_image.sh. It builds from a temporary context
+# containing only this Dockerfile and the pinned runtime requirements file.
+FROM python:3.12-bookworm@sha256:a5bab0ff300f91231c2e68bf73a8a8d60762ac39ce1c50eaf6803e4c38a9062b
+COPY research-worker-requirements.txt /tmp/research-worker-requirements.txt
+RUN python -m pip install --no-cache-dir --index-url https://pypi.org/simple -r /tmp/research-worker-requirements.txt
+RUN python -m pip install --no-cache-dir --no-deps --index-url https://download.pytorch.org/whl/cpu torch==2.7.0+cpu
+RUN python -c "import numpy, sklearn, torch; assert torch.cuda.is_available() is False; print(numpy.__version__, sklearn.__version__, torch.__version__)"
