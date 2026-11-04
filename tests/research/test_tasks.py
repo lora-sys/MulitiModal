@@ -29,7 +29,7 @@ def test_resolve_editable_anchor_and_denylist():
                    "src/data/x.py", "AGENTS.md", "tests/x.py"):
         with pytest.raises(ValueError, match="frozen path"):
             syndrome.resolve_editable(frozen)
-    with pytest.raises(ValueError, match="src/\*\*/\*.py"):
+    with pytest.raises(ValueError, match="frozen path"):
         syndrome.resolve_editable("README.md")
 
 

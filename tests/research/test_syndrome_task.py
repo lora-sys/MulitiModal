@@ -838,7 +838,7 @@ def test_guard_covers_the_syndrome_editable(tmp_path):
     foreign = patch.replace(f"b/{sd}", "b/src/research/frozen.py").replace(
         f"a/{sd}", "a/src/research/frozen.py"
     )
-    with pytest.raises(PatchRejected, match="outside the editable file"):
+    with pytest.raises(PatchRejected, match="frozen path"):
         validate_source_patch(foreign, sd)
     with pytest.raises(PatchRejected, match="dynamic code execution"):
         validate_source_ast('exec("x = 1")\n')
