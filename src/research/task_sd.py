@@ -1249,6 +1249,9 @@ class SyndromeAdapter(TaskAdapter):
     # mislabel. The frozen CV protocol already dedups dev against train at
     # build_fold time, so conflicts inside train do not leak into scoring.
     text_label_conflict_is_expected = True
+    # build_fold() drops verbatim dev rows whose input_text appears in train
+    # (one-way exact dedup), so pool-level overlap never reaches a scored fold.
+    fold_dedups_dev_text = True
 
     def record_user_key(self, record):
         return getattr(record, "user_id", None)

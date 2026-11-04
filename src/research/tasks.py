@@ -50,6 +50,10 @@ class TaskAdapter:
     #: blocking the run. TCM-SD short chief complaints (148 classes) are exactly
     #: this case: the same presenting text can be different syndromes.
     text_label_conflict_is_expected: bool = False
+    #: The frozen fold builder removes verbatim dev rows that also occur in
+    #: train (one-way exact-text dedup). Pool-level train/dev overlap is then a
+    #: property of the SELECTION pool, not leakage into a scored fold.
+    fold_dedups_dev_text: bool = False
 
     def record_user_key(self, record):
         """Identity of the real subject behind a record, for the #1 leak check."""

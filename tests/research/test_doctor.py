@@ -184,6 +184,27 @@ def test_expected_text_label_conflicts_warn_instead_of_blocking():
     assert report.blocked is False
 
 
+def test_real_syndrome_adapter_admits_pool_overlap_when_fold_dedups():
+    """The authoritative #56/#57 selection pair has 1061 train/dev verbatim
+    overlaps; build_fold drops them from dev. The real adapter must declare
+    the policy (a synthetic subclass would let the production flag be removed
+    without failing this test)."""
+    from research.task_sd import SyndromeAdapter
+
+    assert SyndromeAdapter.fold_dedups_dev_text is True
+    assert SyndromeAdapter.text_label_conflict_is_expected is True
+
+    config, manifest, records, _ = build(adapter=SyndromeAdapter())
+    dev_row = manifest["subject_row_by_id"][manifest["split"]["dev"][0]]
+    records[dev_row].input_text = records[0].input_text
+    report = preflight(config, manifest, records, SyndromeAdapter())
+    finding = _findings(report)["exact_text_leak"]
+    assert finding.severity == WARNING
+    assert finding.evidence["n_crossing"] == 1
+    assert finding.evidence["fold_dedup_policy"]
+    assert report.blocked is False
+
+
 def test_outer_dev_steering_is_blocked():
     config, manifest, records, _ = build()
     config["trainer"] = {"early_stop_patience": 3}

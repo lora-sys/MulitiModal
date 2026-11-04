@@ -362,12 +362,32 @@ def _check_exact_text(adapter, records, manifest) -> list[Finding]:
             dev_texts.setdefault(key, []).append(sid)
     crossing = sorted(set(train_texts) & set(dev_texts))
     duplicates = {k: len(v) for k, v in train_texts.items() if len(v) > 1}
+    evidence: dict = {
+        "n_crossing": len(crossing),
+        "n_repeated_train": len(duplicates),
+        "max_repeat": max(duplicates.values()) if duplicates else 0,
+    }
     if crossing:
+        evidence["sample"] = [
+            [train_texts[k][0], dev_texts[k][0]] for k in crossing[:3]
+        ]
+        if getattr(adapter, "fold_dedups_dev_text", False):
+            # The frozen fold builder removes these dev rows before scoring,
+            # so pool-level overlap is not leakage into a fold. Keep it visible
+            # with evidence; dropping rows here would change dataset_sha256 and
+            # break comparability with the frozen CV baseline.
+            return [Finding(
+                "exact_text_leak", WARNING,
+                f"{len(crossing)} text(s) appear verbatim in both train and dev "
+                "(removed from dev by the frozen fold builder)",
+                {**evidence,
+                 "fold_dedup_policy": "one-way exact input_text dev-against-train"},
+                "do not drop rows; compare only within the same frozen inputs",
+            )]
         return [Finding(
             "exact_text_leak", BLOCKED,
             f"{len(crossing)} text(s) appear verbatim in both train and dev",
-            {"n_crossing": len(crossing),
-             "sample": [[train_texts[k][0], dev_texts[k][0]] for k in crossing[:3]]},
+            evidence,
             "de-duplicate on the input text before splitting; the same complaint "
             "is otherwise present in training and scoring",
         )]
@@ -375,8 +395,7 @@ def _check_exact_text(adapter, records, manifest) -> list[Finding]:
         return [Finding(
             "exact_text_leak", WARNING,
             f"{len(duplicates)} text(s) repeat inside train",
-            {"n_repeated_train": len(duplicates),
-             "max_repeat": max(duplicates.values())},
+            evidence,
         )]
     return [Finding(
         "exact_text_leak", INFO, "no verbatim text appears on both sides of the fold",
