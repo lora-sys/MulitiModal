@@ -775,9 +775,11 @@ def make_server(root: Path, port: int) -> ThreadingHTTPServer:
             if host not in allowed:
                 self.send_error(403)
                 return
-            if self.path == "/":
+            # the page reads ?view= itself; the route only cares about the path
+            path = self.path.split("?", 1)[0]
+            if path == "/":
                 payload, content_type = PAGE.encode(), "text/html; charset=utf-8"
-            elif self.path == "/api":
+            elif path == "/api":
                 try:
                     payload = json.dumps(read_run(root), ensure_ascii=False).encode()
                 except (OSError, ValueError):

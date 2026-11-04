@@ -214,6 +214,10 @@ def test_monitor_serves_read_only_results(tmp_path):
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(request, timeout=3)
         assert error.value.code == 501
+        # the page picks its view from ?view=; the route must not 404 on it
+        with urllib.request.urlopen(url + "/?view=history", timeout=5) as response:
+            assert response.status == 200
+            assert b"view-history" in response.read()
     finally:
         server.shutdown()
         server.server_close()
