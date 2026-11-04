@@ -18,7 +18,7 @@ from research.candidate_sd import (
 )
 from research.evaluator import extract_diagnostics
 from research.frozen import FoldData
-from research.model_export import trace_architecture
+from research.model_export import export_architecture
 
 
 @dataclass
@@ -69,8 +69,9 @@ def test_syndrome_pipeline_traces_cleanly():
     assert isinstance(model, SyndromeMLP)
 
     # Test tracing with torch.fx under the frozen model_export whitelist
-    graph = trace_architecture(model)
-    assert graph is not None
+    arch = export_architecture(model, task="syndrome", expected_n_classes=10)
+    assert arch is not None
+    assert arch["task"] == "syndrome"
 
 
 def test_constitution_pipeline_traces_cleanly():
@@ -92,5 +93,6 @@ def test_constitution_pipeline_traces_cleanly():
     assert isinstance(model, FusionMLP)
 
     # Test tracing with torch.fx under the frozen model_export whitelist
-    graph = trace_architecture(model)
-    assert graph is not None
+    arch = export_architecture(model, task="constitution", expected_n_classes=9)
+    assert arch is not None
+    assert arch["task"] == "constitution"
