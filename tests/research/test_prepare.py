@@ -3,18 +3,24 @@ from __future__ import annotations
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from research.prepare import (
+    EVIDENCE_LOCAL,
+    EVIDENCE_SMOKE,
+    append_history,
     evaluate,
     fold_inputs,
+    run_candidate,
     score_predictions,
     selection_fold_ids,
+    synthetic_selection,
+    write_new_atomic,
 )
-from research.sandbox import resolve_image, run_candidate
 
 
 def _selection():
@@ -31,6 +37,15 @@ def _selection():
         "split": {"seed": 123, "train": ids, "dev": [], "holdout": []},
     }
     return manifest
+
+
+def _append(path, n, **changes):
+    """Append one history row the way a scored round does."""
+    fields = dict(commit=f"{n:040x}", metric="loss", value=float(n), direction="minimize",
+                  decision="REVERT", description="trial", protocol="a" * 64,
+                  evidence=EVIDENCE_SMOKE)
+    fields.update(changes)
+    append_history(path, **fields)
 
 
 def test_grouped_folds_match_the_frozen_derivation():
@@ -78,7 +93,7 @@ def test_scoring_uses_all_classes_and_refuses_bad_predictions():
 
 def test_evaluation_rejects_excessive_compute_before_starting_candidate():
     with pytest.raises(ValueError, match="run limit"):
-        evaluate({"split": {"holdout": []}}, {}, b"candidate", image="unused",
+        evaluate({"split": {"holdout": []}}, {}, b"candidate",
                  budget_seconds=3600, seed=1, folds=10, repeats=10)
 
 
@@ -91,6 +106,15 @@ def test_smoke_mode_refuses_external_data_paths(tmp_path):
               "--candidate", str(tmp_path / "train.py"), "--out", str(tmp_path / "result")])
 
 
+def test_real_evaluation_requires_the_frozen_data_paths(tmp_path):
+    """Real runs must name the pinned pair; a run without them is refused."""
+    from research.prepare import main
+
+    with pytest.raises(SystemExit):
+        main(["--candidate", str(tmp_path / "train.py"),
+              "--out", str(tmp_path / "result.json")])
+
+
 def test_scoring_matches_frozen_evaluator():
     labels = [0, 0, 1, 4, 4, 4]
     predictions = [0, 1, 1, 0, 4, 4]
@@ -100,37 +124,31 @@ def test_scoring_matches_frozen_evaluator():
 
 
 @pytest.mark.synthetic
-def test_candidate_runs_in_isolation_and_cannot_read_validation_labels():
-    candidate = b'''import argparse, json, os, socket
-p = argparse.ArgumentParser()
-for name in ("train", "predict", "output", "seed"):
-    p.add_argument("--" + name, required=True)
-a = p.parse_args()
-texts = json.load(open(a.predict))
-assert all(isinstance(text, str) for text in texts)
-assert sorted(os.listdir("/input")) == ["predict.json", "train.json", "train.py"]
-try:
-    socket.create_connection(("1.1.1.1", 53), timeout=2)
-except OSError:
-    pass
-else:
-    raise AssertionError("candidate has network access")
-json.dump([0 for _ in texts], open(a.output, "w"))
-'''
+def test_candidate_sees_only_the_files_it_is_handed(tmp_path, monkeypatch):
+    """The candidate runs in a private temporary directory: it cannot reach the
+    repository, the frozen manifest, or the caller's working tree."""
+    seen = {}
+
+    def spy(command, **kwargs):
+        seen["cwd"] = str(kwargs.get("cwd"))
+        Path(command[command.index("--output") + 1]).write_text("[]")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    import research.prepare as prepare_module
+
+    monkeypatch.setattr(prepare_module.subprocess, "run", spy)
     train = [{"text": "synthetic train", "label": 0}]
     dev = ["synthetic validation"]
-    assert run_candidate(candidate, train, dev,
-                         image=resolve_image("multimodal-research-worker:2.7.0-cpu"),
-                         budget_seconds=10, seed=1) == [0]
+    assert run_candidate(b"pass", train, dev, budget_seconds=10, seed=1) == []
+    assert "autoresearch-candidate-" in seen["cwd"]
 
 
 @pytest.mark.synthetic
 def test_candidate_timeout_is_not_a_score():
     train = [{"text": "synthetic training", "label": 0}]
     dev = ["synthetic validation"]
-    with pytest.raises(RuntimeError, match="exit code 124"):
+    with pytest.raises(TimeoutError, match="exceeded"):
         run_candidate(b"import time; time.sleep(30)", train, dev,
-                      image=resolve_image("multimodal-research-worker:2.7.0-cpu"),
                       budget_seconds=1, seed=1)
 
 
@@ -148,7 +166,6 @@ def test_two_fold_candidate_to_fixed_score():
     candidate = (Path(__file__).resolve().parents[2] /
                  "src/research/train.py").read_bytes()
     result = evaluate(manifest, records, candidate,
-                      image=resolve_image("multimodal-research-worker:2.7.0-cpu"),
                       budget_seconds=20, seed=1, folds=2, repeats=1)
     assert result["evidence"] == "SMOKE_ONLY"
     assert len(result["folds"]) == 2
@@ -206,7 +223,7 @@ def test_monitor_serves_read_only_results(tmp_path):
 def test_record_binds_score_to_committed_training_file(tmp_path):
     import hashlib
 
-    from research.prepare import fixed_code_hashes, record_main, synthetic_selection
+    from research.prepare import fixed_code_hashes, record_main
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -258,8 +275,67 @@ def test_record_binds_score_to_committed_training_file(tmp_path):
         record_main(next_args)
 
 
+def test_record_accepts_a_real_protocol_v2_result_as_local_experimental(tmp_path):
+    """A real-data round records LOCAL_EXPERIMENTAL, never SMOKE_ONLY, and the
+    result must be bound to the pinned protocol-v2 hashes."""
+    import hashlib
+
+    from research.prepare import (
+        SELECTION_DATASET_SHA256,
+        SELECTION_MANIFEST_SHA256,
+        fixed_code_hashes,
+        record_main,
+    )
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "synthetic@example.invalid"],
+                   cwd=repo, check=True)
+    target = repo / "src/research/train.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("# synthetic candidate\n")
+    subprocess.run(["git", "add", "src/research/train.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "synthetic candidate"], cwd=repo, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo,
+                                     text=True).strip()
+    result = tmp_path / "result.json"
+    payload = {
+        "candidate_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+        "macro_f1": 0.3199, "metric": "syndrome/macro_f1", "direction": "maximize",
+        "metric_version": "tcm-sd-eval-v3", "evidence": EVIDENCE_LOCAL,
+        "code_sha256": fixed_code_hashes(), "promotion": "strict",
+        "dataset_sha256": SELECTION_DATASET_SHA256,
+        "manifest_sha256": SELECTION_MANIFEST_SHA256,
+        "seed": 1, "budget_seconds": 60, "fold_count": 2, "repeats": 1,
+        "device": "cpu", "gpu": "NOT_AVAILABLE",
+        "folds": [{"fold": i, "repeat": 0, "macro_f1": 0.3199,
+                   "n_validation": 1} for i in range(2)],
+    }
+    result.write_text(json.dumps(payload))
+    history = tmp_path / "results.tsv"
+    args = ["--repo", str(repo), "--results", str(history), "--commit", commit,
+            "--decision", "KEEP", "--description", "real baseline", "--result", str(result)]
+    assert record_main(args) == 0
+    row = history.read_text().splitlines()[1].split("\t")
+    assert EVIDENCE_LOCAL in row
+    # a synthetic-labelled result carrying the real hashes is refused, and a
+    # real-labelled result carrying the synthetic hashes is refused too
+    payload["evidence"] = EVIDENCE_SMOKE
+    result.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="built-in synthetic protocol"):
+        record_main(args)
+    payload["evidence"] = EVIDENCE_LOCAL
+    payload["dataset_sha256"] = "0" * 64
+    payload["manifest_sha256"] = "1" * 64
+    result.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="frozen protocol-v2"):
+        record_main(args)
+
+
 def test_output_files_do_not_follow_symlinks(tmp_path):
-    from research.history import open_regular
+    from research.prepare import open_regular
 
     target = tmp_path / "target"
     target.write_text("unchanged")
@@ -328,3 +404,43 @@ def test_skill_flow_baseline_candidate_and_monitor(tmp_path):
     assert [row["decision"] for row in view["results"]] == ["KEEP", decision]
     assert float(view["results"][0]["value"]) == baseline["macro_f1"]
     assert float(view["results"][1]["value"]) == trial["macro_f1"]
+
+
+# -- results.tsv policy and atomic boundaries ----------------------------------
+
+
+def test_history_policy_and_crash_metadata(tmp_path):
+    path = tmp_path / "results.tsv"
+    _append(path, 1, value=None, decision="CRASH", protocol="")
+    with pytest.raises(ValueError, match="metadata"):
+        _append(path, 2, metric="accuracy")
+    _append(path, 2, decision="KEEP")
+    with pytest.raises(ValueError, match="improvement"):
+        _append(path, 3, value=2.0, decision="KEEP")
+    with pytest.raises(ValueError, match="metadata"):
+        _append(path, 3, promotion="external")
+    other = tmp_path / "external.tsv"
+    _append(other, 1, decision="KEEP", promotion="external")
+    _append(other, 2, value=1.0, decision="KEEP", promotion="external")
+
+
+def test_atomic_history_and_result_boundaries(tmp_path):
+    path = tmp_path / "results.tsv"
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda n: _append(path, n), range(1, 9)))
+    assert len(path.read_text().splitlines()) == 9
+    path.write_text(path.read_text() + "partial")
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="incomplete"):
+        _append(path, 9)
+    assert path.read_bytes() == before
+    result = tmp_path / "result.json"
+    write_new_atomic(result, b"first")
+    with pytest.raises(FileExistsError):
+        write_new_atomic(result, b"second")
+    assert result.read_bytes() == b"first"
+    link = tmp_path / "link"
+    link.symlink_to(result)
+    with pytest.raises(FileExistsError):
+        write_new_atomic(link, b"third")
+    assert result.read_bytes() == b"first"

@@ -1,37 +1,42 @@
 """Fixed selection and scoring for the single-file AutoResearch engine.
 
-Validation labels stay outside candidate execution. Real-data evaluation is
-disabled until the evaluator is independently isolated from the proposing agent.
+The candidate (`src/research/train.py`) is executed by the same interpreter on
+the development host. It receives only training labels and validation texts
+through files; the metric is computed here, outside the candidate process.
+Local results are development experiments (`LOCAL_EXPERIMENTAL`), not
+independently attested evaluations.
 """
 from __future__ import annotations
 
 import argparse
+import csv
 import fcntl
 import hashlib
+import io
 import json
 import math
 import os
 import random
 import re
+import stat
 import statistics
+import subprocess
 import sys
+import tempfile
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
-
-from research.history import (
-    append_history,
-    committed_source,
-    open_regular,
-    read_regular,
-    write_new_atomic,
-)
-from research.sandbox import resolve_image, run_candidate
 
 SELECTION_FOLD_VERSION = "tcm-sd-stratified-user-fold-v2"
 SELECTION_DATASET_SHA256 = "e63682908e6bed7488ada3cd68cf50b4a1817a4bfbfa28c0a00b74fbc0af4d55"
 SELECTION_MANIFEST_SHA256 = "f6ac971a9224542551163d692d40ec095b78465dcdd4ea0a67e0bd168b98f04e"
+EVIDENCE_LOCAL = "LOCAL_EXPERIMENTAL"
+EVIDENCE_SMOKE = "SMOKE_ONLY"
+
+#: results.tsv columns, in order. A run's rows must all agree on these.
+FIELDS = ("commit", "metric", "value", "direction", "decision", "description",
+          "peak_vram_mb", "protocol_sha256", "evidence", "promotion")
 
 
 def score_predictions(labels: list[int], predictions: list[int], n_classes: int) -> float:
@@ -50,15 +55,81 @@ def score_predictions(labels: list[int], predictions: list[int], n_classes: int)
 
 
 def fixed_code_hashes() -> dict[str, str]:
-    """Identify the evaluator, metric, sandbox and comparison implementation."""
-    import research.history as history_module
-    import research.sandbox as sandbox_module
+    """Identify the evaluator and metric implementation this run scores with."""
     import syndrome.metrics as metric_module
 
-    paths = {"evaluator": __file__, "sandbox": sandbox_module.__file__,
-             "history": history_module.__file__, "metric": metric_module.__file__}
-    return {name: hashlib.sha256(read_regular(Path(path), 2 * 1024 * 1024)).hexdigest()
+    paths = {"evaluator": __file__, "metric": metric_module.__file__}
+    return {name: hashlib.sha256(read_regular(Path(path), 4 * 1024 * 1024)).hexdigest()
             for name, path in paths.items()}
+
+
+def local_device() -> dict[str, str]:
+    """Record the device the candidate actually trained on."""
+    device = "cpu"
+    gpu = "NOT_AVAILABLE"
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            device = "cuda"
+            gpu = torch.cuda.get_device_name(0)
+    except Exception:  # pragma: no cover - torch is optional for linear candidates
+        pass
+    return {"device": device, "gpu": gpu}
+
+
+def run_candidate(candidate: bytes, train: object, inputs: object, *,
+                  budget_seconds: int, seed: int, repo_root: Path | None = None) -> list:
+    """Run the candidate locally with a hard time limit; return class IDs.
+
+    The candidate sees only the two JSON files it is handed: it runs in a
+    private temporary directory, so it cannot reach the repository, the frozen
+    manifest or the validation labels. Network use is not blocked, and the
+    result is therefore a development experiment, not an attested one.
+    """
+    if not candidate or len(candidate) > 2 * 1024 * 1024:
+        raise ValueError("candidate source must be between 1 byte and 2 MiB")
+    if (isinstance(budget_seconds, bool) or not isinstance(budget_seconds, int)
+            or not 1 <= budget_seconds <= 3600):
+        raise ValueError("budget must be between 1 and 3600 seconds")
+    with tempfile.TemporaryDirectory(prefix="autoresearch-candidate-") as directory:
+        root = Path(directory)
+        source = root / "train.py"
+        source.write_bytes(candidate)
+        for name, value in (("train.json", train), ("predict.json", inputs)):
+            payload = json.dumps(value, ensure_ascii=False).encode("utf-8")
+            if len(payload) > 128 * 1024 * 1024:
+                raise ValueError("candidate input exceeds the size limit")
+            (root / name).write_bytes(payload)
+        output = root / "output.json"
+        command = [
+            sys.executable, "-I", str(source),
+            "--train", str(root / "train.json"),
+            "--predict", str(root / "predict.json"),
+            "--output", str(output),
+            "--seed", str(seed),
+        ]
+        try:
+            completed = subprocess.run(
+                command, cwd=root, stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=budget_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"candidate exceeded the {budget_seconds}s fold budget"
+            ) from exc
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip()[-400:]
+            raise RuntimeError(
+                f"candidate failed with exit code {completed.returncode}: {detail}"
+            )
+        predictions = json.loads(output.read_text(encoding="utf-8"))
+    if not isinstance(predictions, list):
+        raise ValueError("candidate predictions must be a JSON list")
+    return predictions
+
+
+# -- results.tsv and committed-source helpers --------------------------------
 
 
 def validate_manifest_contract(
@@ -562,9 +633,9 @@ def fold_inputs(manifest: dict, records: dict, fold: int, folds: int, repeat: in
     return train, dev
 
 
-def evaluate(manifest: dict, records: dict, candidate: bytes, *, image: str,
+def evaluate(manifest: dict, records: dict, candidate: bytes, *,
              budget_seconds: int, seed: int, folds: int, repeats: int,
-             progress=None) -> dict:
+             repo_root: Path | None = None, progress=None) -> dict:
     """Evaluate one candidate on fixed selection folds, never on holdout."""
     if manifest["split"]["holdout"]:
         raise ValueError("holdout must be empty for candidate evaluation")
@@ -572,6 +643,7 @@ def evaluate(manifest: dict, records: dict, candidate: bytes, *, image: str,
             or folds * repeats > 32 or budget_seconds * folds * repeats > 14400):
         raise ValueError("fold count, repeats or total compute budget exceed the run limit")
     code_hashes = fixed_code_hashes()
+    device = local_device()
     scores = []
     for repeat in range(repeats):
         for fold in range(folds):
@@ -582,15 +654,19 @@ def evaluate(manifest: dict, records: dict, candidate: bytes, *, image: str,
             train, dev = fold_inputs(manifest, records, fold, folds, repeat)
             training = [{"text": row.input_text, "label": row.label} for row in train]
             inputs = [row.input_text for row in dev]
-            predictions = run_candidate(candidate, training, inputs, image=image,
-                                        budget_seconds=budget_seconds, seed=seed)
+            started = time.monotonic()
+            predictions = run_candidate(candidate, training, inputs,
+                                        budget_seconds=budget_seconds, seed=seed,
+                                        repo_root=repo_root)
+            elapsed = round(time.monotonic() - started, 3)
             score = score_predictions([row.label for row in dev], predictions,
                                       manifest["n_classes"])
             scores.append({"fold": fold, "repeat": repeat, "macro_f1": score,
-                           "n_validation": len(dev)})
+                           "n_validation": len(dev), "train_seconds": elapsed})
     if fixed_code_hashes() != code_hashes:
         raise RuntimeError("fixed evaluator code changed during the run")
     values = [row["macro_f1"] for row in scores]
+    smoke = manifest["label_tier"] == "SMOKE_ONLY"
     return {
         "metric": "syndrome/macro_f1",
         "direction": "maximize",
@@ -607,10 +683,154 @@ def evaluate(manifest: dict, records: dict, candidate: bytes, *, image: str,
         "manifest_sha256": manifest["manifest_sha256"],
         "seed": seed,
         "budget_seconds": budget_seconds,
-        "image": image,
+        "device": device["device"],
+        "gpu": device["gpu"],
         "peak_vram_mb": "NOT_AVAILABLE",
-        "evidence": "SMOKE_ONLY" if manifest["label_tier"] == "SMOKE_ONLY" else "NOT_VALIDATED",
+        "evidence": EVIDENCE_SMOKE if smoke else EVIDENCE_LOCAL,
     }
+
+
+def read_regular(path: Path, limit: int) -> bytes:
+    """Read a bounded regular file without following a final symlink."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            raise ValueError("input is not a bounded regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            content = stream.read(limit + 1)
+        if len(content) > limit:
+            raise ValueError("input exceeds the size limit")
+        return content
+    finally:
+        os.close(descriptor)
+
+
+def open_regular(path: Path):
+    """Open a private output file without following symbolic or extra hard links."""
+    flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise ValueError("output must be a regular file without extra hard links")
+        return os.fdopen(descriptor, "r+", encoding="utf-8", newline="")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def committed_source(repo: Path, commit: str, editable: str) -> bytes:
+    """Read one bounded committed file, without interpreting a revision argument."""
+    if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit):
+        raise ValueError("commit must be a full hexadecimal Git commit ID")
+    path = PurePosixPath(editable)
+    if path.is_absolute() or ".." in path.parts or not path.parts or str(path) != editable:
+        raise ValueError("editable must be a relative Git path")
+    obj = f"{commit}:{editable}"
+    size = subprocess.run(["git", "cat-file", "-s", obj], cwd=repo,
+                          stdin=subprocess.DEVNULL, capture_output=True,
+                          text=True, check=True, timeout=15).stdout.strip()
+    if not size.isdigit() or not 0 < int(size) <= 2 * 1024 * 1024:
+        raise ValueError("commit does not contain a bounded training file")
+    return subprocess.run(["git", "show", obj], cwd=repo, stdin=subprocess.DEVNULL,
+                          capture_output=True, check=True, timeout=15).stdout
+
+
+def write_new_atomic(path: Path, payload: bytes) -> None:
+    """Create a complete file atomically without overwriting an existing result."""
+    temporary = path.parent / (".result-" + uuid.uuid4().hex)
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path, follow_symlinks=False)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def append_history(path: Path, *, commit: str, metric: str, value: float | None,
+                   direction: str, decision: str, description: str,
+                   protocol: str, evidence: str, peak_vram: str = "NOT_AVAILABLE",
+                   promotion: str = "strict") -> None:
+    """Append one decision; reject incomparable protocols and false improvements."""
+    if (not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit)
+            or direction not in ("minimize", "maximize")
+            or decision not in ("KEEP", "REVERT", "CRASH")
+            or promotion not in ("strict", "external")):
+        raise ValueError("invalid direction or decision")
+    if not metric or not evidence or not description.strip() or len(description) > 400:
+        raise ValueError("metric, evidence and a short description are required")
+    if decision == "CRASH":
+        if value is not None:
+            raise ValueError("a crash cannot carry a numeric score")
+    elif (isinstance(value, bool) or not isinstance(value, (int, float))
+          or not math.isfinite(value) or not re.fullmatch(r"[0-9a-f]{64}", protocol)):
+        raise ValueError("a scored result needs a finite value and protocol hash")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.parent / ("." + path.name + ".lock")
+    with open_regular(lock_path) as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            contents = read_regular(path, 2 * 1024 * 1024).decode("utf-8")
+        except FileNotFoundError:
+            contents = ""
+        if contents and not contents.endswith("\n"):
+            raise ValueError("results file has an incomplete final row")
+        reader = csv.DictReader(io.StringIO(contents), delimiter="\t", strict=True)
+        existing = list(reader)
+        if reader.fieldnames and reader.fieldnames != list(FIELDS):
+            raise ValueError("results file has an incompatible schema")
+        if any(None in row or any(row.get(field) is None for field in FIELDS) for row in existing):
+            raise ValueError("results file contains an incomplete row")
+        for row in existing:
+            if row["decision"] not in ("KEEP", "REVERT", "CRASH"):
+                raise ValueError("results file contains an invalid decision")
+            if row["decision"] == "CRASH":
+                if row["value"]:
+                    raise ValueError("crash row contains a score")
+            else:
+                try:
+                    prior = float(row["value"])
+                except ValueError as exc:
+                    raise ValueError("results file contains an invalid score") from exc
+                if (not math.isfinite(prior)
+                        or not re.fullmatch(r"[0-9a-f]{64}", row["protocol_sha256"])):
+                    raise ValueError("results file contains an invalid score or protocol")
+        if protocol and any(row.get("protocol_sha256") not in ("", protocol) for row in existing):
+            raise ValueError("result protocol differs from this run's earlier results")
+        if any((row.get("metric"), row.get("direction"), row.get("evidence"), row.get("promotion"))
+               != (metric, direction, evidence, promotion) for row in existing):
+            raise ValueError("result metadata differs from this run's earlier results")
+        if any(row.get("commit") == commit for row in existing):
+            raise ValueError("candidate commit is already recorded")
+        if decision == "KEEP" and promotion == "strict":
+            previous = [float(row["value"]) for row in existing
+                        if row.get("decision") == "KEEP" and row.get("value")]
+            if previous and ((direction == "maximize" and value <= max(previous))
+                             or (direction == "minimize" and value >= min(previous))):
+                raise ValueError("KEEP requires an improvement over the previous champion")
+        output = io.StringIO(newline="")
+        writer = csv.DictWriter(output, fieldnames=FIELDS, delimiter="\t", lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(existing)
+        writer.writerow(dict(zip(FIELDS, (commit, metric, "" if value is None else value, direction,
+                                         decision, description, peak_vram, protocol, evidence,
+                                         promotion), strict=True)))
+        payload = output.getvalue().encode("utf-8")
+        if len(payload) > 2 * 1024 * 1024:
+            raise ValueError("results file exceeds the size limit")
+        temporary = path.parent / (".history-" + uuid.uuid4().hex)
+        try:
+            with temporary.open("xb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def record_main(argv: list[str]) -> int:
@@ -637,17 +857,27 @@ def record_main(argv: list[str]) -> int:
         peak_vram = result.get("peak_vram_mb", "NOT_AVAILABLE")
         if isinstance(score, bool) or not isinstance(score, (float, int)) or not 0 <= score <= 1:
             raise ValueError("result has an invalid macro-F1")
-        fixture, _ = synthetic_selection()
-        if (result.get("evidence") != "SMOKE_ONLY"
-                or result.get("metric") != "syndrome/macro_f1"
+        evidence = result.get("evidence")
+        if evidence not in (EVIDENCE_SMOKE, EVIDENCE_LOCAL):
+            raise ValueError(f"result evidence must be {EVIDENCE_SMOKE} or {EVIDENCE_LOCAL}")
+        if (result.get("metric") != "syndrome/macro_f1"
                 or result.get("metric_version") != "tcm-sd-eval-v3"
-                or result.get("dataset_sha256") != fixture["dataset_sha256"]
-                or result.get("manifest_sha256") != fixture["manifest_sha256"]):
+                or result.get("direction") != "maximize"):
+            raise ValueError("result does not match the frozen metric contract")
+        # A scored run must name the exact frozen inputs it used. Real runs must
+        # carry the pinned protocol-v2 hashes; smoke runs the built-in fixture.
+        expected = (synthetic_selection()[0] if evidence == EVIDENCE_SMOKE else None)
+        if expected is None:
+            if (result.get("dataset_sha256") != SELECTION_DATASET_SHA256
+                    or result.get("manifest_sha256") != SELECTION_MANIFEST_SHA256):
+                raise ValueError(
+                    "result does not match the frozen protocol-v2 selection inputs"
+                )
+        elif (result.get("dataset_sha256") != expected["dataset_sha256"]
+                or result.get("manifest_sha256") != expected["manifest_sha256"]):
             raise ValueError("result does not match the built-in synthetic protocol")
-        if result.get("direction") != "maximize":
-            raise ValueError("result has an invalid metric direction")
         keys = ("metric", "direction", "metric_version", "dataset_sha256", "manifest_sha256",
-                "seed", "budget_seconds", "image", "fold_count", "repeats", "evidence",
+                "seed", "budget_seconds", "fold_count", "repeats", "evidence",
                 "code_sha256", "promotion")
         if any(key not in result for key in keys):
             raise ValueError("result is missing a frozen protocol field")
@@ -660,9 +890,7 @@ def record_main(argv: list[str]) -> int:
                 for v in (folds, repeats, budget, result["seed"]))
                 or not 2 <= folds <= 10 or not 1 <= repeats <= 10
                 or folds * repeats > 32 or not 1 <= budget <= 3600
-                or folds * repeats * budget > 14400
-                or not isinstance(result["image"], str)
-                or not re.fullmatch(r"sha256:[0-9a-f]{64}", result["image"])):
+                or folds * repeats * budget > 14400):
             raise ValueError("result has invalid protocol parameters")
         details = result.get("folds")
         if not isinstance(details, list) or len(details) != folds * repeats:
@@ -695,7 +923,9 @@ def record_main(argv: list[str]) -> int:
         args.results, commit=args.commit, metric="syndrome/macro_f1",
         value=None if args.decision == "CRASH" else score, direction="maximize",
         decision=args.decision, description=args.description, protocol=protocol,
-        evidence="SMOKE_ONLY", peak_vram=peak_vram,
+        evidence=EVIDENCE_LOCAL if args.decision != "CRASH" and evidence == EVIDENCE_LOCAL
+        else EVIDENCE_SMOKE,
+        peak_vram=peak_vram,
     )
     return 0
 
@@ -705,28 +935,39 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "record":
         return record_main(argv[1:])
     parser = argparse.ArgumentParser(description="Fixed TCM-SD selection evaluator")
-    parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--dataset", type=Path)
-    parser.add_argument("--candidate", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path,
+                        help="frozen protocol-v2 selection_manifest.json")
+    parser.add_argument("--dataset", type=Path,
+                        help="frozen protocol-v2 selection_records.json")
+    parser.add_argument("--candidate", type=Path, required=True,
+                        help="the one editable training file (src/research/train.py)")
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--image", default="multimodal-research-worker:2.7.0-cpu")
-    parser.add_argument("--budget", type=int, default=60)
+    parser.add_argument("--repo-root", type=Path, default=None,
+                        help="worktree the candidate was committed in (recorded for provenance)")
+    parser.add_argument("--budget", type=int, default=60,
+                        help="fixed wall-clock seconds per fold")
     parser.add_argument("--seed", type=int, default=20261104)
     parser.add_argument("--folds", type=int, default=4)
     parser.add_argument("--repeats", type=int, default=2)
-    parser.add_argument("--synthetic", action="store_true")
+    parser.add_argument("--synthetic", action="store_true",
+                        help="use the built-in smoke fixture instead of real data")
     args = parser.parse_args(argv)
-    if not args.synthetic:
-        parser.error("real-data evaluation is unavailable: AGENT_ISOLATION_UNVERIFIED")
-    if args.manifest or args.dataset:
-        parser.error("synthetic mode uses the built-in fixture and accepts no data paths")
+    if args.synthetic:
+        if args.manifest or args.dataset:
+            parser.error("synthetic mode uses the built-in fixture and accepts no data paths")
+    elif not (args.manifest and args.dataset):
+        parser.error("real evaluation needs --manifest and --dataset "
+                     "(or --synthetic for the smoke fixture)")
     if args.out.exists():
         parser.error("output already exists; use a new result file")
     args.out.parent.mkdir(parents=True, exist_ok=True)
+    real = not args.synthetic
+    task_name = "tcm-sd-syndrome" if real else "synthetic-syndrome"
+    evidence = EVIDENCE_LOCAL if real else EVIDENCE_SMOKE
 
     def status(value: dict) -> None:
-        value = {**value, "task": "synthetic-syndrome", "updated_at": time.time(),
-                 "evidence": "SMOKE_ONLY"}
+        value = {**value, "task": task_name, "updated_at": time.time(),
+                 "evidence": evidence}
         target = args.out.parent / "status.json"
         temporary = args.out.parent / (".status-" + uuid.uuid4().hex)
         try:
@@ -743,12 +984,15 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError("another evaluation is active in this run") from exc
         try:
             status({"state": "PREPARING", "deadline": time.time() + 60})
-            manifest, records = synthetic_selection()
+            if real:
+                manifest, records = load_selection(args.manifest, args.dataset)
+            else:
+                manifest, records = synthetic_selection()
             candidate = read_regular(args.candidate, 2 * 1024 * 1024)
-            image = resolve_image(args.image)
-            result = evaluate(manifest, records, candidate, image=image,
+            result = evaluate(manifest, records, candidate,
                               budget_seconds=args.budget, seed=args.seed,
-                              folds=args.folds, repeats=args.repeats, progress=status)
+                              folds=args.folds, repeats=args.repeats,
+                              repo_root=args.repo_root, progress=status)
             payload = (json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
             write_new_atomic(args.out, payload.encode("utf-8"))
             status({"state": "COMPLETE", "macro_f1": result["macro_f1"]})
