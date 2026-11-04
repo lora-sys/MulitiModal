@@ -488,3 +488,46 @@ def test_macro_f1_keeps_all_148_labels_and_zero_support_classes():
     assert result["per_class"][147]["support"] == 0
     assert result["per_class"][147]["f1"] == 0.0
     assert result["macro_f1"] == round(1 / 148, 6)
+
+
+def test_cv_seed_flag_flows_to_baseline_config_and_report(tmp_path, monkeypatch):
+    _write_inputs(tmp_path, "short")
+    captured_seeds = []
+
+    class _SeedRecordingBaseline:
+        def __init__(self, config=None):
+            captured_seeds.append(getattr(config, "seed", None))
+
+        def fit(self, texts, labels):
+            return self
+
+        def predict(self, texts):
+            return [0] * len(texts)
+
+    monkeypatch.setattr(evaluator, "TfidfNgramBaseline", _SeedRecordingBaseline)
+    monkeypatch.chdir(tmp_path)
+    assert evaluator.main(
+        [
+            "--scenario",
+            "short",
+            "--out",
+            "runs/sd-v2/cv-seed-flag",
+            "--seed",
+            "20261102",
+        ]
+    ) == 0
+    report = json.loads(
+        (tmp_path / "runs" / "sd-v2" / "cv-seed-flag" / "cv-report.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert set(captured_seeds) == {20261102}
+    assert report["training_config"]["parameters"]["seed"] == 20261102
+    assert report["training_config"]["environment"]["seed"] == 20261102
+    # Fold membership is manifest-derived: the flag must not change it.
+    assert report["cv"]["n_fold_runs"] == 8
+
+    args = evaluator.build_parser().parse_args(
+        ["--scenario", "short", "--out", "x"]
+    )
+    assert args.seed == 20261101

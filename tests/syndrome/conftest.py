@@ -108,3 +108,28 @@ def fake_knowledge() -> dict:
             typical="畏寒肢冷，久泻不止，腰膝冷痛。",
         ),
     }
+
+
+@pytest.fixture
+def fake_topic_knowledge() -> dict:
+    """非诊断性主题知识 fixture（#58）：与证候词表无关，出处齐全。"""
+    from syndrome.feedback import TopicKnowledge
+
+    return {
+        "cardiovascular-general": TopicKnowledge(
+            topic_id="cardiovascular-general",
+            title="SYNTHETIC 心血管一般主题",
+            text="SYNTHETIC：一般心血管健康主题占位文本，与个人测量无关。",
+            source="SYNTHETIC",
+            license="SYNTHETIC_MOCK",
+            version="0.0.1",
+        ),
+        "sleep-general": TopicKnowledge(
+            topic_id="sleep-general",
+            title="SYNTHETIC 睡眠一般主题",
+            text="SYNTHETIC：一般睡眠健康主题占位文本，与个人测量无关。",
+            source="SYNTHETIC",
+            license="SYNTHETIC_MOCK",
+            version="0.0.1",
+        ),
+    }
