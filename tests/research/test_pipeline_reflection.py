@@ -1,21 +1,12 @@
 """Tests for the general Feature+Model Pipeline and Diagnostic Reflection."""
 
-import pytest
-import torch
 from dataclasses import dataclass
 
-from core.batch import ModelOutput
 from core.specs import InputSpecSet, ModalitySpec
-from research.candidate import (
-    ConstitutionPipeline,
-    FusionMLP,
-    build_model as build_constitution_model,
-)
-from research.candidate_sd import (
-    SyndromePipeline,
-    SyndromeMLP,
-    build_model as build_syndrome_model,
-)
+from research.candidate import ConstitutionPipeline, FusionMLP
+from research.candidate import build_model as build_constitution_model
+from research.candidate_sd import SyndromeMLP, SyndromePipeline
+from research.candidate_sd import build_model as build_syndrome_model
 from research.evaluator import extract_diagnostics
 from research.frozen import FoldData
 from research.model_export import export_architecture

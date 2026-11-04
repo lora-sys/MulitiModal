@@ -46,7 +46,6 @@ import torch.nn.functional as F
 from core.batch import ModelOutput
 from research.frozen import TIME_BUDGET_SECONDS, FoldData
 
-
 # ==============================================================================
 # PIPELINE CONFIGURATION (Candidate Agent knobs)
 # ==============================================================================
@@ -59,7 +58,9 @@ LEARNING_RATE = 3e-3      # optimizer learning rate
 WEIGHT_DECAY = 0.0        # L2 regularization weight decay
 
 
-def _make_encoder(in_dim: int, width: int, encoder_type: str = "mlp", dropout: float = 0.0) -> nn.Sequential:
+def _make_encoder(
+    in_dim: int, width: int, encoder_type: str = "mlp", dropout: float = 0.0
+) -> nn.Sequential:
     if encoder_type == "linear":
         layers: list[nn.Module] = [nn.Linear(in_dim, width)]
         if dropout > 0.0:
@@ -75,7 +76,9 @@ def _make_encoder(in_dim: int, width: int, encoder_type: str = "mlp", dropout: f
     return nn.Sequential(*layers)
 
 
-def _make_head(in_dim: int, n_targets: int, head_type: str = "linear", dropout: float = 0.0) -> nn.Module:
+def _make_head(
+    in_dim: int, n_targets: int, head_type: str = "linear", dropout: float = 0.0
+) -> nn.Module:
     if head_type == "mlp":
         layers: list[nn.Module] = [
             nn.Linear(in_dim, in_dim),
