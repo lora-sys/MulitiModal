@@ -1,74 +1,26 @@
-# program.md — the proposer's contract
+# Experiment loop
 
-This is the instruction for the Coding Agent that loaded the Skill and is
-driving the campaign: you read the state, you write one hypothesis per round,
-and you call `autoresearch step` for it. No separate agent process is needed. It is
-short on purpose: the module owns the data, the isolation, the scoring and the
-record. Your only job is to propose **one** controlled, falsifiable experiment
-per round, after reading the result of the previous one.
+Use a dedicated clean `autoresearch/<tag>` Git worktree and a separate ignored `runs/<tag>` directory. Never reset another branch or a dirty worktree. Run the fixed evaluator from the trusted checkout; pass the worktree's `src/research/train.py` as `--candidate`. The candidate container cannot write the evaluator, data, split, metric, or budget. Independent isolation from the proposing agent remains unverified. Follow `AGENTS.md` for isolation and holdout rules.
 
-## You get
+For a new tag, use `git worktree add -b autoresearch/<tag> /absolute/path/to/worktree HEAD` from a committed trusted checkout. Create the ignored run directory separately. Check that the branch does not already exist and that the worktree is clean before each reset. Do not operate on the user's main checkout.
 
-A JSON research state: the frozen goal, the anchor editable file, `frozen_paths`
-(the denylist), the champion and its metric, the previous round's
-hypothesis/patch/metric, diagnostic reflection slices and Doctor findings, the
-remaining budget, and the list of things that are frozen.
+1. Establish the baseline using the unchanged committed training file. On this version the evaluator accepts `--synthetic` only and uses its built-in `SMOKE_ONLY` fixture. Do not run real-data evaluation while `AGENT_ISOLATION_UNVERIFIED`.
+2. Read `results.tsv` and the current training file. Form one hypothesis, edit only that file, then commit it in the dedicated worktree.
+3. Evaluate under the same fixture, image, folds, seed and wall-clock budget. Example from the trusted checkout:
 
-## You return exactly one JSON object
+   ```bash
+   PYTHONPATH=src python -m research.prepare --synthetic \
+     --candidate /absolute/path/worktree/src/research/train.py \
+     --out /absolute/path/runs/tag/round-001.json --budget 60 --folds 2 --repeats 1
+   ```
 
-```json
-{
-  "hypothesis": "a falsifiable claim, e.g. 'X raises metric M because Y'",
-  "controlled_change": "what changes, and what stays fixed",
-  "expected_observation": "what the trusted metric should show if the claim holds",
-  "patch": "a unified diff against one or more writable src/**/*.py files",
-  "intent": "one line",
-  "next_action_if_keep": "what to try next if this is kept",
-  "next_action_if_revert": "what to diagnose or try instead if it is rolled back"
-}
-```
+4. Read the evaluator's JSON. Record the candidate commit and decision against that exact JSON:
 
-or `{"intent": "STOP", "config_patch": {}}`-style `STOP` when no further
-experiment is worth the budget.
+   ```bash
+   PYTHONPATH=src python -m research.prepare record --repo /absolute/path/worktree \
+     --results /absolute/path/runs/tag/results.tsv --commit <candidate-sha> \
+     --result /absolute/path/runs/tag/round-001.json --decision KEEP --description '<hypothesis>'
+   ```
 
-## Rules
-
-1. **One hypothesis per round.** A plan written in advance is not research. Read
-   what the last round actually produced; if your idea is unchanged by it, say so
-   in `controlled_change` and justify it.
-2. **Change one thing.** Name what you hold fixed. Two simultaneous changes make
-   the result uninterpretable, and the loop will charge you for the complexity.
-3. **Any model/train/feature source, but nothing frozen.** You may edit any
-   `src/**/*.py` file and add new Python modules; `editable_file` is the anchor
-   candidate, not a limit. Data, labels, splits, the evaluator, the metric, the
-   budget, the holdout ledger and the trusted engine are frozen (`frozen_paths`).
-   A patch touching them is refused before training.
-4. **The budget is the budget.** You cannot buy a better score with more training
-   time; a run that overruns is recorded as `INVALID_PROTOCOL`.
-5. **You never report a score.** The trusted evaluator runs in a separate process
-   after your model is saved. Do not attempt to influence it.
-6. **Prefer small, honest patches.** Complexity is priced: a larger patch must
-   show a larger gain, and removing code while scoring at least as well is a win.
-7. **A rejected round is information.** `INVALID_PROTOCOL` means the patch or the
-   protocol was wrong, `UNSUPPORTED_ARCHITECTURE` means the architecture cannot be
-   exported under the frozen whitelist, `CRASH` means it did not run. None of these
-   says the model is bad.
-
-## Write the patch correctly
-
-* Use a real unified diff with `--- a/<file>` and `+++ b/<file>` headers and at
-  least one `@@` hunk.
-* Include context on **both** sides of the change. A hunk with no trailing
-  context asserts "the file ends here", so an append-only hunk applies to a
-  one-line file exactly once and then fails — read the current file and put its
-  neighbouring lines in the hunk.
-* Read the file before you patch it. After a KEEP the file is no longer what it
-  was when you last looked, so a patch prepared earlier will not apply.
-
-## When to stop
-
-Stop when the Doctor reports `measurement_resolution` on several consecutive
-rounds: on this data, further micro-edits cannot clear the noise margin, and the
-honest next step is more information (features, labels, data) — not another
-hyperparameter. Record that conclusion in the report rather than spending the
-budget.
+   Use `REVERT` when the score does not improve, or `CRASH` without `--result` when execution failed. Never record a crash as a numeric score. Once recorded, keep the candidate commit if improved; otherwise reset only the dedicated clean worktree to the previous champion commit. The monitor reads this TSV and the evaluator's status file.
+5. Read the new history before choosing the next hypothesis. Continue without asking between rounds; stop on user request, a declared budget, or an unresolved safety/technical failure. Preserve the result files and report missing evidence honestly.

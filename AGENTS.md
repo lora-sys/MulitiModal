@@ -1,75 +1,24 @@
-# MulitiModal — 工程规范与项目知识
+# MulitiModal：工程规范与项目知识
 
-本文件只讲两件事：**必须遵守的规范**，和**这个项目的关键事实**。规则与单条 issue 冻结小节冲突时，以该 issue 最新冻结小节为准；Agent 不得自行改写任务目标或放宽规范。
+本文件供参与本仓库工作的 Agent 使用。开始改动前读对应 Issue 的完整内容；若 Issue 最新冻结小节与本文件冲突，以该冻结小节为准，不自行改写研究目标。
 
-## 一、项目是什么
+## 工程规范
 
-**按摩椅场景下的中医健康参考**：用户可能不填写症状问卷，设备只有生理传感器；系统要给出有依据、可追溯、不冒充诊断的中医参考。
+- 实现保持简单、职责清晰；先检查现有依赖和成熟方案。已废弃的路径直接删除，不增加兼容层。
+- AutoResearch 由 `skills/autoresearch/` 驱动。研究 Agent 只修改 `src/research/train.py`；固定数据、标签、划分、评估器、指标、预算和 holdout 不得修改。每轮只提出一个假设，读取上一轮结果后决定下一轮；评分来自可信评估器，结果以 KEEP/REVERT 记录。
+- 可信评估器必须运行在 Agent 不可写的隔离环境；不可信代码必须有 OS/容器级隔离，单独进程或审查 diff 不算隔离。目前端到端隔离状态为 `AGENT_ISOLATION_UNVERIFIED`。
+- 同一受试者全部记录属于同一 partition；预处理、特征选择和权重只在训练折内拟合。选择和比较不得访问 holdout。体质线 2/2、证候线 1/1 的 holdout 解锁预算已用尽；再评估须有新数据里程碑或用户明确授权。
+- 生理线推理只使用按摩前字段；按摩中和按摩后数据仅可用于训练期标签构造，不可通过别名或衍生特征进入推理。
+- RULE、PUBLISHED、LLM_SILVER 标签必须保留来源且不可互换；LLM_SILVER 不作参考真值。规则缺项时 ABSTAIN，不补零或猜测。
+- 原始数据只读，导入前后核对哈希；真实数据、检查点、工件、日志、`runs/` 和 `artifacts/` 不入 Git。合成数据必须显式标记。
+- 记录数据哈希、标准和标签版本、模型配置、种子、依赖与代码 commit。未知信息用 `NOT_AVAILABLE`、`UNVERIFIED`、`SMOKE_ONLY`、`NOT_VALIDATED` 或 `AGENT_NOT_VERIFIED` 等状态表达。
+- `GO_ENGINEERING`、`GO_REAL_DATA_TRAINING`、`GO_RESEARCH_CLAIMS` 独立判定，不能由合成或 dev/CV 分数推导科研结论。不得宣称临床疗效。
+- Conventional Commits，一个 purpose 一个提交；改动保持最小且可验证。schema 改动带契约测试，adapter 带形状、mask 和负例测试，bug 修复带回归测试。用户明确要求在开发机安装依赖、跑测试或启动验证时使用 `remote-dev`。
 
-三条独立、标签不可互换的线：
+## 项目知识
 
-| 线 | 输入 → 输出 | 数据 | 状态 |
-| --- | --- | --- | --- |
-| **证候线（当前主线）** | 中文症状主诉 → 148 类证候倾向 | TCM-SD 公开病历 54,152 例 / 148 证型，PUBLISHED 标签，CC BY-NC-SA 4.0（非商业） | 阶段 1 已交付（TF-IDF+LR 为交付候选）；AutoResearch 在 dev/CV 上的进一步探索仅作工程闭环验证 |
-| **体质线（历史）** | Body/Vitals → 九维体质评分 | Mendeley 274 人，8 维公开评分 | 已交付 v11；holdout 预算用尽 |
-| **生理线** | Pre 生理 → BPSI/EFRI | 无同人配对真实数据 | **BLOCKED**，不得伪造标签 |
-
-**不是**：多模态 LLM；不是按摩硬件控制；不产出临床疗效声明。
-
-## 二、硬规范
-
-1. **Pre-only**：推理输入只允许按摩前字段。按摩中/后数据只能用于构造训练标签，禁止经任何别名或衍生计算进入推理接口。
-2. **Subject-level 划分**：同一受试者的全部记录只能属于一个 partition；锁定测试不得在候选比较中反复使用。
-3. **折内拟合**：scaler、特征筛选、权重只能在训练折内 fit，冻结折内状态后应用于验证/测试；禁止全量预拟合。
-4. **数据边界**：真实数据、检查点、工件不入 Git；synthetic fixture 必须显式标记；原始文件只读，导入前后哈希一致。
-5. **标签分层**：RULE / PUBLISHED / LLM_SILVER 全链路溯源、不可互换；LLM_SILVER 永不作参考真值；规则缺项拒判（ABSTAIN），不得补零或猜标签。
-6. **证据状态显式化**：未知就用 `NOT_AVAILABLE` / `UNVERIFIED` / `SMOKE_ONLY` / `NOT_VALIDATED` / `AGENT_NOT_VERIFIED` 表达，不得猜测或补全。
-7. **三层放行独立判定**：`GO_ENGINEERING`、`GO_REAL_DATA_TRAINING`、`GO_RESEARCH_CLAIMS` 分别判定，不得由 smoke 或 dev/CV 分数推导后两层。
-8. **AutoResearch 边界**：Agent 可改任意建模/训练/特征源码（`src/**/*.py`，冻结清单见 `research.guard.FROZEN_PATHS`）；数据、标签、split、评估器、指标、holdout 冻结。**Trusted Evaluator 必须在 Agent 不可写的隔离环境运行；不可信代码必须 OS/容器级隔离——仅审查 diff 不算隔离。**
-9. **Provenance**：数据哈希、规则与标准版本、标签 tier、模型配置、种子、依赖、代码 commit 全部入档，可独立重算。
-10. **Holdout 预算已用尽**：体质线 2/2、证候线 1/1 均已解锁。任何选择/比较轮次不得触碰 holdout；再评估必须换新数据里程碑或经用户明确授权。
-
-## 三、AutoResearch 怎么用
-
-Skill 驱动，Karpathy 形状：一份只读的冻结输入 + 一个可改的训练文件 + 固定墙钟预算 + 每轮 git KEEP/REVERT。
-
-```bash
-export PYTHONPATH=src
-python -m research.cli prepare --task syndrome --out runs/R --repo . \
-  --manifest <绝对路径>/selection_manifest.json --dataset <绝对路径>/selection_records.json \
-  --folds 2 --repeats 1 --budget 60 --max-rounds 6 --seed 20261104
-python -m research.cli state      --run runs/R    # 读上一轮结果：提案的唯一依据
-# 写一个 p.json（见 skills/autoresearch/program.md），一次只提一个假设：
-python -m research.cli step       --run runs/R --proposal-file p.json --proposer "<id>"
-python -m research.cli dashboard  --run runs/R --port 8766    # 只读监控
-```
-
-- `--manifest/--dataset` 必须**绝对路径**：runner 在 git worktree 内执行，相对路径会解析到别处。
-- 证候任务的 selection 输入由 SHA-256 钉住（`research.cli.SELECTION_DATASET_SHA256`），错配直接拒绝——旧中间产物与 #56/#57 冻结口径不可比。
-- 每轮必须**先读当前文件再写 patch**：KEEP 后文件已变，复用旧 hunk 会被 `git apply` 拒绝并记 `INVALID_PROTOCOL`。
-- 分数只来自可信 evaluator，Agent 不得自报。
-
-## 四、项目知识
-
-- **证候数据**：TCM-SD，148 类，以短主诉为主。同一主诉对应不同证型是**数据属性，不是标注错误**（如「突发晕厥1次」→ class 1/43）；训练集内重复文本按「真实复诊」保留；折内对 dev 做单向精确文本去重。
-- **#57 冻结结论**：在 protocol-v2 冻结输入上，字符 1–3 gram TF-IDF+LR（CV macro-F1 **0.3199**）胜过全部神经方案；AutoResearch 9 轮里最大的真实改进也是「换线性头」。**要再评估神经方案必须换信息量（新特征/新标签/新数据），不是继续在同一搜索空间调参。**
-- **外部验证缺口**：TCM-Lung 无名称解码（映射覆盖 0/148）、TCMEval-SDT 可对齐覆盖率仅 18.9% 且多标签语义不匹配 → `GO_RESEARCH_CLAIMS` NOT_GRANTED。
-- **验收门状态**：#35 CI / #46 端到端 / #36 签收仍 OPEN；OS/容器隔离的端到端验收为 `AGENT_ISOLATION_UNVERIFIED`。
-- **数据许可**：TCM-SD 为 CC BY-NC-SA 4.0，仅限非商业；不得用于未授权商业部署。
-
-## 五、提交与协作
-
-- Conventional Commits，一个 purpose 一个提交；不使用 `update` / `fix` / `！` 类标题。
-- 不提交：真实数据、`runs/`、`artifacts/`、检查点、日志。
-- 改动保持最小端到端可验证：schema 改动带契约测试，adapter 带形状 / mask / 负例测试，bug 修复带回归测试。
-- synthetic 结果只表述工程有效，不表述科研 / 临床有效。
-
-## 词汇表
-
-| 术语 | 含义 |
-| --- | --- |
-| Pre / During / Post | 按摩前 / 中 / 后测量阶段 |
-| RULE / PUBLISHED / LLM_SILVER | 规则计分 / 作者已发布 / LLM 弱标签 |
-| selection 输入 | 冻结的 train+dev 选择池（holdout 为空），AutoResearch 唯一可用的数据 |
-| SMOKE_ONLY | 仅合成数据工程验证，无科学结论 |
-| GO_* | 工程准入 / 真实数据训练准入 / 科研声明，三层独立判定 |
+- 项目面向按摩椅场景的中医健康参考，不是多模态 LLM、硬件控制或诊断系统。证候、体质、生理三条线的输入和标签不可互换。
+- 当前证候线使用 TCM-SD 中文症状主诉，54,152 病例、148 类证候，标签为 PUBLISHED。数据许可为 CC BY-NC-SA 4.0，未经授权不得商业部署。同一主诉对应不同证型是数据属性；训练集内重复文本保留，折内对 dev 做单向精确文本去重。
+- #57 已完成的 protocol-v2 dev/CV 对比中，字符 1–3 gram TF-IDF+LR 的 macro-F1 为 0.3199，优于已完成的神经方案；它是交付候选。新神经研究需要更多信息（新特征、标签或数据），不要把工程探索表述为临床验证。
+- 体质线历史交付 v11，Mendeley 数据为 274 人、8 维公开评分。生理线缺少同人配对真实数据，状态 BLOCKED，不得伪造标签。
+- 外部验证覆盖不足，`GO_RESEARCH_CLAIMS` 未放行。#35 CI、#46 端到端与 #36 签收状态须以 Issue 为准。
