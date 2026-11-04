@@ -148,9 +148,12 @@ and diagnostic reflection slices such as zero_f1_count and worst_classes); a pro
 that repeats a previous attempt without addressing observed failure modes is invalid.
 
 Hard rules (violating any of them makes the proposal invalid):
-- The patch may only modify the editable file named in `editable_file`.
-- Do not touch data, labels, splits, the evaluator, the metric, the training
-  budget, or the holdout. They are frozen and outside your scope.
+- You may edit ANY src/**/*.py model/train/feature source file, and may add new
+  Python modules. `editable_file` is the anchor candidate, not a limit. Pick the
+  file that actually owns the failure mode you are addressing.
+- Do NOT touch the frozen paths in `frozen_paths`: data, labels, splits, the
+  evaluator, the metric, the training budget, the holdout ledger, the trusted
+  engine, governance docs, tests. A patch reaching them is refused.
 - The training budget is fixed; you cannot buy score by training longer.
 - The score comes from the trusted evaluator; you cannot report a score.
 

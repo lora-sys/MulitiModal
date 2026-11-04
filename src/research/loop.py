@@ -39,6 +39,7 @@ from research.agent import (
     ProposalRejected,
 )
 from research.guard import (
+    FROZEN_PATHS,
     PatchRejected,
     apply_patch,
     validate_source_patch,
@@ -75,7 +76,6 @@ MIN_GAIN_PER_ADDED_NODE = 0.001
 #: complexity numbers are only comparable within one metric name.
 COMPLEXITY_METRIC = "ast_statement_expr_nodes+string_payloads"
 
-DEFAULT_EDITABLE = "src/research/candidate.py"
 MAX_PATCH_BYTES = 2 * 1024 * 1024
 SOURCE_PREFLIGHT_MEMORY_BYTES = 512 * 1024 * 1024
 SOURCE_PREFLIGHT_CPU_SECONDS = 5
@@ -856,9 +856,12 @@ class SourceResearchLoop:
             "frozen_goal": self.frozen_goal,
             "editable_file": self.editable,
             "editable_scope": (
-                "only the editable file may change; data, labels, splits, the "
-                "evaluator, the metric, the budget and the holdout are frozen"
+                "editable surface v2: any src/**/*.py file may change except "
+                "the frozen paths (data, labels, splits, evaluator, metric, "
+                "budget, holdout ledger, governance docs and the trusted "
+                "engine); `editable_file` is the anchor candidate, not a limit"
             ),
+            "frozen_paths": list(FROZEN_PATHS),
             "selection_policy": dict(self.selection_policy),
             "last_round": last,
             "doctor": doctor_report,
