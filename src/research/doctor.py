@@ -408,6 +408,23 @@ def _check_label_conflict(adapter, records, manifest) -> list[Finding]:
     conflicts = {text: sorted(labels) for text, labels in by_text.items() if len(labels) > 1}
     if conflicts:
         sample = [[text[:60], labels] for text, labels in list(conflicts.items())[:3]]
+        if getattr(adapter, "text_label_conflict_is_expected", False):
+            # A task whose labels are NOT a function of the input text (short
+            # TCM chief complaints, 148 syndromes) legitimately has one text
+            # published under several labels. Do not call that a labelling
+            # error: keep it visible with evidence, but let the frozen fold
+            # protocol (dev-against-train exact dedup) handle leakage. Dropping
+            # these rows would change dataset_sha256 and break comparability
+            # with the frozen CV baseline.
+            return [Finding(
+                "label_conflict", WARNING,
+                f"{len(conflicts)} text(s) carry more than one label "
+                "(expected for this task, not a labelling error)",
+                {"n_conflicts": len(conflicts), "sample": sample,
+                 "task_property": True},
+                "do not drop rows; the frozen fold builder dedups dev against "
+                "train. Compare only within the same frozen selection inputs.",
+            )]
         return [Finding(
             "label_conflict", BLOCKED,
             f"{len(conflicts)} text(s) carry more than one label",

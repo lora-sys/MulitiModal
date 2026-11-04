@@ -44,6 +44,12 @@ class TaskAdapter:
     has_text: bool = False
     #: does a record carry exactly one label (do single-label checks apply)?
     single_label: bool = False
+    #: When True, identical input text legitimately carries different labels
+    #: across records, so one-text-two-labels is a task property rather than a
+    #: labelling error. Doctor reports it as a WARNING with evidence instead of
+    #: blocking the run. TCM-SD short chief complaints (148 classes) are exactly
+    #: this case: the same presenting text can be different syndromes.
+    text_label_conflict_is_expected: bool = False
 
     def record_user_key(self, record):
         """Identity of the real subject behind a record, for the #1 leak check."""

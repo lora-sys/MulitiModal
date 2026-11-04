@@ -1243,6 +1243,12 @@ class SyndromeAdapter(TaskAdapter):
     # -- doctor hooks ---------------------------------------------------------
     has_text = True
     single_label = True
+    # TCM-SD: a short chief complaint is not a uniquely identifying diagnosis;
+    # the same text is published under different syndromes (e.g. "突发晕厥1次"
+    # appears as class 1 and 43). This is a property of the data, not a
+    # mislabel. The frozen CV protocol already dedups dev against train at
+    # build_fold time, so conflicts inside train do not leak into scoring.
+    text_label_conflict_is_expected = True
 
     def record_user_key(self, record):
         return getattr(record, "user_id", None)
