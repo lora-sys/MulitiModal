@@ -528,7 +528,17 @@ def test_service_level_empty_symptom_abstains(label_space):
 
 def test_demo_symptom_mode_runs_with_registered_artifact(label_space, corpus, tmp_path, capsys):
     """demo 在工件存在时注册后端并输出真实候选（修复前永远 NOT_AVAILABLE）。"""
-    from scripts import syndrome_service_demo
+    import sys
+    from pathlib import Path
+
+    # `scripts/` is not a package on pythonpath (only src/ is), so import the
+    # demo module by file path.
+    demo = Path(__file__).resolve().parents[2] / "scripts" / "syndrome_service_demo.py"
+    spec = __import__("importlib.util").util.spec_from_file_location(
+        "syndrome_service_demo", demo)
+    module = __import__("importlib.util").util.module_from_spec(spec)
+    sys.modules["syndrome_service_demo"] = module
+    spec.loader.exec_module(module)
     from syndrome.baselines import TfidfNgramBaseline, TfidfNgramConfig
 
     texts, labels = corpus
@@ -538,7 +548,7 @@ def test_demo_symptom_mode_runs_with_registered_artifact(label_space, corpus, tm
         predictor, label_space.labels, str(tmp_path),
         model_version="v", threshold=0.0, data_license="SYNTHETIC",
     )
-    syndrome_service_demo.main(["--artifact-dir", str(tmp_path)])
+    module.main(["--artifact-dir", str(tmp_path)])
     out = capsys.readouterr().out
     symptom_part = out.split("模式 2")[0]
     assert "已注册默认后端" in symptom_part
