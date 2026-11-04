@@ -5,11 +5,39 @@ import json
 import os
 import re
 import selectors
+import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
+
+
+def _arm_cleanup(name: str, run_id: str, seconds: int) -> None:
+    """Arm a user-systemd timer before starting the container, independent of this process."""
+    cleanup = '''
+import subprocess, sys
+name, run_id = sys.argv[1:]
+result = subprocess.run(["docker", "inspect", "--format",
+    '{{ index .Config.Labels "autoresearch.run_id" }}', name],
+    capture_output=True, text=True, timeout=15)
+if result.returncode:
+    if not any(s in result.stderr.lower() for s in ("no such object", "no such container")):
+        raise RuntimeError("cannot inspect candidate container: " + result.stderr)
+elif result.stdout.strip() == run_id:
+    subprocess.run(["docker", "rm", "-f", name], timeout=15, check=True)
+'''
+    docker_env = ("PATH", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_TLS_VERIFY",
+                  "DOCKER_CERT_PATH", "DOCKER_API_VERSION", "SSH_AUTH_SOCK")
+    settings = [f"--setenv={key}={os.environ.get(key, '')}" for key in docker_env]
+    subprocess.run(
+        ["systemd-run", "--user", "--quiet", "--collect", *settings,
+         "--timer-property=AccuracySec=1s",
+         f"--on-active={seconds}s",
+         f"--unit=autoresearch-cleanup-{run_id}", sys.executable, "-c", cleanup, name, run_id],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15, check=True,
+    )
 
 
 def _remove_owned_container(name: str, run_id: str) -> None:
@@ -66,7 +94,7 @@ def run_candidate(candidate: bytes, train: object, inputs: object, *, image: str
                 raise ValueError("candidate input exceeds the size limit")
             (root / input_name).write_bytes(payload)
         command = [
-            "docker", "run", "--rm", "--name", container_name,
+            "docker", "create", "--rm", "--name", container_name,
             "--label", f"autoresearch.run_id={run_id}", "--network", "none", "--read-only",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--pids-limit", "64", "--memory", "2g", "--cpus", "2",
@@ -79,7 +107,16 @@ def run_candidate(candidate: bytes, train: object, inputs: object, *, image: str
         ]
         process = None
         try:
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+            if not shutil.which("docker"):
+                raise RuntimeError("Docker is unavailable")
+            created = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+                                     text=True, timeout=30, check=True)
+            container_id = created.stdout.strip()
+            if not re.fullmatch(r"[0-9a-f]{64}", container_id):
+                raise RuntimeError("Docker did not return a container ID")
+            _arm_cleanup(container_id, run_id, budget_seconds + 45)
+            process = subprocess.Popen(["docker", "start", "--attach", container_id],
+                                       stdin=subprocess.DEVNULL,
                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             assert process.stdout is not None
             data = bytearray()

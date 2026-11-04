@@ -22,7 +22,7 @@ Skill 描述通用方法；任务各自提供数据与评价代码。候选执�
 
 [线性回归示例](examples/linear_research/README.md) 是与本项目任务无关的最小迁移演示：固定合成数据和平均绝对误差，先运行均值基线，再尝试线性拟合。它使用一个可修改训练文件、容器运行器和同一监控页。示例为 `SMOKE_ONLY`，只验证流程。
 
-启用项目 Python 环境并准备本地 `multimodal-research-worker:2.7.0-cpu` Docker 镜像后，按示例说明创建专用 Git worktree 与 run 目录。`./solve.sh dashboard --run <run>` 在本机启动只读监控；本地结果记录未独立认证。
+在 Linux 上启用用户 systemd、项目 Python 环境并准备本地 `multimodal-research-worker:2.7.0-cpu` Docker 镜像后，按示例说明创建专用 Git worktree 与 run 目录。`./solve.sh dashboard --run <run>` 在本机启动只读监控；本地结果记录未独立认证。
 
 ## 本项目的研究适配
 

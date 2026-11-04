@@ -13,7 +13,7 @@
 | 预算 | 每轮 20 秒，种子 1；实验轮数由研究者指定 |
 | 证据 | `SMOKE_ONLY`；本地结果未独立认证 |
 
-激活 Python 环境并准备本地 Docker 镜像后，从可信检出运行；将 `<worktree>` 和 `<run>` 换成新建的专用 worktree 与忽略目录的绝对路径：
+在 Linux 上启用用户 systemd、激活 Python 环境并准备本地 Docker 镜像后，从可信检出运行；将 `<worktree>` 和 `<run>` 换成新建的专用 worktree 与忽略目录的绝对路径：
 
 ```bash
 PYTHONPATH=src python examples/linear_research/prepare.py \
