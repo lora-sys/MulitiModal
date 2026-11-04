@@ -4,7 +4,8 @@ import pytest
 import torch
 from dataclasses import dataclass
 
-from core.batch import InputSpec, ModalitySpec, ModelOutput
+from core.batch import ModelOutput
+from core.specs import InputSpecSet, ModalitySpec
 from research.candidate import (
     ConstitutionPipeline,
     FusionMLP,
@@ -50,9 +51,9 @@ def test_extract_diagnostics_handles_empty():
 
 
 def test_syndrome_pipeline_traces_cleanly():
-    spec = InputSpec(
-        modalities=[ModalitySpec(name="hashed_text", dim=64, format="dense_float")],
+    spec = InputSpecSet(
         version="v1",
+        modalities=(ModalitySpec("hashed_text", "tabular", 64),),
     )
     fold = FoldData(
         train=[],
@@ -73,9 +74,9 @@ def test_syndrome_pipeline_traces_cleanly():
 
 
 def test_constitution_pipeline_traces_cleanly():
-    spec = InputSpec(
-        modalities=[ModalitySpec(name="features", dim=32, format="dense_float")],
+    spec = InputSpecSet(
         version="v1",
+        modalities=(ModalitySpec("features", "tabular", 32),),
     )
     fold = FoldData(
         train=[],
