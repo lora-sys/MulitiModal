@@ -33,18 +33,49 @@ GOOD_PATCH = """diff --git a/src/research/candidate.py b/src/research/candidate.
 """
 
 
-def test_only_the_editable_file_may_change():
-    validate_source_patch(GOOD_PATCH, EDITABLE)  # does not raise
-    for foreign in (
+def test_frozen_paths_may_not_change():
+    """Editable surface v2: a denylist, not a one-file allowlist."""
+    validate_source_patch(GOOD_PATCH, EDITABLE)  # anchor candidate is writable
+    for frozen in (
         "src/research/frozen.py",
         "src/research/loop.py",
+        "src/research/evaluator.py",
         "src/runtime/tcm_eval.py",
         "tests/test_x.py",
+        "AGENTS.md",
+        "docs/reports/x.md",
     ):
-        patch = GOOD_PATCH.replace(f"a/{EDITABLE}", f"a/{foreign}").replace(
-            f"b/{EDITABLE}", f"b/{foreign}"
+        patch = GOOD_PATCH.replace(f"a/{EDITABLE}", f"a/{frozen}").replace(
+            f"b/{EDITABLE}", f"b/{frozen}"
         )
-        with pytest.raises(PatchRejected, match="outside the editable file"):
+        with pytest.raises(PatchRejected, match="frozen path|outside the writable"):
+            validate_source_patch(patch, EDITABLE)
+
+
+def test_any_writable_source_file_may_change_and_new_modules_may_be_added():
+    """The Agent is no longer limited to one file or to hyperparameter edits."""
+    other = """--- a/src/core/models.py
++++ b/src/core/models.py
+@@ -1 +1,2 @@
+ WIDTH = 32
++WIDTH = 64
+"""
+    validate_source_patch(other, EDITABLE)  # a second source file is fine
+    new_module = """--- /dev/null
++++ b/src/research/new_encoder.py
+@@ -0,0 +1 @@
++class Encoder: pass
+"""
+    validate_source_patch(new_module, EDITABLE)  # a NEW module is fine
+    multi = GOOD_PATCH + other
+    assert touched_paths(multi) == {EDITABLE, "src/core/models.py"}
+    validate_source_patch(multi, EDITABLE)
+    for outside in ("README.md", "scripts/x.py", "src/notes.txt",
+                    "../outside.py", "/etc/passwd"):
+        patch = GOOD_PATCH.replace(f"a/{EDITABLE}", f"a/{outside}").replace(
+            f"b/{EDITABLE}", f"b/{outside}"
+        )
+        with pytest.raises(PatchRejected):
             validate_source_patch(patch, EDITABLE)
 
 

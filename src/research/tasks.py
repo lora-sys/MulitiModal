@@ -74,15 +74,26 @@ class TaskAdapter:
         raise NotImplementedError
 
     def resolve_editable(self, editable: str | None = None) -> str:
-        """Return this task's candidate path and reject cross-task routing."""
+        """Return the run's anchor candidate file; reject frozen paths.
+
+        Editable surface v2: ``editable`` is the ANCHOR for complexity pricing
+        and provenance, not a one-file allowlist. The loop's patch guard lets
+        the Agent edit any non-frozen ``src/**/*.py`` file.
+        """
+        from research.guard import is_frozen
+
         if editable is None:
             return self.default_editable
-        if editable != self.default_editable:
+        if is_frozen(editable):
             raise ValueError(
-                f"candidate {editable!r} does not match task {self.name!r}; "
-                f"expected {self.default_editable!r}"
+                f"candidate {editable!r} is a frozen path; only model/train/"
+                "feature sources are writable"
             )
-        return editable
+        if not (str(editable).startswith("src/") and str(editable).endswith(".py")):
+            raise ValueError(
+                f"candidate {editable!r} must be a src/**/*.py path"
+            )
+        return str(editable)
 
     # -- records -------------------------------------------------------------
 
@@ -421,6 +432,20 @@ def validate_manifest_contract(
                     raise ValueError(
                         f"PUBLISHED syndrome user partitions disagree with split {part!r}"
                     )
+    elif task == "toy":
+        # SMOKE_ONLY example task (#61). It is generated, so there is no DOI,
+        # no PUBLISHED tier and no user-partition metadata to check; validate
+        # what the engine actually relies on: task routing, class count and
+        # the declared synthetic label tier.
+        if manifest.get("task") != "toy" or (
+            manifest.get("task_type") != "toy_classification"
+        ):
+            raise ValueError("toy task requires a toy classification manifest")
+        n_classes = manifest.get("n_classes")
+        if isinstance(n_classes, bool) or not isinstance(n_classes, int) or n_classes < 2:
+            raise ValueError("toy manifest n_classes must be an integer >= 2")
+        if manifest.get("label_tier") != "SMOKE_ONLY":
+            raise ValueError("toy manifest must be explicitly SMOKE_ONLY")
     else:
         raise ValueError(f"unknown research task {task!r}")
 
@@ -503,6 +528,22 @@ def write_synthetic_preflight_inputs(
             modality_kind=kind,
             notes="synthetic candidate output-contract preflight",
         ).data
+    elif task == "toy":
+        # SMOKE_ONLY: build the same synthetic records the toy task uses, then
+        # a frozen manifest through the toy adapter's own builder.
+        import random
+
+        from research.task_toy import ToyRecord, build_manifest
+
+        rng = random.Random(0)
+        for index in range(1, 31):
+            records.append(ToyRecord(
+                subject_index=index, user_id=f"preflight-user-{index:04d}",
+                text=f"synthetic case {index}",
+                numeric=[rng.random() for _ in range(4)],
+                label=index % 3, label_mask=True,
+            ))
+        frozen = build_manifest(records, seed=0)
     else:
         raise ValueError(f"unknown research task {task!r}")
     fit_manifest = adapter.pool_manifest(

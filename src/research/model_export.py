@@ -44,7 +44,7 @@ from core.batch import ModelOutput
 ARCHITECTURE_FILE = "architecture.json"
 EVAL_WEIGHTS_FILE = "eval-weights.pt"
 ARCH_VERSION = "research-arch-v1"
-TASK_CLASS_COUNTS = {"constitution": 9, "syndrome": 148}
+TASK_CLASS_COUNTS = {"constitution": 9, "syndrome": 148, "toy": 3}
 ELEMENTS_PER_CLASS_LIMIT = 65_536
 TASK_ELEMENT_LIMITS = {
     task: classes * ELEMENTS_PER_CLASS_LIMIT

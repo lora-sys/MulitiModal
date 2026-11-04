@@ -9,9 +9,10 @@ per round, after reading the result of the previous one.
 
 ## You get
 
-A JSON research state: the frozen goal, the one editable file, the champion and
-its metric, the previous round's hypothesis/patch/metric and its Doctor
-findings, the remaining budget, and the list of things that are frozen.
+A JSON research state: the frozen goal, the anchor editable file, `frozen_paths`
+(the denylist), the champion and its metric, the previous round's
+hypothesis/patch/metric, diagnostic reflection slices and Doctor findings, the
+remaining budget, and the list of things that are frozen.
 
 ## You return exactly one JSON object
 
@@ -20,7 +21,7 @@ findings, the remaining budget, and the list of things that are frozen.
   "hypothesis": "a falsifiable claim, e.g. 'X raises metric M because Y'",
   "controlled_change": "what changes, and what stays fixed",
   "expected_observation": "what the trusted metric should show if the claim holds",
-  "patch": "a unified diff against the editable file",
+  "patch": "a unified diff against one or more writable src/**/*.py files",
   "intent": "one line",
   "next_action_if_keep": "what to try next if this is kept",
   "next_action_if_revert": "what to diagnose or try instead if it is rolled back"
@@ -37,9 +38,11 @@ experiment is worth the budget.
    in `controlled_change` and justify it.
 2. **Change one thing.** Name what you hold fixed. Two simultaneous changes make
    the result uninterpretable, and the loop will charge you for the complexity.
-3. **Only the editable file.** Data, labels, splits, the evaluator, the metric,
-   the budget and the holdout are frozen. A patch that touches them is refused
-   before training.
+3. **Any model/train/feature source, but nothing frozen.** You may edit any
+   `src/**/*.py` file and add new Python modules; `editable_file` is the anchor
+   candidate, not a limit. Data, labels, splits, the evaluator, the metric, the
+   budget, the holdout ledger and the trusted engine are frozen (`frozen_paths`).
+   A patch touching them is refused before training.
 4. **The budget is the budget.** You cannot buy a better score with more training
    time; a run that overruns is recorded as `INVALID_PROTOCOL`.
 5. **You never report a score.** The trusted evaluator runs in a separate process

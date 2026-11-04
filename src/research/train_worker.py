@@ -437,7 +437,8 @@ def _validate_model_output(model, fold, task: str) -> dict:
         output = model(batch)
     if not isinstance(output, ModelOutput):
         raise RuntimeError("candidate forward must return core.batch.ModelOutput")
-    key = "syndrome_probs" if task == "syndrome" else "category_probs"
+    key = {"syndrome": "syndrome_probs",
+           "toy": "toy_probs"}.get(task, "category_probs")
     predictions = output.predictions
     if not isinstance(predictions, dict) or key not in predictions:
         raise RuntimeError(f"candidate output is missing predictions[{key!r}]")
@@ -452,7 +453,7 @@ def _validate_model_output(model, fold, task: str) -> dict:
         )
     if not torch.isfinite(values).all():
         raise RuntimeError(f"candidate predictions[{key!r}] contain non-finite values")
-    if task == "syndrome":
+    if task in ("syndrome", "toy"):
         if torch.any(values < 0.0) or torch.any(values > 1.0):
             raise RuntimeError(
                 f"candidate predictions[{key!r}] probabilities must be within [0, 1]"

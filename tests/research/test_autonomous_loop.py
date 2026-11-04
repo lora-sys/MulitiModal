@@ -323,7 +323,7 @@ def test_rejected_proposal_is_invalid_protocol_and_stops(tmp_path):
         # never dressed up as evidence that the model is worse
         assert entry["outcome"] == "INVALID_PROTOCOL"
         assert entry["decision"] == "REVERT", "the strict decision stays KEEP/REVERT"
-        assert "outside the editable file" in entry["reason"]
+        assert "frozen path" in entry["reason"]
     assert loop.runner_calls == [], "a refused patch must never reach training"
     # a proposer that has nothing left is a deliberate stop, not a crash
     assert summary["stop_reason"] in ("budget_exhausted", "proposer_stopped")

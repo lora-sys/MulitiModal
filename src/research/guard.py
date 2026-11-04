@@ -1,23 +1,28 @@
-"""Patch validation for the source-level loop — the whitelist, enforced.
+"""Patch validation for the source-level loop — the denylist, enforced.
 
-The agent may change one file. `validate_source_patch` refuses:
+Editable surface v2 (2026-11-04 authorisation, see
+``docs/reports/2026-11-04-editable-surface-v2.md``): the research Agent may
+edit any ``src/**/*.py`` file EXCEPT the frozen paths below. The single-file
+whitelist was an implementation choice, not a research-integrity requirement;
+it is what reduced AutoResearch to "tune the learning rate".
 
-1. any diff that touches a path other than the editable file — a candidate that
-   can edit the loop, the runner or the frozen boundary can simply declare
-   itself the winner;
-2. any diff whose text mentions a `FORBIDDEN_SYMBOLS` name — reaching the
-   evaluator, the split, the labels or the scaler is how a candidate would
-   report a number of its own choosing;
-3. any diff that does not apply to the current worktree, so a rejected patch
-   never leaves the tree in a half-applied state;
-4. a patch that empties the editable file — "delete the model" would otherwise
-   score as a spectacular simplification.
+``validate_source_patch`` refuses:
 
-Same evidence grade as the rest of the harness: it stops the careless and the
-accidental. The structural protection is that the score is computed by
-`research.evaluator` in its own process, on a fold rebuilt from the frozen
-manifest, after the interpreter that ran the candidate's code is done with
-the model.
+1. any diff that touches a frozen path — data, labels, splits, the evaluator,
+   the holdout ledger, the governance docs and the trusted engine. Those stay
+   outside the Agent's writable surface (AGENTS.md rule 9).
+2. any diff that leaves ``src/`` or is not Python source.
+3. any diff whose ADDED lines mention a ``FORBIDDEN_SYMBOLS`` name — reaching
+   the evaluator, the split, the labels or the scaler is how a candidate would
+   report a number of its own choosing.
+4. a patch that only removes code — "delete the model" is not a simplification.
+5. any diff that does not apply to the current worktree, so a rejected patch
+   never leaves the tree in a half-applied state.
+
+The structural protection is unchanged and independent of this surface: the
+score is computed by ``research.evaluator`` loaded from the TRUSTED source
+root, in its own process, on a fold rebuilt from the frozen manifest, after the
+interpreter that ran the candidate's code is done with the model.
 """
 
 from __future__ import annotations
@@ -31,6 +36,51 @@ from research.frozen import FORBIDDEN_SYMBOLS
 
 #: diff headers: "+++ b/path" or "--- a/path"; /dev/null for added files
 _DIFF_PATH = re.compile(r"^(?:\+\+\+|---)\s+(?:[ab]/)?(\S+)", re.MULTILINE)
+
+#: Frozen paths: the Agent may never write these. Defined as exact paths or
+#: directory prefixes (trailing slash). Anything else under src/**.py is a
+#: legitimate research target. See the 2026-11-04 authorisation document.
+FROZEN_PATHS: tuple[str, ...] = (
+    # governance / evidence / project configuration
+    "AGENTS.md", "RTK.md", "README.md", "pyproject.toml",
+    "docs/", "skills/", "tests/", "scripts/", ".github/",
+    "requirements", "uv.lock", "poetry.lock", "package-lock.json",
+    # data / artifacts
+    "data/", "runs/", "artifacts/", "models/", "src/research/vendor/",
+    # labels and standards
+    "src/data/", "src/labels/", "src/evidence/",
+    "src/syndrome/labels.py", "src/syndrome/metrics.py",
+    # split and in-fold fitting
+    "src/research/frozen.py", "src/research/task_sd.py",
+    "src/research/task_toy.py",
+    # trusted evaluation, adjudication and isolation chain
+    "src/research/evaluator.py", "src/research/model_export.py",
+    "src/research/guard.py", "src/research/runner.py",
+    "src/research/spawn.py", "src/research/train_worker.py",
+    "src/research/worker_supervisor.py",
+    "src/research/artifact_validation.py", "src/research/doctor.py",
+    "src/research/finalize.py", "src/research/loop.py",
+    "src/research/tasks.py", "src/research/session.py",
+    "src/research/events.py", "src/research/report.py",
+    "src/research/cli.py", "src/research/agent.py",
+    "src/research/dashboard.py", "src/research/source_preflight.py",
+    "src/research/tailnet.py",
+    "src/runtime/tcm_eval.py", "src/runtime/real_data.py",
+    "src/runtime/baselines.py", "src/runtime/manifest.py",
+)
+
+
+def is_frozen(path: str) -> bool:
+    """True when a patch path is outside the Agent's writable surface."""
+    clean = str(path).lstrip("./")
+    if clean.startswith("/") or ".." in clean.split("/"):
+        return True
+    for frozen in FROZEN_PATHS:
+        if clean == frozen or (frozen.endswith("/") and clean.startswith(frozen)):
+            return True
+        if not frozen.endswith("/") and clean.startswith(frozen + "/"):
+            return True
+    return False
 
 #: an import of the frozen module may only name the public API
 _FROZEN_IMPORT = re.compile(
@@ -50,17 +100,30 @@ def touched_paths(patch: str) -> set[str]:
 
 
 def validate_source_patch(patch: str, editable: str | Path) -> None:
-    """Raise PatchRejected unless `patch` is a safe edit of `editable` alone."""
-    editable = str(editable)
+    """Raise PatchRejected unless every touched path is a writable source file.
+
+    ``editable`` is retained as the run's anchor candidate file (used for
+    complexity pricing and provenance), not as a one-file allowlist.
+    """
     if not patch.strip():
         raise PatchRejected("empty patch: a round must propose something")
     paths = touched_paths(patch)
     if not paths:
         raise PatchRejected("patch touches no file: nothing to apply")
-    foreign = sorted(p for p in paths if p != editable)
-    if foreign:
+    frozen = sorted(p for p in paths if is_frozen(p))
+    if frozen:
         raise PatchRejected(
-            f"patch touches {foreign}, outside the editable file {editable!r}"
+            f"patch touches frozen path(s) {frozen}; data, labels, splits, "
+            "the evaluator, the holdout ledger and the trusted engine are "
+            "outside the editable surface"
+        )
+    outside = sorted(
+        p for p in paths
+        if not (p.startswith("src/") and p.endswith(".py"))
+    )
+    if outside:
+        raise PatchRejected(
+            f"patch touches {outside}, outside the writable src/**/*.py surface"
         )
     # only ADDED lines are judged: a patch is what it introduces, not what it
     # quotes as context or deletes. Scanning the whole diff rejected a
