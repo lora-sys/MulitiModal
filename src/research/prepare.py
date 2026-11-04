@@ -6,7 +6,6 @@ disabled until the evaluator is independently isolated from the proposing agent.
 from __future__ import annotations
 
 import argparse
-import csv
 import fcntl
 import hashlib
 import json
@@ -14,16 +13,21 @@ import math
 import os
 import random
 import re
-import selectors
-import stat
 import statistics
-import subprocess
 import sys
-import tempfile
 import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+
+from research.history import (
+    append_history,
+    committed_source,
+    open_regular,
+    read_regular,
+    write_new_atomic,
+)
+from research.sandbox import resolve_image, run_candidate
 
 SELECTION_FOLD_VERSION = "tcm-sd-stratified-user-fold-v2"
 SELECTION_DATASET_SHA256 = "e63682908e6bed7488ada3cd68cf50b4a1817a4bfbfa28c0a00b74fbc0af4d55"
@@ -45,18 +49,17 @@ def score_predictions(labels: list[int], predictions: list[int], n_classes: int)
     return macro_f1(labels, predictions, n_classes)
 
 
-def _open_regular(path: Path):
-    """Open a private, regular output file without following filesystem links."""
-    flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
-    descriptor = os.open(path, flags, 0o600)
-    try:
-        info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-            raise ValueError("output must be a regular file without extra hard links")
-        return os.fdopen(descriptor, "r+", encoding="utf-8", newline="")
-    except BaseException:
-        os.close(descriptor)
-        raise
+def fixed_code_hashes() -> dict[str, str]:
+    """Identify the evaluator, metric, sandbox and comparison implementation."""
+    import research.history as history_module
+    import research.sandbox as sandbox_module
+    import syndrome.metrics as metric_module
+
+    paths = {"evaluator": __file__, "sandbox": sandbox_module.__file__,
+             "history": history_module.__file__, "metric": metric_module.__file__}
+    return {name: hashlib.sha256(read_regular(Path(path), 2 * 1024 * 1024)).hexdigest()
+            for name, path in paths.items()}
+
 
 def validate_manifest_contract(
     task: str, manifest: dict, *, selection_pool: bool = False,
@@ -559,87 +562,6 @@ def fold_inputs(manifest: dict, records: dict, fold: int, folds: int, repeat: in
     return train, dev
 
 
-def _regular_bytes(path: Path, limit: int) -> bytes:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
-    fd = os.open(path, flags)
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
-            raise ValueError("candidate output is not a bounded regular file")
-        with os.fdopen(fd, "rb", closefd=False) as stream:
-            content = stream.read(limit + 1)
-        if len(content) > limit:
-            raise ValueError("candidate output exceeds the limit")
-        return content
-    finally:
-        os.close(fd)
-
-
-def run_candidate(candidate: bytes, train: list, dev: list, *, image: str,
-                  budget_seconds: int, seed: int) -> list[int]:
-    """Run a candidate with no network, no validation labels and bounded output."""
-    if not candidate or len(candidate) > 2 * 1024 * 1024:
-        raise ValueError("candidate source must be between 1 byte and 2 MiB")
-    if budget_seconds < 1 or budget_seconds > 3600:
-        raise ValueError("budget must be between 1 and 3600 seconds")
-    name = "autoresearch-" + uuid.uuid4().hex
-    with tempfile.TemporaryDirectory(prefix="autoresearch-") as directory:
-        root = Path(directory)
-        source = root / "train.py"
-        source.write_bytes(candidate)
-        (root / "train.json").write_text(json.dumps(
-            [{"text": row.input_text, "label": row.label} for row in train],
-            ensure_ascii=False), encoding="utf-8")
-        (root / "predict.json").write_text(json.dumps(
-            [row.input_text for row in dev], ensure_ascii=False), encoding="utf-8")
-        command = [
-            "docker", "run", "--name", name, "--network", "none", "--read-only",
-            "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-            "--pids-limit", "64", "--memory", "2g", "--cpus", "2",
-            "--user", f"{os.getuid()}:{os.getgid()}", "--log-driver", "none",
-            "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
-            "--mount", f"type=bind,src={root},dst=/input,readonly",
-            image, "timeout", "--kill-after=2s", str(budget_seconds), "python", "/input/train.py",
-            "--train", "/input/train.json", "--predict", "/input/predict.json",
-            "--output", "/dev/stdout", "--seed", str(seed),
-        ]
-        process = None
-        try:
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL,
-                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            assert process.stdout is not None
-            data = bytearray()
-            deadline = time.monotonic() + budget_seconds + 30
-            with selectors.DefaultSelector() as selector:
-                selector.register(process.stdout, selectors.EVENT_READ)
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("candidate exceeded the container time limit")
-                    if not selector.select(remaining):
-                        raise TimeoutError("candidate exceeded the container time limit")
-                    chunk = os.read(process.stdout.fileno(), 65536)
-                    if not chunk:
-                        break
-                    data.extend(chunk)
-                    if len(data) > 8 * 1024 * 1024:
-                        raise ValueError("candidate output exceeds the limit")
-            code = process.wait(timeout=max(1, deadline - time.monotonic()))
-            if code:
-                raise RuntimeError(f"candidate failed with exit code {code}")
-            values = json.loads(data)
-            if not isinstance(values, list):
-                raise ValueError("candidate predictions must be a JSON list")
-            return values
-        finally:
-            if process is not None and process.poll() is None:
-                process.kill()
-                process.wait()
-            subprocess.run(["docker", "rm", "-f", name], stdin=subprocess.DEVNULL,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                           timeout=15, check=False)
-
-
 def evaluate(manifest: dict, records: dict, candidate: bytes, *, image: str,
              budget_seconds: int, seed: int, folds: int, repeats: int,
              progress=None) -> dict:
@@ -649,6 +571,7 @@ def evaluate(manifest: dict, records: dict, candidate: bytes, *, image: str,
     if (folds < 2 or folds > 10 or repeats < 1 or repeats > 10
             or folds * repeats > 32 or budget_seconds * folds * repeats > 14400):
         raise ValueError("fold count, repeats or total compute budget exceed the run limit")
+    code_hashes = fixed_code_hashes()
     scores = []
     for repeat in range(repeats):
         for fold in range(folds):
@@ -657,16 +580,23 @@ def evaluate(manifest: dict, records: dict, candidate: bytes, *, image: str,
                           "repeat": repeat + 1, "repeats": repeats,
                           "deadline": time.time() + budget_seconds + 45})
             train, dev = fold_inputs(manifest, records, fold, folds, repeat)
-            predictions = run_candidate(candidate, train, dev, image=image,
+            training = [{"text": row.input_text, "label": row.label} for row in train]
+            inputs = [row.input_text for row in dev]
+            predictions = run_candidate(candidate, training, inputs, image=image,
                                         budget_seconds=budget_seconds, seed=seed)
             score = score_predictions([row.label for row in dev], predictions,
                                       manifest["n_classes"])
             scores.append({"fold": fold, "repeat": repeat, "macro_f1": score,
                            "n_validation": len(dev)})
+    if fixed_code_hashes() != code_hashes:
+        raise RuntimeError("fixed evaluator code changed during the run")
     values = [row["macro_f1"] for row in scores]
     return {
         "metric": "syndrome/macro_f1",
+        "direction": "maximize",
         "metric_version": "tcm-sd-eval-v3",
+        "code_sha256": code_hashes,
+        "promotion": "strict",
         "macro_f1": statistics.mean(values),
         "fold_std": statistics.pstdev(values),
         "fold_count": folds,
@@ -693,30 +623,14 @@ def record_main(argv: list[str]) -> int:
     parser.add_argument("--description", required=True)
     parser.add_argument("--result", type=Path)
     args = parser.parse_args(argv)
-    if not re.fullmatch(r"[0-9a-f]{7,40}", args.commit):
-        parser.error("commit must be a hexadecimal Git commit ID")
-    if len(args.description) > 400 or not args.description.strip():
-        parser.error("description must contain 1 to 400 characters")
-    object_name = f"{args.commit}:src/research/train.py"
-    size = subprocess.run(
-        ["git", "cat-file", "-s", object_name], cwd=args.repo,
-        stdin=subprocess.DEVNULL, capture_output=True, text=True, check=True, timeout=15,
-    )
-    if not size.stdout.strip().isdigit() or int(size.stdout.strip()) > 2 * 1024 * 1024:
-        raise ValueError("commit does not contain a bounded training file")
-    candidate = subprocess.run(
-        ["git", "show", object_name], cwd=args.repo,
-        stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=15,
-    ).stdout
-    if not candidate or len(candidate) > 2 * 1024 * 1024:
-        raise ValueError("commit does not contain a bounded training file")
+    candidate = committed_source(args.repo, args.commit, "src/research/train.py")
     score = ""
     peak_vram = "NOT_AVAILABLE"
     protocol = ""
     if args.decision != "CRASH":
         if args.result is None:
             parser.error("a scored decision requires --result")
-        result = json.loads(_regular_bytes(args.result, 1024 * 1024))
+        result = json.loads(read_regular(args.result, 1024 * 1024))
         if result.get("candidate_sha256") != hashlib.sha256(candidate).hexdigest():
             raise ValueError("result does not match the committed training file")
         score = result["macro_f1"]
@@ -730,10 +644,15 @@ def record_main(argv: list[str]) -> int:
                 or result.get("dataset_sha256") != fixture["dataset_sha256"]
                 or result.get("manifest_sha256") != fixture["manifest_sha256"]):
             raise ValueError("result does not match the built-in synthetic protocol")
-        keys = ("metric", "metric_version", "dataset_sha256", "manifest_sha256",
-                "seed", "budget_seconds", "image", "fold_count", "repeats", "evidence")
+        if result.get("direction") != "maximize":
+            raise ValueError("result has an invalid metric direction")
+        keys = ("metric", "direction", "metric_version", "dataset_sha256", "manifest_sha256",
+                "seed", "budget_seconds", "image", "fold_count", "repeats", "evidence",
+                "code_sha256", "promotion")
         if any(key not in result for key in keys):
             raise ValueError("result is missing a frozen protocol field")
+        if result["code_sha256"] != fixed_code_hashes() or result["promotion"] != "strict":
+            raise ValueError("fixed evaluator code or promotion rule has changed")
         folds = result["fold_count"]
         repeats = result["repeats"]
         budget = result["budget_seconds"]
@@ -772,35 +691,12 @@ def record_main(argv: list[str]) -> int:
         protocol = hashlib.sha256(json.dumps(
             {key: result[key] for key in keys}, sort_keys=True, separators=(",", ":")
         ).encode()).hexdigest()
-    args.results.parent.mkdir(parents=True, exist_ok=True)
-    with _open_regular(args.results) as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
-        if os.fstat(stream.fileno()).st_size > 2 * 1024 * 1024:
-            raise ValueError("results file exceeds the size limit")
-        stream.seek(0)
-        reader = csv.DictReader(stream, delimiter="\t")
-        existing = list(reader)
-        expected = ["commit", "macro_f1", "decision", "description", "peak_vram_mb",
-                    "protocol_sha256", "evidence"]
-        if reader.fieldnames and reader.fieldnames != expected:
-            raise ValueError("results file has an incompatible schema")
-        if protocol and any(row.get("protocol_sha256") not in ("", protocol) for row in existing):
-            raise ValueError("result protocol differs from this run's earlier results")
-        if any(row.get("commit") == args.commit for row in existing):
-            raise ValueError("candidate commit is already recorded")
-        if args.decision == "KEEP":
-            previous = [float(row["macro_f1"]) for row in existing
-                        if row.get("decision") == "KEEP" and row.get("macro_f1")]
-            if previous and score <= max(previous):
-                raise ValueError("KEEP requires an improvement over the previous champion")
-        stream.seek(0, os.SEEK_END)
-        writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
-        if stream.tell() == 0:
-            writer.writerow(expected)
-        writer.writerow((args.commit, score, args.decision, args.description, peak_vram,
-                         protocol, "SMOKE_ONLY"))
-        stream.flush()
-        os.fsync(stream.fileno())
+    append_history(
+        args.results, commit=args.commit, metric="syndrome/macro_f1",
+        value=None if args.decision == "CRASH" else score, direction="maximize",
+        decision=args.decision, description=args.description, protocol=protocol,
+        evidence="SMOKE_ONLY", peak_vram=peak_vram,
+    )
     return 0
 
 
@@ -829,7 +725,8 @@ def main(argv: list[str] | None = None) -> int:
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     def status(value: dict) -> None:
-        value = {**value, "updated_at": time.time(), "evidence": "SMOKE_ONLY"}
+        value = {**value, "task": "synthetic-syndrome", "updated_at": time.time(),
+                 "evidence": "SMOKE_ONLY"}
         target = args.out.parent / "status.json"
         temporary = args.out.parent / (".status-" + uuid.uuid4().hex)
         try:
@@ -839,7 +736,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             temporary.unlink(missing_ok=True)
 
-    with _open_regular(args.out.parent / ".evaluation.lock") as lock:
+    with open_regular(args.out.parent / ".evaluation.lock") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -847,23 +744,16 @@ def main(argv: list[str] | None = None) -> int:
         try:
             status({"state": "PREPARING", "deadline": time.time() + 60})
             manifest, records = synthetic_selection()
-            candidate = _regular_bytes(args.candidate, 2 * 1024 * 1024)
-            image_result = subprocess.run(
-                ["docker", "image", "inspect", "--format", "{{.Id}}", args.image],
-                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15, check=True,
-            )
-            image = image_result.stdout.strip()
-            if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
-                raise ValueError("Docker image identity is unavailable")
+            candidate = read_regular(args.candidate, 2 * 1024 * 1024)
+            image = resolve_image(args.image)
             result = evaluate(manifest, records, candidate, image=image,
                               budget_seconds=args.budget, seed=args.seed,
                               folds=args.folds, repeats=args.repeats, progress=status)
-            with args.out.open("x", encoding="utf-8") as output:
-                json.dump(result, output, ensure_ascii=False, indent=2)
-                output.write("\n")
+            payload = (json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+            write_new_atomic(args.out, payload.encode("utf-8"))
             status({"state": "COMPLETE", "macro_f1": result["macro_f1"]})
-        except Exception:
-            status({"state": "FAILED"})
+        except Exception as exc:
+            status({"state": "FAILED", "reason": type(exc).__name__})
             raise
     print(json.dumps(result, ensure_ascii=False))
     return 0

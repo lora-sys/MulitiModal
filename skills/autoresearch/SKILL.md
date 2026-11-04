@@ -1,14 +1,16 @@
 ---
 name: autoresearch
-description: Run or monitor sequential single-file TCM-SD AutoResearch experiments with fixed evaluation and Git keep or revert.
+description: Run or monitor a bounded autonomous research loop using a researcher-supplied task, frozen evaluation and one editable experiment file. Use for iterative model or algorithm research; not for one-off training.
 ---
 
 # AutoResearch
 
-Read `AGENTS.md` and `program.md`. Use this skill when the user asks for an AutoResearch campaign or its monitor. The agent drives each experiment; no separate proposer is required.
+Use this skill to improve a researcher-defined artifact through sequential, evidence-backed experiments. Read `program.md` and the repository's applicable instructions. The skill defines the method; task data, metrics, commands and limits belong in a separate research brief, not in this skill.
 
-The only editable research file is `src/research/train.py`. The fixed evaluator, dataset, split, metric and budget are outside the experiment worktree and must not be changed by the candidate. Candidate execution requires OS/container isolation; a separate process is insufficient. Holdout is never used for selection. The current replacement evaluator permits only explicitly synthetic inputs until the independent evaluator isolation is verified; do not work around this restriction.
+Before a campaign, identify the research question, data and permitted partitions, baseline, primary metric and direction, fixed evaluator, editable file, execution environment, per-run and total budgets, constraints, and stop/delivery criteria. Reuse an existing brief when present. Obtain missing information only when it changes the experiment or authorization; do not guess a metric, data provenance or safety boundary.
 
-Use a dedicated `autoresearch/<tag>` Git worktree, a new run directory, and an explicit fixed budget. Evaluate the unchanged file first. Then repeat: read the current history and training file; formulate one hypothesis; change only `train.py`; commit; evaluate the commit; record its result; keep an improvement or reset that dedicated worktree to the previous champion. Follow `program.md` for commands and failure handling. Continue until the user stops the campaign or a stated budget or a real safety/technical boundary is reached; do not ask between rounds.
+Establish an unchanged baseline. For each round, read the current artifact and prior results, form a falsifiable hypothesis, modify only the designated file, record its commit, run the fixed evaluation, and keep or revert according to the frozen decision rule. Continue without asking between rounds until the user stops the campaign, the agreed budget is exhausted, or a genuine safety or technical boundary blocks execution. Record failures as failures, not numeric scores. Do not use locked test data to select candidates.
 
-Serve the read-only monitor with `./solve.sh dashboard --run runs/<tag>`. It shows the current fold and the same `results.tsv` written by the loop. The default bind is localhost and has no authentication. Synthetic results are engineering evidence only; local result files are not independently authenticated.
+The researcher or trusted environment owns the evaluator, labels, data partitions, metric, budget and promotion criteria. Untrusted code must run in an OS/container boundary; the evaluator and reference labels must be outside its writable environment. If independence from the proposing agent has not been established, do not claim trusted scores or use the system for real-data research. A separate process or a reviewed diff alone does not establish isolation.
+
+Keep a durable experiment history with commit, hypothesis, protocol identity, result, decision, resources and evidence status. Preserve actionable observations with their supporting run and limits; treat them as observations until independently reproduced. A monitor reads those records and reports missing, stale and failed states honestly. It must not control the experiment.

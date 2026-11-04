@@ -20,27 +20,29 @@ main{max-width:1000px;margin:auto;padding:32px 20px}h1{margin-bottom:6px}
 padding:20px;margin:16px 0;overflow:auto}svg{width:100%;height:180px}
 table{border-collapse:collapse;width:100%;min-width:550px}td,th{text-align:left;
 border-bottom:1px solid #e5eae5;padding:10px}th{color:#657067;font-size:12px}
-</style><main><h1>AutoResearch</h1><p class="muted">只读监控 · 合成数据 smoke · 本地记录未认证</p>
+</style><main><h1>AutoResearch</h1><p class="muted">只读监控 · 本地记录未认证</p>
 <section class="card"><h2>当前状态</h2><p id="status">等待记录</p></section>
-<section class="card"><h2>每轮 macro-F1</h2><svg id="chart" viewBox="0 0 800 180"
-role="img" aria-label="每轮 macro-F1 趋势"></svg><p id="empty" class="muted">暂无评分</p></section>
-<section class="card"><h2>实验记录</h2><table><thead><tr><th>Commit</th><th>分数</th>
-<th>决定</th><th>假设</th><th>显存 MB</th></tr></thead><tbody id="rows"></tbody></table></section></main>
+<section class="card"><h2 id="metric">每轮指标</h2><svg id="chart" viewBox="0 0 800 180"
+role="img" aria-label="每轮指标趋势"></svg><p id="empty" class="muted">暂无评分</p></section>
+<section class="card"><h2>实验记录</h2><table><thead><tr><th>Commit</th><th>指标值</th>
+<th>决定</th><th>假设</th><th>证据</th><th>显存 MB</th></tr></thead><tbody id="rows"></tbody></table></section></main>
 <script>
 async function refresh(){try{const r=await fetch('/api',{cache:'no-store'});
 if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();
-document.getElementById('status').textContent=d.status+' · '+d.evidence;
+document.getElementById('status').textContent=[d.task,d.status,d.evidence,d.reason].filter(Boolean).join(' · ');
 const rows=document.getElementById('rows');rows.replaceChildren();
 for(const item of d.results){const tr=document.createElement('tr');
-for(const v of [item.commit,item.macro_f1,item.decision,item.description,item.peak_vram_mb]){
+for(const v of [item.commit,item.value,item.decision,item.description,item.evidence,item.peak_vram_mb]){
 const td=document.createElement('td');td.textContent=v||'—';tr.append(td)}rows.append(tr)}
 const svg=document.getElementById('chart');svg.replaceChildren();
-const values=d.results.filter(x=>x.macro_f1.trim()!=='').map(x=>Number(x.macro_f1)).filter(Number.isFinite);
+document.getElementById('metric').textContent=d.results.length ? '每轮指标 · '+(d.results[0].metric||'未命名')+(d.results[0].direction==='minimize'?' ↓':d.results[0].direction==='maximize'?' ↑':'') : '每轮指标';
+const values=d.results.filter(x=>x.value.trim()!=='').map(x=>Number(x.value)).filter(Number.isFinite);
 document.getElementById('empty').hidden=values.length>0;
 if(values.length){const lo=Math.min(...values),hi=Math.max(...values),span=hi-lo||1;
 const line=document.createElementNS('http://www.w3.org/2000/svg','polyline');
 line.setAttribute('points',values.map((v,i)=>`${20+i*760/Math.max(values.length-1,1)},${160-(v-lo)*140/span}`).join(' '));
-line.setAttribute('fill','none');line.setAttribute('stroke','#28734f');line.setAttribute('stroke-width','3');svg.append(line)}
+line.setAttribute('fill','none');line.setAttribute('stroke','#28734f');line.setAttribute('stroke-width','3');svg.append(line);
+values.forEach((v,i)=>{const dot=document.createElementNS('http://www.w3.org/2000/svg','circle');dot.setAttribute('cx',20+i*760/Math.max(values.length-1,1));dot.setAttribute('cy',160-(v-lo)*140/span);dot.setAttribute('r','4');dot.setAttribute('fill','#28734f');svg.append(dot)})}
 }catch(e){document.getElementById('status').textContent='监控读取失败：'+e.message}}
 refresh();setInterval(refresh,3000);
 </script></html>'''
@@ -64,10 +66,14 @@ def _read_file(path: Path, limit: int) -> str:
 def read_run(root: Path) -> dict:
     status = "暂无运行状态"
     evidence = "NOT_AVAILABLE"
+    task = "NOT_AVAILABLE"
+    reason = ""
     try:
         item = json.loads(_read_file(root / "status.json", 16 * 1024))
         state = item.get("state", "NOT_AVAILABLE")
         evidence = item.get("evidence", "NOT_AVAILABLE")
+        task = str(item.get("task", "NOT_AVAILABLE"))[:100]
+        reason = str(item.get("reason", ""))[:100]
         if state in ("PREPARING", "TRAINING") and time.time() > float(item.get("deadline", 0)):
             state = "STALE"
         status = str(state)
@@ -84,9 +90,10 @@ def read_run(root: Path) -> dict:
         rows = list(csv.DictReader(io.StringIO(text), delimiter="\t"))[-500:]
     except FileNotFoundError:
         pass
-    return {"status": status, "evidence": evidence, "results": [
+    return {"status": status, "task": task, "reason": reason, "evidence": evidence, "results": [
         {key: str(row.get(key) or "")[:400] for key in
-         ("commit", "macro_f1", "decision", "description", "peak_vram_mb")}
+         ("commit", "metric", "value", "direction", "decision", "description", "evidence",
+          "peak_vram_mb")}
         for row in rows
     ]}
 

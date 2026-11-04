@@ -11,10 +11,10 @@ import pytest
 from research.prepare import (
     evaluate,
     fold_inputs,
-    run_candidate,
     score_predictions,
     selection_fold_ids,
 )
+from research.sandbox import resolve_image, run_candidate
 
 
 def _selection():
@@ -117,20 +117,20 @@ else:
     raise AssertionError("candidate has network access")
 json.dump([0 for _ in texts], open(a.output, "w"))
 '''
-    train = [SimpleNamespace(input_text="synthetic train", label=0)]
-    dev = [SimpleNamespace(input_text="synthetic validation", label=1)]
+    train = [{"text": "synthetic train", "label": 0}]
+    dev = ["synthetic validation"]
     assert run_candidate(candidate, train, dev,
-                         image="multimodal-research-worker:2.7.0-cpu",
+                         image=resolve_image("multimodal-research-worker:2.7.0-cpu"),
                          budget_seconds=10, seed=1) == [0]
 
 
 @pytest.mark.synthetic
 def test_candidate_timeout_is_not_a_score():
-    train = [SimpleNamespace(input_text="synthetic training", label=0)]
-    dev = [SimpleNamespace(input_text="synthetic validation", label=1)]
+    train = [{"text": "synthetic training", "label": 0}]
+    dev = ["synthetic validation"]
     with pytest.raises(RuntimeError, match="exit code 124"):
         run_candidate(b"import time; time.sleep(30)", train, dev,
-                      image="multimodal-research-worker:2.7.0-cpu",
+                      image=resolve_image("multimodal-research-worker:2.7.0-cpu"),
                       budget_seconds=1, seed=1)
 
 
@@ -148,7 +148,7 @@ def test_two_fold_candidate_to_fixed_score():
     candidate = (Path(__file__).resolve().parents[2] /
                  "src/research/train.py").read_bytes()
     result = evaluate(manifest, records, candidate,
-                      image="multimodal-research-worker:2.7.0-cpu",
+                      image=resolve_image("multimodal-research-worker:2.7.0-cpu"),
                       budget_seconds=20, seed=1, folds=2, repeats=1)
     assert result["evidence"] == "SMOKE_ONLY"
     assert len(result["folds"]) == 2
@@ -160,7 +160,7 @@ def test_monitor_reads_results_without_following_symlinks(tmp_path):
 
     (tmp_path / "status.json").write_text(json.dumps({"state": "COMPLETE"}))
     (tmp_path / "results.tsv").write_text(
-        "commit\tmacro_f1\tdecision\tdescription\nabc1234\t0.5\tKEEP\t<test>\n"
+        "commit\tmetric\tvalue\tdecision\tdescription\nabc1234\tmetric\t0.5\tKEEP\t<test>\n"
     )
     view = read_run(tmp_path)
     assert view["status"] == "COMPLETE"
@@ -179,7 +179,7 @@ def test_monitor_serves_read_only_results(tmp_path):
     from research.dashboard import make_server
 
     (tmp_path / "results.tsv").write_text(
-        "commit\tmacro_f1\tdecision\tdescription\nabc1234\t0.5\tKEEP\tbaseline\n"
+        "commit\tmetric\tvalue\tdecision\tdescription\nabc1234\tmetric\t0.5\tKEEP\tbaseline\n"
     )
     server = make_server(tmp_path, 0)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -188,7 +188,7 @@ def test_monitor_serves_read_only_results(tmp_path):
         url = f"http://127.0.0.1:{server.server_port}"
         with urllib.request.urlopen(url + "/api", timeout=3) as response:
             payload = json.load(response)
-        assert payload["results"][0]["macro_f1"] == "0.5"
+        assert payload["results"][0]["value"] == "0.5"
         bad_host = urllib.request.Request(url + "/api", headers={"Host": "attacker.invalid"})
         with pytest.raises(urllib.error.HTTPError) as denied:
             urllib.request.urlopen(bad_host, timeout=3)
@@ -206,7 +206,7 @@ def test_monitor_serves_read_only_results(tmp_path):
 def test_record_binds_score_to_committed_training_file(tmp_path):
     import hashlib
 
-    from research.prepare import record_main, synthetic_selection
+    from research.prepare import fixed_code_hashes, record_main, synthetic_selection
 
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -223,8 +223,9 @@ def test_record_binds_score_to_committed_training_file(tmp_path):
     result = tmp_path / "result.json"
     fixture, _ = synthetic_selection()
     payload = {"candidate_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-               "macro_f1": 0.5, "metric": "syndrome/macro_f1",
+               "macro_f1": 0.5, "metric": "syndrome/macro_f1", "direction": "maximize",
                "metric_version": "tcm-sd-eval-v3", "evidence": "SMOKE_ONLY",
+               "code_sha256": fixed_code_hashes(), "promotion": "strict",
                "dataset_sha256": fixture["dataset_sha256"],
                "manifest_sha256": fixture["manifest_sha256"],
                "seed": 1, "budget_seconds": 20, "image": "sha256:" + "0" * 64,
@@ -236,7 +237,7 @@ def test_record_binds_score_to_committed_training_file(tmp_path):
     args = ["--repo", str(repo), "--results", str(history), "--commit", commit,
             "--decision", "KEEP", "--description", "synthetic", "--result", str(result)]
     assert record_main(args) == 0
-    assert "0.5\tKEEP\tsynthetic" in history.read_text()
+    assert "0.5\tmaximize\tKEEP\tsynthetic" in history.read_text()
     result.write_text(json.dumps({"candidate_sha256": "0" * 64, "macro_f1": 0.5}))
     with pytest.raises(ValueError, match="does not match"):
         record_main(args)
@@ -258,14 +259,14 @@ def test_record_binds_score_to_committed_training_file(tmp_path):
 
 
 def test_output_files_do_not_follow_symlinks(tmp_path):
-    from research.prepare import _open_regular
+    from research.history import open_regular
 
     target = tmp_path / "target"
     target.write_text("unchanged")
     link = tmp_path / "link"
     link.symlink_to(target)
     with pytest.raises(OSError):
-        _open_regular(link)
+        open_regular(link)
     assert target.read_text() == "unchanged"
 
 
@@ -325,5 +326,5 @@ def test_skill_flow_baseline_candidate_and_monitor(tmp_path):
     view = read_run(run)
     assert view["status"] == "COMPLETE"
     assert [row["decision"] for row in view["results"]] == ["KEEP", decision]
-    assert float(view["results"][0]["macro_f1"]) == baseline["macro_f1"]
-    assert float(view["results"][1]["macro_f1"]) == trial["macro_f1"]
+    assert float(view["results"][0]["value"]) == baseline["macro_f1"]
+    assert float(view["results"][1]["value"]) == trial["macro_f1"]
