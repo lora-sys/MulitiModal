@@ -425,3 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "dashboard" and not (args.run or args.runs_root):
         parser.error("dashboard needs --run or --runs-root")
     return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
