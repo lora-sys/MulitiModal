@@ -283,15 +283,14 @@ def pool_manifest(
     the final model sees.
 
     The subject-row mapping is pruned to the pool: a manifest handed to a
-    refit whose fitting code is agent-authored (research/candidate.py) must
+    refit whose fitting code is agent-authored must
     not carry the holdout rows at all, or the fitting code could read their
     labels. The holdout LIST is emptied too — even pruned of the row mapping,
     the holdout ids in the pool manifest are the leak: the champion/
     pool-manifest.json file sits on disk where agent-authored fitting code
     can read it, and diffing its ids against any fold manifest recovers
     holdout identity. The single holdout read rebuilds the holdout view from
-    the frozen parent manifest AFTER fitting (see data.real_split.holdout_view
-    and research.finalize).
+    the frozen parent manifest AFTER fitting (see data.real_split.holdout_view).
     """
     data = json.loads(json.dumps(manifest))
     data.pop("manifest_sha256", None)

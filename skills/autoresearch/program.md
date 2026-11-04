@@ -1,74 +1,23 @@
-# program.md — the proposer's contract
+# Research loop contract
 
-This is the instruction for the Coding Agent that loaded the Skill and is
-driving the campaign: you read the state, you write one hypothesis per round,
-and you call `autoresearch step` for it. No separate agent process is needed. It is
-short on purpose: the module owns the data, the isolation, the scoring and the
-record. Your only job is to propose **one** controlled, falsifiable experiment
-per round, after reading the result of the previous one.
+The research brief is the authority for one campaign. It must name:
 
-## You get
+- **Goal and output:** the research question, intended artifact and what success would mean.
+- **Data:** source and permission, input/output schema, training and selection partitions, protected test data and any grouping or preprocessing rules.
+- **Measurement:** baseline, fixed evaluator and version, primary metric and whether higher or lower is better, comparison and promotion rules, and the evidence needed for a claim.
+- **Change boundary:** the single editable file, frozen inputs and evaluator, dependency and architecture constraints, and how the trusted evaluator is kept outside the agent's writable environment.
+- **Execution:** setup and exact baseline/evaluation/record/monitor commands, runtime and resource limits, seed policy, total budget, logs and artifact locations.
+- **Stopping and handoff:** when to stop, what needs human judgment, and which code, evidence and unresolved questions to retain.
 
-A JSON research state: the frozen goal, the anchor editable file, `frozen_paths`
-(the denylist), the champion and its metric, the previous round's
-hypothesis/patch/metric, diagnostic reflection slices and Doctor findings, the
-remaining budget, and the list of things that are frozen.
+Do not start a real campaign if an essential field is unknown. Make unknowns explicit. The researcher sets these boundaries; the agent can choose experiments within them.
 
-## You return exactly one JSON object
+## Procedure
 
-```json
-{
-  "hypothesis": "a falsifiable claim, e.g. 'X raises metric M because Y'",
-  "controlled_change": "what changes, and what stays fixed",
-  "expected_observation": "what the trusted metric should show if the claim holds",
-  "patch": "a unified diff against one or more writable src/**/*.py files",
-  "intent": "one line",
-  "next_action_if_keep": "what to try next if this is kept",
-  "next_action_if_revert": "what to diagnose or try instead if it is rolled back"
-}
-```
+1. Create a dedicated clean experiment branch/worktree and an ignored run directory. Record the task brief and the version or hash of each frozen input. Confirm the evaluator's independence and execution boundary for real data.
+2. Evaluate and record the unchanged baseline. A synthetic smoke run proves only that the mechanics work.
+3. Read the latest champion, prior outcomes and current editable file. Choose one testable hypothesis and the smallest change that can distinguish it. Commit that file on the experiment branch.
+4. Run the fixed evaluation with the same protocol and resource budget. Capture the actual result or failure and the candidate commit. Do not derive the score from candidate-reported values when the evaluator is the authority.
+5. Append the result and decision to the run history. Keep the candidate only when it satisfies the brief's promotion rule; otherwise reset the dedicated clean worktree to the prior champion. A crash, timeout or invalid protocol is not a model score.
+6. Write down a useful observation with its evidence and scope, then use the result to select the next hypothesis. Continue until the specified stop condition; do not repeatedly ask the researcher whether to proceed.
 
-or `{"intent": "STOP", "config_patch": {}}`-style `STOP` when no further
-experiment is worth the budget.
-
-## Rules
-
-1. **One hypothesis per round.** A plan written in advance is not research. Read
-   what the last round actually produced; if your idea is unchanged by it, say so
-   in `controlled_change` and justify it.
-2. **Change one thing.** Name what you hold fixed. Two simultaneous changes make
-   the result uninterpretable, and the loop will charge you for the complexity.
-3. **Any model/train/feature source, but nothing frozen.** You may edit any
-   `src/**/*.py` file and add new Python modules; `editable_file` is the anchor
-   candidate, not a limit. Data, labels, splits, the evaluator, the metric, the
-   budget, the holdout ledger and the trusted engine are frozen (`frozen_paths`).
-   A patch touching them is refused before training.
-4. **The budget is the budget.** You cannot buy a better score with more training
-   time; a run that overruns is recorded as `INVALID_PROTOCOL`.
-5. **You never report a score.** The trusted evaluator runs in a separate process
-   after your model is saved. Do not attempt to influence it.
-6. **Prefer small, honest patches.** Complexity is priced: a larger patch must
-   show a larger gain, and removing code while scoring at least as well is a win.
-7. **A rejected round is information.** `INVALID_PROTOCOL` means the patch or the
-   protocol was wrong, `UNSUPPORTED_ARCHITECTURE` means the architecture cannot be
-   exported under the frozen whitelist, `CRASH` means it did not run. None of these
-   says the model is bad.
-
-## Write the patch correctly
-
-* Use a real unified diff with `--- a/<file>` and `+++ b/<file>` headers and at
-  least one `@@` hunk.
-* Include context on **both** sides of the change. A hunk with no trailing
-  context asserts "the file ends here", so an append-only hunk applies to a
-  one-line file exactly once and then fails — read the current file and put its
-  neighbouring lines in the hunk.
-* Read the file before you patch it. After a KEEP the file is no longer what it
-  was when you last looked, so a patch prepared earlier will not apply.
-
-## When to stop
-
-Stop when the Doctor reports `measurement_resolution` on several consecutive
-rounds: on this data, further micro-edits cannot clear the noise margin, and the
-honest next step is more information (features, labels, data) — not another
-hyperparameter. Record that conclusion in the report rather than spending the
-budget.
+The read-only monitor consumes the run's status and results; it must clearly show the task, metric, direction, evidence state, failures and missing values. Human review decides whether an observation becomes reusable practice and whether an artifact is ready for downstream use.
