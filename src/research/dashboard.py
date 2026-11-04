@@ -718,11 +718,18 @@ def read_run(root: Path) -> dict:
                 except (OSError, ValueError):
                     detail = None
                 break
+        # results.tsv stores the score as text; the page needs a number, and a
+        # CRASH row carries none.
+        raw = str(row.get("value") or "").strip()
+        try:
+            value = float(raw) if raw else None
+        except ValueError:
+            value = None
         rounds.append({
             "round": index,
             "commit": str(row.get("commit") or ""),
             "metric": str(row.get("metric") or ""),
-            "value": str(row.get("value") or ""),
+            "value": value,
             "direction": str(row.get("direction") or ""),
             "decision": str(row.get("decision") or ""),
             "description": str(row.get("description") or ""),

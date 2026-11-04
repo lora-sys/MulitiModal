@@ -261,7 +261,7 @@ def test_monitor_exposes_per_round_fold_scores_and_device(tmp_path):
     assert view["rounds"][0]["detail"]["folds"][1]["macro_f1"] == 0.52
     assert view["rounds"][0]["detail"]["device"] == "cuda"
     assert view["device"] == "cuda"
-    assert view["rounds"][0]["value"] == "0.5"
+    assert view["rounds"][0]["value"] == 0.5
 
 
 def test_record_binds_score_to_committed_training_file(tmp_path):
