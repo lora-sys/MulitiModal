@@ -163,6 +163,27 @@ def test_one_text_two_labels_is_blocked():
     assert finding.evidence["n_conflicts"] == 1
 
 
+def test_expected_text_label_conflicts_warn_instead_of_blocking():
+    """TCM-SD short chief complaints legitimately carry different syndromes
+    for the same text. The Doctor must keep that visible as evidence, not call
+    it a labelling error and refuse to run (which would freeze all real-data
+    AutoResearch campaigns). Dropping the rows is not an option: it changes
+    dataset_sha256 and breaks comparability with the frozen CV baseline."""
+    config, manifest, records, _ = build()
+    records[1].input_text = records[0].input_text
+    records[1].label = (records[0].label + 1) % 3
+
+    class SyndromeLikeAdapter(ToyAdapter):
+        text_label_conflict_is_expected = True
+
+    report = preflight(config, manifest, records, SyndromeLikeAdapter())
+    finding = _findings(report)["label_conflict"]
+    assert finding.severity == WARNING
+    assert finding.evidence["n_conflicts"] == 1
+    assert finding.evidence["task_property"] is True
+    assert report.blocked is False
+
+
 def test_outer_dev_steering_is_blocked():
     config, manifest, records, _ = build()
     config["trainer"] = {"early_stop_patience": 3}
