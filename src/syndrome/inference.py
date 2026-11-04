@@ -24,7 +24,6 @@ from typing import Protocol
 
 import numpy as np
 
-from syndrome.feedback import knowledge_field
 from syndrome.labels import (
     LABEL_TAXONOMY_ID,
     STATUS_ABSTAIN,
@@ -35,6 +34,27 @@ from syndrome.labels import (
 )
 
 DEFAULT_TOP_K = 3
+
+
+def knowledge_field(entry: object, json_name: str) -> str | None:
+    """按 JSON 键名取知识条目字段；兼容 snake_case 属性（如 data.tcm_sd 的
+    SyndromeKnowledge.definition）与原始键名（如裸 JSONL dict 的 Definition）。"""
+    for attr in (json_name, _SNAKE.get(json_name, json_name)):
+        value = getattr(entry, attr, None)
+        if value:
+            return str(value)
+    if isinstance(entry, dict):
+        value = entry.get(json_name)
+        if value:
+            return str(value)
+    return None
+
+
+_SNAKE = {
+    "Name": "name",
+    "Definition": "definition",
+    "Typical_performance": "typical_performance",
+}
 
 # 常规问诊期望出现的结构化字段；未提供项进入 missing_information（仅描述输入缺口，
 # 不是医学要求）。
