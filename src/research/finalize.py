@@ -47,6 +47,13 @@ def ledger_params(task: str = "constitution") -> tuple[str, int]:
         return UNLOCK_LEDGER_FILE, MAX_UNLOCKS
     if task == "syndrome":
         return UNLOCK_LEDGER_FILE_SD, MAX_UNLOCKS_SD
+    if task == "toy":
+        # SMOKE_ONLY example task: no holdout by construction, so a
+        # finalize/unlock call is refused explicitly rather than via an
+        # "unknown task" error that reads like a routing bug.
+        raise ValueError(
+            "toy is SMOKE_ONLY and has no holdout; finalize/unlock is out of scope"
+        )
     raise ValueError(
         f"unknown research task {task!r}; expected 'constitution' or 'syndrome'"
     )

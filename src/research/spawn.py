@@ -319,7 +319,7 @@ def _stage_worker_inputs(config: dict, input_root: Path) -> dict:
     if not isinstance(staged.get("candidate_sha256"), str):
         raise RuntimeError("worker config requires candidate_sha256")
     _editable_parts(staged.get("editable", "src/research/candidate.py"))
-    if staged.get("task", "constitution") not in ("constitution", "syndrome"):
+    if staged.get("task", "constitution") not in ("constitution", "syndrome", "toy"):
         raise RuntimeError(f"unknown worker task {staged.get('task')!r}")
     stem = staged.get("output_stem")
     if not isinstance(stem, str) or not stem.isascii() or not stem.isidentifier():

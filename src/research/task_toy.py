@@ -111,8 +111,11 @@ def generate_records(n_subjects: int = 90, seed: int = 20261105) -> list[ToyReco
             round(rng.uniform(0.0, 1.0), 4) + (0.4 if label == 2 else 0.0),
             round(rng.uniform(0.0, 1.0), 4),
         ]
+        # 1-based: the frozen selection-manifest contract requires every
+        # subject_row_by_id value to be >= 1. Using 0 here made the toy task
+        # the only task whose own inputs failed its own validator.
         records.append(ToyRecord(
-            subject_index=i, user_id=f"u{i:03d}", text=" ".join(words),
+            subject_index=i + 1, user_id=f"u{i:03d}", text=" ".join(words),
             numeric=numeric, label=label, label_mask=True,
         ))
     return records
@@ -143,13 +146,17 @@ def records_from_json(text: str) -> list[ToyRecord]:
 
 
 def build_manifest(records: list[ToyRecord], *, seed: int,
-                   fractions: tuple[float, float, float] = (0.6, 0.2, 0.2)) -> dict:
+                   fractions: tuple[float, float, float] = (0.75, 0.25, 0.0)) -> dict:
     """User-level split: every record of one user lands in exactly one partition."""
     users = sorted({r.user_id for r in records})
     rng = random.Random(seed)
     rng.shuffle(users)
     n_train = int(len(users) * fractions[0])
-    n_dev = int(len(users) * fractions[1])
+    # give the remainder to dev so n_train + n_dev + n_holdout == len(users)
+    # exactly; int() truncation used to leave one user stranded in holdout,
+    # which made the generated manifest a frozen (holdout-bearing) one even
+    # when the caller asked for a selection-only pool.
+    n_dev = len(users) - n_train - int(len(users) * fractions[2])
     partitions = {
         "train": users[:n_train],
         "dev": users[n_train:n_train + n_dev],
@@ -193,6 +200,12 @@ def build_manifest(records: list[ToyRecord], *, seed: int,
         "excluded_subject_rows": [],
         "notes": "synthetic example task for issue #61; SMOKE_ONLY",
     }
+    # The engine's selection path requires an empty holdout partition. The toy
+    # task is SMOKE_ONLY and never unlocks a holdout, so its manifest IS the
+    # selection manifest: bind the frozen parent hashes for provenance but keep
+    # holdout empty (governance rule 11: no selection round reads a holdout).
+    data["selection_parent_manifest_sha256"] = _digest(data)
+    data["selection_parent_dataset_sha256"] = data["dataset_sha256"]
     data["manifest_sha256"] = _digest(data)
     return data
 
@@ -437,13 +450,16 @@ def training_fold_data(fit_manifest: dict, records: list[ToyRecord], config: dic
     )
 
 
-def build_fold(config: dict, manifest_path, dataset_path, fold: int, folds: int,
+def build_fold(config: dict, manifest: dict, fold: int, folds: int,
                repeat: int, records=None):
+    """Rebuild one selection fold from the trusted manifest object.
+
+    The evaluator passes the manifest as a decoded dict (as it does for the
+    constitution/syndrome adapters); the old path-taking signature never
+    matched that call, which is why a real toy round never scored.
+    """
     from research.frozen import FoldData, selection_fold_ids
 
-    manifest = load_manifest(manifest_path)
-    if records is None:
-        records = records_from_json(Path(dataset_path).read_text(encoding="utf-8"))
     train_ids, dev_ids = selection_fold_ids(manifest, fold, folds, repeat)
     saved = fold_manifest(manifest, records, train_ids, dev_ids,
                           notes=f"selection fold {fold} repeat {repeat}")
@@ -591,10 +607,8 @@ class ToyAdapter(TaskAdapter):
 
     # -- folds ---------------------------------------------------------------
 
-    def build_fold(self, config, manifest_path, dataset_path, fold, folds,
-                   repeat, records=None):
-        return build_fold(config, manifest_path, dataset_path, fold, folds,
-                          repeat, records=records)
+    def build_fold(self, config, manifest, fold, folds, repeat, records=None):
+        return build_fold(config, manifest, fold, folds, repeat, records=records)
 
     def training_fold_data(self, fit_manifest, records, config):
         return training_fold_data(fit_manifest, records, config)

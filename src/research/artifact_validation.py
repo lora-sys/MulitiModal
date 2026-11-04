@@ -39,7 +39,7 @@ def _sha256_regular(path: Path) -> str:
 
 def validate_artifacts(config: dict, worker_result: dict) -> dict:
     task = config.get("task", "constitution")
-    if task not in ("constitution", "syndrome"):
+    if task not in ("constitution", "syndrome", "toy"):
         raise ValueError("artifact validation task is invalid")
     expected_sha = config.get("candidate_sha256")
     if worker_result.get("candidate_sha256") != expected_sha:
