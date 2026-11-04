@@ -34,8 +34,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
-import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -521,7 +519,6 @@ function pal(){
           l2: cv("--l2","#4A4944"), l3: cv("--l3","#6A6963"),
           l4: cv("--l4","#8F8E88"), l5: cv("--l5","#B0AFA9")};
 }
-const T = pal();
 const STAGES = ["DOCTOR","PROPOSING","TRAINING","EVALUATING","DECIDING","IDLE","DONE"];
 function num(v){ return (typeof v === "number" && isFinite(v)) ? v : null; }
 function mean(xs){ const a = xs.filter(v => v !== null);
@@ -539,7 +536,6 @@ function text(node, value){ node.textContent = (value === null || value === unde
   ? "NOT_AVAILABLE" : String(value); }
 function fmt(v, d){ return (v === null || v === undefined) ? "NOT_AVAILABLE"
   : (typeof v === "number" ? v.toFixed(d === undefined ? 4 : d) : String(v)); }
-function svgEl(name){ return document.createElementNS("http://www.w3.org/2000/svg", name); }
 function renderStatus(s){
   text(el("title"), "AutoResearch · " + s.task);
   const stage = (s.progress && s.progress.stage) || "IDLE";
@@ -1533,22 +1529,3 @@ def serve(session: ResearchSession, *,  host: str = "127.0.0.1", port: int = 876
     return 0
 
 
-def spawn_dashboard(session: ResearchSession, *, port: int = 8765,
-                    host: str = "127.0.0.1") -> dict:
-    """Start the dashboard as its OWN process, so its lifetime is independent.
-
-    The issue requires that closing the browser or the page cannot pause
-    training. Running the server in a thread inside the training process would
-    violate that; a separate process cannot.
-    """
-    command = [sys.executable, "-m", "research.cli", "dashboard",
-               "--run", str(session.root), "--host", host, "--port", str(port)]
-    # the child's diagnostics go to the run directory, not /dev/null: if the
-    # tailnet publish fails, that log is the only place the reason appears
-    log = Path(session.root) / "dashboard.log"
-    handle = log.open("a", encoding="utf-8")
-    process = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT,
-                               start_new_session=True,
-                               cwd=str(Path(__file__).resolve().parents[1]))
-    return {"pid": process.pid, "url": f"http://{host}:{port}/",
-            "command": " ".join(shlex.quote(part) for part in command)}

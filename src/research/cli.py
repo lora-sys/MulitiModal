@@ -3,7 +3,10 @@
     python -m research.cli <command> ...
 
     doctor     preflight/postflight diagnosis, read-only
+    prepare    create the run (worktree/spec/inputs) and run Doctor preflight,
+               WITHOUT a Coding Agent — the Skill's step 2
     run        start an autonomous research campaign (needs a real Coding Agent)
+    state      the full proposer state (research_state) for the NEXT round
     status     current round, stage, metrics, decisions (read-only)
     stop       ask a running campaign to stop (also ends the live training child)
     resume     continue from the manifest's completed rounds, never replaying them
@@ -168,7 +171,7 @@ def cmd_doctor(args) -> int:
     return 1 if report.blocked else 0
 
 
-def _start_or_resume(args, *, resume: bool) -> int:
+def _start_or_resume(args, *, resume: bool, prepare_only: bool = False) -> int:
     out_dir = Path(args.out)
     if resume:
         session = ResearchSession.load(out_dir)
@@ -242,6 +245,22 @@ def _start_or_resume(args, *, resume: bool) -> int:
             json.dumps(spec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
     adapter, manifest, records = _load_inputs(session)
+    if prepare_only:
+        # Skill step 2: create the run and diagnose the protocol, then STOP.
+        # No proposer, no training, no autonomous-research claim.
+        from research import doctor as doctor_mod
+
+        report = doctor_mod.preflight(
+            _config_for(session.spec), manifest, records, adapter,
+            run_id=session.run_id,
+        )
+        session.write_doctor(report.to_dict())
+        print(json.dumps({
+            "ok": True, "prepared": True, "blocked": report.blocked,
+            "run_dir": str(session.root), "run_id": session.run_id,
+            "doctor": report.to_dict(),
+        }, ensure_ascii=False, indent=2))
+        return 1 if report.blocked else 0
     loop = _build_loop(session, task=session.spec["task"])
     proposer = build_proposer(args.agent_command, stub_steps=None,
                               timeout_s=args.agent_timeout)
@@ -366,9 +385,27 @@ def cmd_step(args) -> int:
     from research.agent import Hypothesis
 
     session = ResearchSession.load(args.run)
+    # budget / stop / wall-clock gates: a step-driven campaign must honour the
+    # same frozen limits as an autonomous one, otherwise `max_rounds` is a
+    # suggestion rather than a budget (issue #61 acceptance).
+    if session.stop_requested():
+        print(json.dumps({"ok": False, "error": "campaign stopped"}))
+        return 1
+    if session.rounds_remaining() <= 0:
+        print(json.dumps({"ok": False, "error": "round budget exhausted"}))
+        return 1
+    if not session.within_wall_clock(time.monotonic()):
+        print(json.dumps({"ok": False, "error": "wall clock budget exhausted"}))
+        return 1
     adapter, manifest, records = _load_inputs(session)
     loop = _build_loop(session, task=session.spec["task"])
     payload = json.loads(Path(args.proposal_file).read_text(encoding="utf-8"))
+    # a deliberate STOP needs no patch; Hypothesis.from_dict requires one, so
+    # handle it here rather than silently recording an invalid protocol.
+    if str(payload.get("intent", "")).strip().upper() == "STOP":
+        print(json.dumps({"ok": True, "stopped": True,
+                          "reason": str(payload.get("hypothesis") or "proposer STOP")}))
+        return 0
     # provenance: which state the proposal claims to answer, and what was
     # submitted. `step` had been recording neither, so a reader could not tell
     # whether a proposal followed the previous round or replaced it.
@@ -392,12 +429,16 @@ def cmd_step(args) -> int:
         index = session.next_round_index()
         writer.emit("PROPOSING", "started", round_index=index,
                     message=f"external proposal from {args.proposer}")
+        event_sink = {
+            "spawn": (lambda pid, pgid: session.mark_active_child(pid, pgid)),
+        }
         entry = loop.run_round(
             hypothesis.patch, hypothesis.intent,
             proposer=args.proposer, hypothesis=hypothesis.to_dict(),
             agent_kind="external-coding-agent", batch_supplied=False,
             doctor_context={"config": config, "manifest": manifest,
                             "records": records, "adapter": adapter},
+            event_sink=event_sink,
         )
         writer.emit("DECIDING", "finished", round_index=index,
                     message=f"{entry.get('outcome')}: {str(entry.get('reason'))[:160]}")
@@ -406,6 +447,35 @@ def cmd_step(args) -> int:
     state = loop.research_state(session=session, agent_kind="external-coding-agent")
     print(json.dumps({"ok": True, "entry": entry, "state": state},
                      ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_prepare(args) -> int:
+    """Prepare a run WITHOUT a Coding Agent, then run the Doctor preflight.
+
+    This is the Skill's step 2. ``run`` is for a self-driving campaign with a
+    real agent command; ``prepare`` gives a Skill-driven campaign everything it
+    needs (worktree, frozen spec, inputs, doctor.json) and stops, so the Agent
+    can then ``state`` -> write one hypothesis -> ``step`` once per round.
+    """
+    out_dir = Path(args.out)
+    if (out_dir / "run.json").exists():
+        print(json.dumps({
+            "ok": False,
+            "error": f"run already prepared at {out_dir}; use state/step",
+        }, ensure_ascii=False, indent=2))
+        return 1
+    # prepare creates the run, runs the Doctor preflight, and stops. It never
+    # constructs a proposer and never claims autonomous research.
+    return _start_or_resume(args, resume=False, prepare_only=True)
+
+
+def cmd_state(args) -> int:
+    """Print the FULL proposer state: what the next hypothesis must react to."""
+    session = ResearchSession.load(args.run)
+    loop = _build_loop(session, task=session.spec["task"])
+    state = loop.research_state(session=session, agent_kind=args.agent_kind)
+    print(json.dumps(state, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -540,6 +610,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--proposal-file", required=True)
     p.add_argument("--proposer", default="external-coding-agent")
     p.set_defaults(func=cmd_step)
+
+    p = sub.add_parser("prepare", help="create a run + Doctor preflight, no agent needed")
+    add_run_args(p, resume=False)
+    p.set_defaults(func=cmd_prepare)
+
+    p = sub.add_parser("state", help="full proposer state for the next round")
+    p.add_argument("--run", required=True)
+    p.add_argument("--agent-kind", default="external-coding-agent")
+    p.set_defaults(func=cmd_state)
 
     p = sub.add_parser("run", help="start an autonomous campaign")
     add_run_args(p, resume=False)
