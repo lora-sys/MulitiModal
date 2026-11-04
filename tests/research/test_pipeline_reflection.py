@@ -71,7 +71,9 @@ def test_syndrome_pipeline_traces_cleanly():
     # Test tracing with torch.fx under the frozen model_export whitelist
     arch = export_architecture(model, task="syndrome", expected_n_classes=10)
     assert arch is not None
-    assert arch["task"] == "syndrome"
+    assert arch["model_type"] == "tcm_syndrome_v1"
+    assert "modules" in arch
+    assert "graph" in arch
 
 
 def test_constitution_pipeline_traces_cleanly():
@@ -95,4 +97,6 @@ def test_constitution_pipeline_traces_cleanly():
     # Test tracing with torch.fx under the frozen model_export whitelist
     arch = export_architecture(model, task="constitution", expected_n_classes=9)
     assert arch is not None
-    assert arch["task"] == "constitution"
+    assert arch["model_type"] == "tcm_constitution_v1"
+    assert "modules" in arch
+    assert "graph" in arch
