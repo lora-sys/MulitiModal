@@ -339,6 +339,33 @@ def _editable_path(config: dict) -> Path | None:
     return None
 
 
+def extract_diagnostics(report) -> dict:
+    """Extract actionable diagnostic slices (worst performing classes, zero F1)
+    to provide reflection context for the research loop proposer."""
+    diagnostics = {}
+    per_class = getattr(report, "per_class", None)
+    if per_class is None:
+        per_class = getattr(report, "per_category", None)
+    if isinstance(per_class, dict) and per_class:
+        zero_f1 = []
+        low_f1 = []
+        for cls_id, stats in per_class.items():
+            if not isinstance(stats, dict):
+                continue
+            support = stats.get("support", 0)
+            f1 = stats.get("f1", 0.0)
+            if support > 0:
+                if f1 == 0.0:
+                    zero_f1.append({"class": cls_id, "support": support})
+                else:
+                    low_f1.append({"class": cls_id, "f1": round(float(f1), 4), "support": support})
+        low_f1.sort(key=lambda x: x["f1"])
+        diagnostics["zero_f1_count"] = len(zero_f1)
+        diagnostics["worst_classes"] = (zero_f1 + low_f1)[:5]
+        diagnostics["total_evaluated_classes"] = len(per_class)
+    return diagnostics
+
+
 def score_fold(config: dict, request: dict, records=None) -> dict:
     """Rebuild and score one fold from validated selection-only inputs."""
     from research.tasks import adapter_for
@@ -365,7 +392,11 @@ def score_fold(config: dict, request: dict, records=None) -> dict:
     model = _load_model(request, task=task)
     install_candidate_import_guard(_editable_path(config))
     report = adapter.evaluate_model(model, fold_manifest, fold_data.dev, "dev")
-    return {"primary_value": float(report.primary_value)}
+    res = {"primary_value": float(report.primary_value)}
+    diag = extract_diagnostics(report)
+    if diag:
+        res["diagnostics"] = diag
+    return res
 def score_holdout(config: dict, request: dict, records=None) -> dict:
     """Validate the charged event before materializing any holdout records."""
     from research.finalize import verify_holdout_unlock

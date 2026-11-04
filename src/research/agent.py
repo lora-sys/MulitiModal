@@ -143,8 +143,9 @@ PROPOSAL_PROMPT = """You are the research proposer for one AutoResearch round.
 
 You are given the CURRENT research state as JSON. Propose exactly ONE next
 experiment as a controlled, falsifiable hypothesis. You must react to the result
-of the previous round that appears in the state; a proposal that repeats a
-previous attempt without new reasoning is invalid.
+of the previous round that appears in the state (including its metric, decision,
+and diagnostic reflection slices such as zero_f1_count and worst_classes); a proposal
+that repeats a previous attempt without addressing observed failure modes is invalid.
 
 Hard rules (violating any of them makes the proposal invalid):
 - The patch may only modify the editable file named in `editable_file`.

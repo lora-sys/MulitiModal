@@ -628,6 +628,7 @@ class SourceResearchLoop:
             "uncertainty_semantics": uncertainty_semantics,
             "folds": result["folds"], "fold_seconds": result["fold_seconds"],
         }
+        entry["diagnostics"] = result.get("diagnostics") or {}
         entry["observed_evidence"] = {
             "primary_value": value,
             "previous_best": previous_best,
@@ -846,6 +847,7 @@ class SourceResearchLoop:
                 "status": entry.get("status"),
                 "reason": entry.get("reason"),
                 "observed_evidence": entry.get("observed_evidence"),
+                "diagnostics": entry.get("diagnostics") or {},
                 "next_action": entry.get("next_action"),
                 "doctor": (entry.get("doctor") or {}).get("counts"),
             }

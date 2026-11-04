@@ -125,6 +125,7 @@ def run(config: dict, folds: int, repeats: int, records=None,
     scores: list[float | None] = []
     fold_seconds: list[float] = []
     worker_compute_seconds: list[float] = []
+    fold_diagnostics: list[dict] = []
     # NB: no `overran` flag here. The coordinator decides overran from the
     # per-fold seconds against the budget (`loop.py` REVERTs with reason
     # 'overran'); the result key stays False because this runner never
@@ -199,6 +200,8 @@ def run(config: dict, folds: int, repeats: int, records=None,
                 }
                 report = spawn(config, request)
                 scores.append(report["primary_value"])
+                if "diagnostics" in report and report["diagnostics"]:
+                    fold_diagnostics.append(report["diagnostics"])
                 progress(stage="EVALUATING", repeat=repeat, fold=fold, folds=folds,
                          n_folds=folds * repeats, score=report["primary_value"],
                          seconds=fold_seconds[-1])
@@ -206,6 +209,7 @@ def run(config: dict, folds: int, repeats: int, records=None,
     if not scored:
         raise RuntimeError("no fold produced a scoreable primary metric")
     summary = summarize_cv_scores(scored)
+    aggregated_diagnostics = fold_diagnostics[-1] if fold_diagnostics else {}
     return {
         **summary,
         "folds": scores,
@@ -214,6 +218,7 @@ def run(config: dict, folds: int, repeats: int, records=None,
         "fold_seconds": fold_seconds,
         "worker_compute_seconds": worker_compute_seconds,
         "budget_seconds": budget,
+        "diagnostics": aggregated_diagnostics,
         # H-08, recorded so a reader knows what the snapshot does NOT cover:
         # the pre-training snapshot hashes the manifest, the dataset and the
         # candidate file; the saved weights/architecture outputs are outside
