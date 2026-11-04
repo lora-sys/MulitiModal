@@ -579,6 +579,12 @@ function setView(view){
   $("view-current").hidden = view !== "current";
   $("view-history").hidden = view !== "history";
 }
+// ?view=history lands straight on the history view — used by archived pages
+// and by screenshots that must not depend on a click.
+try{
+  const wanted = new URLSearchParams(location.search).get("view");
+  if (wanted === "history" || wanted === "current") setView(wanted);
+}catch(e){}
 
 function render(d){
   lastRounds = d.rounds || [];
