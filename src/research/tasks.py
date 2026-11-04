@@ -13,8 +13,8 @@ The adapter surface is exactly the seams the two tasks must NOT drift on:
 which records a fold hands the candidate, how manifests are pruned, which
 trusted evaluator scores the saved model, and which metric is primary.
 Everything task-agnostic (guard, spawn, model_export, the finalize ledger
-mechanics) stays shared code. The registry is a closed pair, not a plugin
-point: a third task is a code change, reviewed as one.
+mechanics) stays shared code. The registry is a closed set, not a
+plugin point: a new task is a code change, reviewed as one.
 
 Nothing here imports the heavy task packages at module load; every adapter
 method imports its own dependencies lazily, like the rest of src/research/.
@@ -33,6 +33,41 @@ class TaskAdapter:
     name: str = ""
     #: the editable file a fresh run of this task starts from
     default_editable: str = ""
+
+    # -- doctor hooks (#61) --------------------------------------------------
+    #
+    # The Doctor is task-agnostic; every task-specific rule reaches it through
+    # these hooks. A hook that returns None means the check CANNOT BE PERFORMED
+    # and the Doctor reports UNVERIFIED — never that it passed.
+
+    #: does this task's input include raw text (do text-leak checks apply)?
+    has_text: bool = False
+    #: does a record carry exactly one label (do single-label checks apply)?
+    single_label: bool = False
+
+    def record_user_key(self, record):
+        """Identity of the real subject behind a record, for the #1 leak check."""
+        return None
+
+    def record_text_key(self, record):
+        """The input text, for exact-duplicate and label-conflict checks."""
+        return None
+
+    def record_label_key(self, record):
+        """The single label of a record, or None."""
+        return None
+
+    def record_has_label(self, record) -> bool | None:
+        """Is any label observable for this record?"""
+        return None
+
+    def label_space(self, manifest: dict):
+        """The frozen class taxonomy, in the order the evaluator indexes it."""
+        return None
+
+    def metric_names(self):
+        """Metric names the trusted evaluator can actually report."""
+        return None
 
     @property
     def primary_metric(self) -> str:
@@ -117,6 +152,32 @@ class ConstitutionAdapter(TaskAdapter):
 
     name = "constitution"
     default_editable = "src/research/candidate.py"
+
+    # -- doctor hooks ---------------------------------------------------------
+    # A tabular task with no text and eight independent labels: text-leak and
+    # label-conflict checks do not apply, and saying so is more honest than
+    # returning a value that pretends they were performed.
+    has_text = False
+    single_label = False
+
+    def record_user_key(self, record):
+        # this dataset has no subject column; identity is the row, which is
+        # exactly the assumption the reports record as UNVERIFIED
+        provenance = getattr(record, "provenance", None) or {}
+        subject = provenance.get("subject_id") if isinstance(provenance, dict) else None
+        if subject:
+            return str(subject)
+        index = getattr(record, "subject_index", None)
+        return None if index is None else f"row-{index}"
+
+    def record_has_label(self, record) -> bool | None:
+        mask = getattr(record, "score_mask", None)
+        return None if mask is None else bool(any(mask))
+
+    def metric_names(self):
+        from runtime.tcm_eval import PRIMARY_METRIC
+
+        return (PRIMARY_METRIC,)
 
     @property
     def primary_metric(self) -> str:
@@ -215,8 +276,14 @@ def adapter_for(task: str) -> TaskAdapter:
         from research.task_sd import SyndromeAdapter
 
         return SyndromeAdapter()
+    if task == "toy":
+        # the TCM-free example task (#61): proves the engine can run with no
+        # project data at all, on a synthetic dataset it generates itself
+        from research.task_toy import ToyAdapter
+
+        return ToyAdapter()
     raise ValueError(
-        f"unknown research task {task!r}; expected 'constitution' or 'syndrome'"
+        f"unknown research task {task!r}; expected 'constitution', 'syndrome' or 'toy'"
     )
 
 
