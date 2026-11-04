@@ -123,8 +123,7 @@ class RunManifestStore:
 
         `artifact_dir` is deliberately NOT required. Under k-fold selection
         a round trains `folds` models and discards them, so no round owns a
-        deliverable; the artifact comes from `AutoResearchHarness.finalize()`
-        (one fit on the selection pool). Requiring `artifact_dir` here would
+        deliverable; the artifact comes from one fit on the selection pool. Requiring `artifact_dir` here would
         make every fold-scored round invisible as a champion and silently
         turn the hill climb into "always keep the first candidate".
         """

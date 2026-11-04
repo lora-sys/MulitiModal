@@ -32,7 +32,6 @@ minutes).
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1433,16 +1432,8 @@ def make_runs_handler(runs_root: str | Path):
 
 
 def serve_runs(runs_root: str | Path, *, host: str = "127.0.0.1",
-               port: int = 8765, serve_tailnet: bool = True) -> int:
+               port: int = 8765) -> int:
     """The FIXED dashboard: one process, one port, following a runs root."""
-    if serve_tailnet:
-        from research.tailnet import serve_local
-
-        tailnet = serve_local(port)
-        if tailnet.get("available"):
-            print(f"tailnet (private, serve — not funnel): {tailnet['url']}", flush=True)
-        else:
-            print(f"tailnet: NOT_AVAILABLE ({tailnet.get('reason')})", flush=True)
     server = ThreadingHTTPServer((host, port), make_runs_handler(runs_root))
     current = resolve_run(runs_root)
     print(f"AutoResearch dashboard on http://{host}:{port}/ · runs root "
@@ -1499,21 +1490,6 @@ def serve(session: ResearchSession, *,  host: str = "127.0.0.1", port: int = 876
     if once:
         sys.stdout.write(render_page())
         return 0
-    # Publish this port on the tailnet automatically, so watching a run needs no
-    # hand-built tunnel. The server still binds loopback and `tailscale serve` is
-    # tailnet-only (never funnel); a failure here is printed, never fatal, and
-    # `AUTORESEARCH_NO_SERVE=1` opts out.
-    if not os.environ.get("AUTORESEARCH_NO_SERVE"):
-        from research.tailnet import serve_local
-
-        tailnet = serve_local(port)
-        if tailnet.get("available"):
-            print(f"tailnet (private, serve — not funnel): {tailnet['url']}",
-                  flush=True)
-        else:
-            print(f"tailnet: NOT_AVAILABLE ({tailnet.get('reason')})"
-                  + (f" — {tailnet['hint']}" if tailnet.get("hint") else ""),
-                  flush=True)
     server = ThreadingHTTPServer((host, port), make_handler(session))
     if host not in ("127.0.0.1", "localhost", "::1"):
         print(f"WARNING: dashboard bound to {host}, which is not loopback, and it "

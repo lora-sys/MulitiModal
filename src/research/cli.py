@@ -1,40 +1,29 @@
-"""The ONE official AutoResearch entry point (issue #61, scope A).
+"""AutoResearch CLI — Karpathy shape, driven by the Skill.
 
-    python -m research.cli <command> ...
+    prepare   freeze one run (worktree + spec + inputs) and diagnose the protocol
+    state     print the full state a proposer must react to
+    step      apply ONE hypothesis, train, score, KEEP/REVERT, print new state
+    status    coordinator summary (read-only)
+    stop      request a stop
+    doctor    diagnose a run's protocol
+    dashboard serve the read-only live view
 
-    doctor     preflight/postflight diagnosis, read-only
-    prepare    create the run (worktree/spec/inputs) and run Doctor preflight,
-               WITHOUT a Coding Agent — the Skill's step 2
-    run        start an autonomous research campaign (needs a real Coding Agent)
-    state      the full proposer state (research_state) for the NEXT round
-    status     current round, stage, metrics, decisions (read-only)
-    stop       ask a running campaign to stop (also ends the live training child)
-    resume     continue from the manifest's completed rounds, never replaying them
-    report     write a deterministic report of a run
-    dashboard  serve the read-only live view on 127.0.0.1
-
-The older `python -m runtime.cli research*` subcommands remain runnable for
-regression but are deprecated: this module is the only place capabilities are
-added. Nothing here re-implements training, isolation or scoring — it wires the
-existing engine (`research.loop`, `research.runner`, `research.evaluator`,
-`research.finalize`) to a stable interface and to a persisted run.
+The Skill (skills/autoresearch/) is the proposer. There is no in-process agent,
+no subprocess coding agent and no autonomous loop: each round is proposed after
+reading the previous result, exactly like Karpathy's program.md loop.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from research.agent import (
-    AgentUnavailable,
-    ProposalRejected,
-    build_proposer,
-)
-from research.doctor import BlockedProtocol
+from research.agent import Hypothesis, ProposalRejected, digest
 from research.loop import GitWorktree, SourceResearchLoop
 from research.session import ResearchSession
 from research.tasks import adapter_for
@@ -42,8 +31,12 @@ from research.tasks import adapter_for
 DEFAULT_PORT = 8765
 DEFAULT_HOST = "127.0.0.1"
 
-
-# -- shared helpers -------------------------------------------------------------
+#: SHA-256 of the authoritative #56/#57 protocol-v2 short selection_records.json.
+#: Source: MulitiModal-i56/runs/sd-v2/short/build-summary.json. Changing this
+#: pin is a new data milestone (AGENTS.md rule 11).
+SELECTION_DATASET_SHA256 = (
+    "e63682908e6bed7488ada3cd68cf50b4a1817a4bfbfa28c0a00b74fbc0af4d55"
+)
 
 
 def _config_for(session_spec: dict, config: dict | None = None) -> dict:
@@ -68,16 +61,13 @@ def _config_for(session_spec: dict, config: dict | None = None) -> dict:
 
 
 def _load_inputs(session: ResearchSession):
-    """Manifest + records for the Doctor, loaded through the task adapter."""
     adapter = adapter_for(session.spec["task"])
     manifest = adapter.load_manifest(session.spec["manifest_path"])
     records = adapter.load_records(session.spec["dataset_path"])
     return adapter, manifest, records
 
 
-def _frozen_hashes(session_spec: dict, adapter) -> dict:
-    import hashlib
-
+def _frozen_hashes(spec: dict, adapter) -> dict:
     def sha(path: str) -> str:
         try:
             return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -87,13 +77,13 @@ def _frozen_hashes(session_spec: dict, adapter) -> dict:
     from research.frozen import TIME_BUDGET_SECONDS
 
     return {
-        "dataset_hash": sha(session_spec["dataset_path"]),
-        "data_manifest_hash": sha(session_spec["manifest_path"]),
+        "dataset_hash": sha(spec["dataset_path"]),
+        "data_manifest_hash": sha(spec["manifest_path"]),
         "metric": adapter.primary_metric,
         "evaluator": "research.evaluator.score_fold (isolated child)",
-        "budget_seconds": session_spec["budget_seconds"],
+        "budget_seconds": spec["budget_seconds"],
         "frozen_time_budget": TIME_BUDGET_SECONDS,
-        "editable": session_spec["editable"],
+        "editable": spec["editable"],
     }
 
 
@@ -115,14 +105,11 @@ def _build_loop(session: ResearchSession, *, task: str) -> SourceResearchLoop:
 
 def _ensure_worktree(repo_root: Path, out_dir: Path, branch: str,
                      base_ref: str | None = None) -> Path:
-    """Create a dedicated worktree for a run, so the main checkout is untouched."""
+    """Create a dedicated worktree so the main checkout is untouched."""
     path = out_dir / "worktree"
     if path.exists() and (path / ".git").exists():
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Ask git whether the branch exists instead of matching its error text: the
-    # message is localised ("一个名为 ... 已经存在"), so a substring check both
-    # misses real conflicts and would break on a different locale.
     exists = subprocess.run(
         ["git", "rev-parse", "--verify", "--quiet", branch],
         cwd=repo_root, text=True, capture_output=True,
@@ -140,254 +127,113 @@ def _ensure_worktree(repo_root: Path, out_dir: Path, branch: str,
     return path
 
 
-# -- commands --------------------------------------------------------------------
+def cmd_prepare(args) -> int:
+    """Freeze one run and diagnose the protocol. No training, no proposer."""
+    out_dir = Path(args.out)
+    if (out_dir / "run.json").exists():
+        print(json.dumps({
+            "ok": False,
+            "error": f"run already prepared at {out_dir}; use state/step",
+        }, ensure_ascii=False, indent=2))
+        return 1
+    repo_root = Path(args.repo or ".").resolve()
+    branch = args.branch or f"autoresearch/{out_dir.name}"
+    worktree = (Path(args.worktree) if args.worktree else
+                _ensure_worktree(repo_root, out_dir, branch,
+                                 base_ref=args.base_ref))
+    branch = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree,
+        text=True, capture_output=True,
+    ).stdout.strip() or branch
+    task = args.task
+    adapter = adapter_for(task)
+    if args.manifest and args.dataset:
+        # The runner runs in a git worktree: relative paths resolve elsewhere.
+        # Pin the one authoritative protocol-v2 pair so a stale intermediate
+        # builder output cannot produce numbers incomparable with #56/#57.
+        manifest_path = Path(args.manifest).resolve(strict=True)
+        dataset_path = Path(args.dataset).resolve(strict=True)
+        dataset_sha = hashlib.sha256(dataset_path.read_bytes()).hexdigest()
+        if dataset_sha != SELECTION_DATASET_SHA256:
+            print(json.dumps({
+                "ok": False,
+                "error": f"selection dataset sha256 {dataset_sha} does not "
+                         f"match frozen protocol-v2 {SELECTION_DATASET_SHA256}",
+            }, ensure_ascii=False, indent=2))
+            return 2
+        data_provenance = {"selection_dataset_sha256": dataset_sha}
+    elif task == "toy":
+        from research.task_toy import write_inputs
 
-
-def cmd_doctor(args) -> int:
-    from research import doctor as doctor_mod
-
-    session = ResearchSession.load(args.run)
-    adapter, manifest, records = _load_inputs(session)
-    if args.postflight:
-        entry = session.entries()[-1] if session.entries() else {}
-        report = doctor_mod.postflight(
-            {"decision": entry.get("decision"), "status": entry.get("status"),
-             "reason": entry.get("reason"),
-             "primary_metric": session.spec["primary_metric"],
-             "primary_value": (entry.get("metrics") or {}).get("primary_value"),
-             "primary_sem": (entry.get("metrics") or {}).get("primary_sem"),
-             "previous_best": (entry.get("observed_evidence") or {}).get("previous_best"),
-             "per_class": entry.get("per_class"),
-             "diagnostics": entry.get("diagnostics")},
-            _config_for(session.spec), adapter, run_id=session.run_id,
+        data_provenance = None
+        manifest_path, dataset_path = write_inputs(
+            out_dir / "inputs", seed=args.seed
         )
     else:
-        report = doctor_mod.preflight(
-            _config_for(session.spec), manifest, records, adapter,
-            run_id=session.run_id,
-        )
+        print(json.dumps({
+            "ok": False,
+            "error": "a real task needs --manifest and --dataset; only the "
+                     "toy example task can materialize its own inputs",
+        }))
+        return 2
+    spec = {
+        "task": task, "editable": args.editable or adapter.default_editable,
+        "worktree": str(worktree), "branch": branch,
+        "folds": args.folds, "repeats": args.repeats,
+        "max_rounds": args.max_rounds,
+        "budget_seconds": args.budget,
+        "primary_metric": adapter.primary_metric,
+        "max_wall_clock_s": args.max_wall_clock_s,
+        "manifest_path": str(manifest_path), "dataset_path": str(dataset_path),
+        "seed": args.seed, "goal": args.goal or "",
+    }
+    session = ResearchSession.create(
+        out_dir,
+        task=task, editable=spec["editable"], worktree=spec["worktree"],
+        branch=spec["branch"], folds=spec["folds"], repeats=spec["repeats"],
+        max_rounds=spec["max_rounds"], budget_seconds=spec["budget_seconds"],
+        primary_metric=adapter.primary_metric,
+        max_wall_clock_s=spec["max_wall_clock_s"],
+        notes="prepared by the Skill",
+    )
+    frozen = session.spec
+    frozen.update({
+        "manifest_path": str(manifest_path), "dataset_path": str(dataset_path),
+        "seed": int(args.seed), "goal": args.goal or "",
+        "frozen_hashes": _frozen_hashes(spec, adapter),
+        "data_provenance": data_provenance,
+    })
+    (session.root / "run.json").write_text(
+        json.dumps(frozen, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    adapter, manifest, records = _load_inputs(session)
+    from research import doctor as doctor_mod
+
+    report = doctor_mod.preflight(
+        _config_for(session.spec), manifest, records, adapter,
+        run_id=session.run_id,
+    )
     session.write_doctor(report.to_dict())
-    print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    print(json.dumps({
+        "ok": True, "prepared": True, "blocked": report.blocked,
+        "run_dir": str(session.root), "run_id": session.run_id,
+        "doctor": report.to_dict(),
+    }, ensure_ascii=False, indent=2))
     return 1 if report.blocked else 0
 
 
-def _start_or_resume(args, *, resume: bool, prepare_only: bool = False) -> int:
-    out_dir = Path(args.out)
-    if resume:
-        session = ResearchSession.load(out_dir)
-        spec = session.spec
-    else:
-        repo_root = Path(args.repo or ".").resolve()
-        branch = args.branch or f"autoresearch/{Path(out_dir).name}"
-        if args.worktree:
-            worktree = Path(args.worktree)
-        else:
-            worktree = _ensure_worktree(repo_root, out_dir, branch,
-                                        base_ref=args.base_ref)
-            branch = subprocess.run(
-                ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree,
-                text=True, capture_output=True,
-            ).stdout.strip() or branch
-        task = args.task
-        adapter = adapter_for(task)
-        if args.manifest and args.dataset:
-            manifest_path, dataset_path = Path(args.manifest), Path(args.dataset)
-        elif task == "toy":
-            from research.task_toy import write_inputs
-
-            manifest_path, dataset_path = write_inputs(
-                out_dir / "inputs", seed=args.seed
-            )
-        else:
-            print(json.dumps({
-                "ok": False,
-                "error": "a real task needs --manifest and --dataset; only the "
-                         "toy example task can materialize its own inputs",
-            }))
-            return 2
-        spec_preview = {
-            "task": task, "editable": args.editable or adapter.default_editable,
-            "worktree": str(worktree), "branch": branch,
-            "folds": args.folds, "repeats": args.repeats,
-            "max_rounds": args.max_rounds,
-            "budget_seconds": args.budget,
-            "primary_metric": adapter.primary_metric,
-            "max_wall_clock_s": args.max_wall_clock_s,
-            "manifest_path": str(manifest_path), "dataset_path": str(dataset_path),
-            "seed": args.seed, "goal": args.goal or "",
-        }
-        session = ResearchSession.create(
-            out_dir,
-            task=task,
-            editable=spec_preview["editable"],
-            worktree=spec_preview["worktree"],
-            branch=spec_preview["branch"],
-            folds=spec_preview["folds"],
-            repeats=spec_preview["repeats"],
-            max_rounds=spec_preview["max_rounds"],
-            budget_seconds=spec_preview["budget_seconds"],
-            primary_metric=adapter.primary_metric,
-            max_wall_clock_s=spec_preview["max_wall_clock_s"],
-            notes="created by research.cli run",
-        )
-        spec = session.spec
-        # the frozen spec carries the data binding too, so doctor/status/report
-        # can rebuild the same inputs without being told again
-        spec.update({
-            "manifest_path": str(manifest_path),
-            "dataset_path": str(dataset_path),
-            "seed": int(args.seed),
-            "goal": args.goal or "",
-            "agent_command": args.agent_command or "",
-            "frozen_hashes": _frozen_hashes(spec_preview, adapter),
-        })
-        (session.root / "run.json").write_text(
-            json.dumps(spec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
-    adapter, manifest, records = _load_inputs(session)
-    if prepare_only:
-        # Skill step 2: create the run and diagnose the protocol, then STOP.
-        # No proposer, no training, no autonomous-research claim.
-        from research import doctor as doctor_mod
-
-        report = doctor_mod.preflight(
-            _config_for(session.spec), manifest, records, adapter,
-            run_id=session.run_id,
-        )
-        session.write_doctor(report.to_dict())
-        print(json.dumps({
-            "ok": True, "prepared": True, "blocked": report.blocked,
-            "run_dir": str(session.root), "run_id": session.run_id,
-            "doctor": report.to_dict(),
-        }, ensure_ascii=False, indent=2))
-        return 1 if report.blocked else 0
+def cmd_state(args) -> int:
+    """The FULL proposer state: what the next hypothesis must react to."""
+    session = ResearchSession.load(args.run)
     loop = _build_loop(session, task=session.spec["task"])
-    proposer = build_proposer(args.agent_command, stub_steps=None,
-                              timeout_s=args.agent_timeout)
-    if args.allow_stub and not args.agent_command:
-        from research.agent import DeterministicStubProposer
-
-        worktree_path = Path(session.spec["worktree"])
-        editable = session.spec["editable"]
-        proposer = DeterministicStubProposer(steps=[
-            _toy_width_step(worktree_path, editable, i)
-            for i in range(int(args.block or args.max_rounds))
-        ])
-    block = args.block
-    # start the dashboard BEFORE the campaign: the issue asks for a URL that can
-    # be opened *while* training runs, and spawning it afterwards means the page
-    # only appears once there is nothing left to watch
-    dashboard_info = None
-    if args.dashboard:
-        
-        try:
-            dashboard_info = ensure_dashboard(
-                Path(args.out).resolve().parent, args.port)
-        except OSError as exc:
-            print(json.dumps({"dashboard": {"ok": False, "error": str(exc)}}),
-                  flush=True)
-        else:
-            print(json.dumps({"dashboard": dashboard_info}), flush=True)
-    start = time.monotonic()
-    try:
-        summary = loop.run_autonomous(
-            session, proposer, allow_stub=bool(args.allow_stub),
-            doctor_context={"config": _config_for(session.spec), "manifest": manifest,
-                            "records": records, "adapter": adapter},
-            max_rounds=int(block) if block is not None else None,
-        )
-    except (AgentUnavailable, ProposalRejected) as exc:
-        print(json.dumps({"ok": False, "error": f"{type(exc).__name__}: {exc}"},
-                         ensure_ascii=False, indent=2))
-        return 1
-    except BlockedProtocol as exc:
-        print(json.dumps({"ok": False, "blocked": True, "error": str(exc)},
-                         ensure_ascii=False, indent=2))
-        return 1
-    if dashboard_info:
-        summary["dashboard"] = dashboard_info
-    summary.update({
-        "run_dir": str(session.root),
-        "wall_clock_s": round(time.monotonic() - start, 1),
-    })
-    print(json.dumps({"ok": True, **summary}, ensure_ascii=False, indent=2))
+    state = loop.research_state(session=session, agent_kind=args.agent_kind)
+    print(json.dumps(state, ensure_ascii=False, indent=2))
     return 0
 
 
-def _toy_width_step(worktree: Path, editable: str, index: int):
-    """A scripted engineering step for the toy task; explicitly NOT an agent.
-
-    It reads the CURRENT editable file and builds a hunk from the lines that
-    actually surround `WIDTH`, with context on both sides. A patch with no
-    trailing context asserts "the file ends here", so an append-style hunk
-    applies once and then fails forever — the first version of this stub made
-    that mistake and every round was (correctly) refused as INVALID_PROTOCOL.
-
-    It is still a stub, not an agent: the rule is fixed in advance, which is why
-    runs driven by it are recorded as `autonomous_research=false`.
-    """
-    import re
-
-    from research.agent import Hypothesis, ProposalRejected
-
-    def run(_state: dict) -> Hypothesis:
-        path = worktree / editable
-        lines = path.read_text(encoding="utf-8").splitlines()
-        anchor = next(
-            (i for i, line in enumerate(lines) if re.match(r"^WIDTH = \d+$", line)),
-            None,
-        )
-        if anchor is None:
-            raise ProposalRejected("stub anchor 'WIDTH = <int>' not found")
-        current = int(lines[anchor].split("=")[1])
-        target = min(256, current + 32)
-        before = lines[anchor - 1] if anchor > 0 else None
-        after = lines[anchor + 1] if anchor + 1 < len(lines) else None
-        if before is None or after is None:
-            raise ProposalRejected("stub needs a context line on both sides of WIDTH")
-        start_line = anchor  # 0-based context start == previous line
-        old_side = [before, lines[anchor], after]
-        new_side = [before, f"WIDTH = {target}", after]
-        hunk = (
-            f"@@ -{start_line},3 +{start_line},3 @@\n"
-            f" {old_side[0]}\n"
-            f"-{old_side[1]}\n"
-            f"+{new_side[1]}\n"
-            f" {old_side[2]}\n"
-        )
-        patch = (
-            f"diff --git a/{editable} b/{editable}\n"
-            f"--- a/{editable}\n"
-            f"+++ b/{editable}\n"
-            + hunk
-        )
-        return Hypothesis(
-            hypothesis=f"width {current} -> {target} raises capacity",
-            controlled_change="only the trunk width; data, budget and loss are fixed",
-            expected_observation="macro-F1 rises if the toy task is capacity-limited",
-            patch=patch,
-            intent=f"stub: widen {current} -> {target}",
-            next_action_if_keep=f"try width {min(256, target + 32)}",
-            next_action_if_revert="stop widening and try regularisation",
-        )
-    return run
-
-
 def cmd_step(args) -> int:
-    """Apply ONE externally-proposed round, then print the new state.
-
-    This is how a Coding Agent drives the loop one round at a time: the agent
-    reads the state, writes a hypothesis file, calls `step`, and reads the state
-    again. Every round is therefore proposed AFTER the previous result exists —
-    which is the difference between autonomous research and replaying a plan, and
-    why `batch_supplied` is False and both digests are recorded.
-    """
-    from research.agent import Hypothesis
-
+    """Apply ONE externally-proposed round, then print the new state."""
     session = ResearchSession.load(args.run)
-    # budget / stop / wall-clock gates: a step-driven campaign must honour the
-    # same frozen limits as an autonomous one, otherwise `max_rounds` is a
-    # suggestion rather than a budget (issue #61 acceptance).
     if session.stop_requested():
         print(json.dumps({"ok": False, "error": "campaign stopped"}))
         return 1
@@ -400,25 +246,18 @@ def cmd_step(args) -> int:
     adapter, manifest, records = _load_inputs(session)
     loop = _build_loop(session, task=session.spec["task"])
     payload = json.loads(Path(args.proposal_file).read_text(encoding="utf-8"))
-    # a deliberate STOP needs no patch; Hypothesis.from_dict requires one, so
-    # handle it here rather than silently recording an invalid protocol.
     if str(payload.get("intent", "")).strip().upper() == "STOP":
         print(json.dumps({"ok": True, "stopped": True,
                           "reason": str(payload.get("hypothesis") or "proposer STOP")}))
         return 0
-    # provenance: which state the proposal claims to answer, and what was
-    # submitted. `step` had been recording neither, so a reader could not tell
-    # whether a proposal followed the previous round or replaced it.
-    from research.agent import digest as agent_digest
-
     state_before = loop.research_state(session=session,
                                        agent_kind="external-coding-agent")
     try:
         hypothesis = Hypothesis.from_dict(
             payload,
-            raw_reply_sha256=agent_digest(
+            raw_reply_sha256=digest(
                 Path(args.proposal_file).read_text(encoding="utf-8")),
-            context_sha256=agent_digest(state_before),
+            context_sha256=digest(state_before),
         )
     except ProposalRejected as exc:
         print(json.dumps({"ok": False, "error": f"invalid proposal: {exc}"},
@@ -450,92 +289,48 @@ def cmd_step(args) -> int:
     return 0
 
 
-def cmd_prepare(args) -> int:
-    """Prepare a run WITHOUT a Coding Agent, then run the Doctor preflight.
+def cmd_doctor(args) -> int:
+    from research import doctor as doctor_mod
 
-    This is the Skill's step 2. ``run`` is for a self-driving campaign with a
-    real agent command; ``prepare`` gives a Skill-driven campaign everything it
-    needs (worktree, frozen spec, inputs, doctor.json) and stops, so the Agent
-    can then ``state`` -> write one hypothesis -> ``step`` once per round.
-    """
-    out_dir = Path(args.out)
-    if (out_dir / "run.json").exists():
-        print(json.dumps({
-            "ok": False,
-            "error": f"run already prepared at {out_dir}; use state/step",
-        }, ensure_ascii=False, indent=2))
-        return 1
-    # prepare creates the run, runs the Doctor preflight, and stops. It never
-    # constructs a proposer and never claims autonomous research.
-    return _start_or_resume(args, resume=False, prepare_only=True)
-
-
-def cmd_state(args) -> int:
-    """Print the FULL proposer state: what the next hypothesis must react to."""
     session = ResearchSession.load(args.run)
-    loop = _build_loop(session, task=session.spec["task"])
-    state = loop.research_state(session=session, agent_kind=args.agent_kind)
-    print(json.dumps(state, ensure_ascii=False, indent=2))
-    return 0
-
-
-def cmd_run(args) -> int:
-    return _start_or_resume(args, resume=False)
-
-
-def cmd_resume(args) -> int:
-    return _start_or_resume(args, resume=True)
+    adapter, manifest, records = _load_inputs(session)
+    if args.postflight:
+        entry = session.entries()[-1] if session.entries() else {}
+        report = doctor_mod.postflight(
+            {"decision": entry.get("decision"), "status": entry.get("status"),
+             "reason": entry.get("reason"),
+             "primary_metric": session.spec["primary_metric"],
+             "primary_value": (entry.get("metrics") or {}).get("primary_value"),
+             "primary_sem": (entry.get("metrics") or {}).get("primary_sem"),
+             "previous_best": (entry.get("observed_evidence") or {}).get("previous_best"),
+             "per_class": entry.get("per_class"),
+             "diagnostics": entry.get("diagnostics")},
+            _config_for(session.spec), adapter, run_id=session.run_id,
+        )
+    else:
+        report = doctor_mod.preflight(
+            _config_for(session.spec), manifest, records, adapter,
+            run_id=session.run_id,
+        )
+    session.write_doctor(report.to_dict())
+    print(json.dumps(report.to_dict(), ensure_ascii=False, indent=2))
+    return 1 if report.blocked else 0
 
 
 def cmd_status(args) -> int:
     session = ResearchSession.load(args.run)
-    view = session.status(after_seq=args.after, events_limit=args.events)
-    print(json.dumps(view, ensure_ascii=False, indent=2))
+    print(json.dumps(session.status(after_seq=args.after,
+                                    events_limit=args.events),
+                     ensure_ascii=False, indent=2))
     return 0
 
 
 def cmd_stop(args) -> int:
     session = ResearchSession.load(args.run)
-    write = session.request_stop(args.reason)
-    print(json.dumps({"ok": True, "run_id": session.run_id, **write},
+    print(json.dumps({"ok": True, "run_id": session.run_id,
+                      **session.request_stop(args.reason)},
                      ensure_ascii=False, indent=2))
     return 0
-
-
-def cmd_report(args) -> int:
-    from research.report import write_report
-
-    session = ResearchSession.load(args.run)
-    paths = write_report(session, out_dir=args.out, screenshot=args.screenshot,
-                         browser=args.browser)
-    print(json.dumps({"ok": True, **{k: str(v) for k, v in paths.items()}},
-                     ensure_ascii=False, indent=2))
-    return 0
-
-
-def ensure_dashboard(runs_root, port: int, *, no_serve: bool = False) -> dict:
-    """Make sure THE dashboard is running, and return its URL.
-
-    A fixed process on a fixed port: if something already answers there it is
-    reused and nothing is started. Spawning one dashboard per campaign is what
-    left a trail of processes and stray ports behind.
-    """
-    import socket
-
-    url = f"http://127.0.0.1:{port}/"
-    with socket.socket() as probe:
-        probe.settimeout(0.6)
-        if probe.connect_ex(("127.0.0.1", port)) == 0:
-            return {"reused": True, "url": url, "port": port}
-    command = [sys.executable, "-m", "research.cli", "dashboard",
-               "--runs-root", str(runs_root), "--port", str(port)]
-    if no_serve:
-        command.append("--no-serve")
-    process = subprocess.Popen(command, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, start_new_session=True,
-                               cwd=str(Path(__file__).resolve().parents[2]))
-    return {"reused": False, "pid": process.pid, "url": url, "port": port,
-            "command": " ".join(command)}
 
 
 def cmd_dashboard(args) -> int:
@@ -544,8 +339,7 @@ def cmd_dashboard(args) -> int:
     if args.runs_root:
         from research.dashboard import serve_runs
 
-        return serve_runs(args.runs_root, host=args.host, port=args.port,
-                          serve_tailnet=not args.no_serve)
+        return serve_runs(args.runs_root, host=args.host, port=args.port)
     session = ResearchSession.load(args.run)
     if args.static:
         html = render_static(session)
@@ -559,60 +353,27 @@ def cmd_dashboard(args) -> int:
     return serve(session, host=args.host, port=args.port, once=args.once)
 
 
-# -- argparse --------------------------------------------------------------------
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autoresearch", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("doctor", help="diagnose a run's protocol (read-only)")
-    p.add_argument("--run", required=True, help="run directory")
-    p.add_argument("--postflight", action="store_true",
-                   help="diagnose the last finished round instead of the preflight")
-    p.set_defaults(func=cmd_doctor)
-
-    def add_run_args(q, *, resume: bool) -> None:
-        q.add_argument("--out", required=True, help="run directory")
-        q.add_argument("--task", default="toy",
-                       help="task adapter name (toy|constitution|syndrome)")
-        q.add_argument("--manifest", default=None)
-        q.add_argument("--dataset", default=None)
-        q.add_argument("--repo", default=".", help="repository to cut a worktree from")
-        q.add_argument("--worktree", default=None,
-                       help="use this existing worktree instead of creating one")
-        q.add_argument("--branch", default=None)
-        q.add_argument("--base-ref", default=None)
-        q.add_argument("--editable", default=None)
-        q.add_argument("--folds", type=int, default=3)
-        q.add_argument("--repeats", type=int, default=1)
-        q.add_argument("--max-rounds", type=int, default=3)
-        q.add_argument("--budget", type=float, default=2.0,
-                       help="fixed wall clock per fold, in seconds")
-        q.add_argument("--max-wall-clock-s", type=float, default=6 * 3600)
-        q.add_argument("--seed", type=int, default=20261105)
-        q.add_argument("--goal", default=None, help="frozen research objective")
-        q.add_argument("--agent-command", default=None,
-                       help="command for a real Coding Agent (reads the prompt on stdin, "
-                            "prints the proposal JSON on stdout)")
-        q.add_argument("--agent-timeout", type=float, default=600.0)
-        q.add_argument("--allow-stub", action="store_true",
-                       help="run the engineering path with a deterministic stub; the run "
-                            "is recorded as autonomous_research=false")
-        q.add_argument("--block", type=int, default=None,
-                       help="rounds to run in this invocation (default: all remaining)")
-        q.add_argument("--dashboard", action="store_true",
-                       help="also start the read-only dashboard as its own process")
-        q.add_argument("--port", type=int, default=DEFAULT_PORT)
-
-    p = sub.add_parser("step", help="apply one externally-proposed round (agent-driven)")
-    p.add_argument("--run", required=True)
-    p.add_argument("--proposal-file", required=True)
-    p.add_argument("--proposer", default="external-coding-agent")
-    p.set_defaults(func=cmd_step)
-
-    p = sub.add_parser("prepare", help="create a run + Doctor preflight, no agent needed")
-    add_run_args(p, resume=False)
+    p = sub.add_parser("prepare", help="freeze a run + Doctor preflight")
+    p.add_argument("--out", required=True)
+    p.add_argument("--task", default="toy")
+    p.add_argument("--manifest", default=None)
+    p.add_argument("--dataset", default=None)
+    p.add_argument("--repo", default=".")
+    p.add_argument("--worktree", default=None)
+    p.add_argument("--branch", default=None)
+    p.add_argument("--base-ref", default=None)
+    p.add_argument("--editable", default=None)
+    p.add_argument("--folds", type=int, default=3)
+    p.add_argument("--repeats", type=int, default=1)
+    p.add_argument("--max-rounds", type=int, default=3)
+    p.add_argument("--budget", type=float, default=2.0)
+    p.add_argument("--max-wall-clock-s", type=float, default=6 * 3600)
+    p.add_argument("--seed", type=int, default=20261105)
+    p.add_argument("--goal", default=None)
     p.set_defaults(func=cmd_prepare)
 
     p = sub.add_parser("state", help="full proposer state for the next round")
@@ -620,17 +381,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent-kind", default="external-coding-agent")
     p.set_defaults(func=cmd_state)
 
-    p = sub.add_parser("run", help="start an autonomous campaign")
-    add_run_args(p, resume=False)
-    p.set_defaults(func=cmd_run)
-
-    p = sub.add_parser("resume", help="continue a campaign from its manifest")
-    add_run_args(p, resume=True)
-    p.set_defaults(func=cmd_resume)
-
-    p = sub.add_parser("status", help="current state of a run (read-only)")
+    p = sub.add_parser("step", help="apply one externally-proposed round")
     p.add_argument("--run", required=True)
-    p.add_argument("--after", type=int, default=0, help="events with seq > after")
+    p.add_argument("--proposal-file", required=True)
+    p.add_argument("--proposer", default="external-coding-agent")
+    p.set_defaults(func=cmd_step)
+
+    p = sub.add_parser("doctor", help="diagnose a run's protocol (read-only)")
+    p.add_argument("--run", required=True)
+    p.add_argument("--postflight", action="store_true")
+    p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("status", help="coordinator summary (read-only)")
+    p.add_argument("--run", required=True)
+    p.add_argument("--after", type=int, default=0)
     p.add_argument("--events", type=int, default=100)
     p.set_defaults(func=cmd_status)
 
@@ -639,30 +403,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--reason", default="operator request")
     p.set_defaults(func=cmd_stop)
 
-    p = sub.add_parser("report", help="write a report for a run")
-    p.add_argument("--run", required=True)
-    p.add_argument("--out", default=None)
-    p.add_argument("--screenshot", action="store_true",
-                   help="also capture report-<run_id>.png from the static page "
-                        "(NOT_AVAILABLE is reported if no browser exists)")
-    p.add_argument("--browser", default=None, help="override the browser binary")
-    p.set_defaults(func=cmd_report)
-
     p = sub.add_parser("dashboard", help="serve the read-only live view")
-    p.add_argument("--run", default=None, help="serve ONE run")
-    p.add_argument("--runs-root", default=None,
-                   help="serve the newest run under this root and follow it as "
-                        "campaigns start — this is the fixed, single dashboard")
+    p.add_argument("--run", default=None)
+    p.add_argument("--runs-root", default=None)
     p.add_argument("--no-serve", action="store_true",
-                   help="do not publish this port on the tailnet")
+                   help="accepted for compatibility; the dashboard is loopback-only")
     p.add_argument("--host", default=DEFAULT_HOST)
     p.add_argument("--port", type=int, default=DEFAULT_PORT)
-    p.add_argument("--once", action="store_true",
-                   help="render the page to stdout and exit (used by tests)")
-    p.add_argument("--static", action="store_true",
-                   help="write one self-contained page (payload inlined, no polling) "
-                        "for archiving or screenshots")
-    p.add_argument("--out", default=None, help="file for --static")
+    p.add_argument("--once", action="store_true")
+    p.add_argument("--static", action="store_true")
+    p.add_argument("--out", default=None)
     p.set_defaults(func=cmd_dashboard)
     return parser
 
@@ -673,9 +423,5 @@ def main(argv: list[str] | None = None) -> int:
     if not callable(getattr(args, "func", None)):
         parser.error(f"subcommand {args.command!r} has no handler wired")
     if args.command == "dashboard" and not (args.run or args.runs_root):
-        parser.error("dashboard needs --run (one run) or --runs-root (the fixed view)")
+        parser.error("dashboard needs --run or --runs-root")
     return args.func(args)
-
-
-if __name__ == "__main__":
-    sys.exit(main())

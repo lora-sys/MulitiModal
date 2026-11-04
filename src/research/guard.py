@@ -64,7 +64,6 @@ FROZEN_PATHS: tuple[str, ...] = (
     "src/research/events.py", "src/research/report.py",
     "src/research/cli.py", "src/research/agent.py",
     "src/research/dashboard.py", "src/research/source_preflight.py",
-    "src/research/tailnet.py",
     "src/runtime/tcm_eval.py", "src/runtime/real_data.py",
     "src/runtime/baselines.py", "src/runtime/manifest.py",
 )
