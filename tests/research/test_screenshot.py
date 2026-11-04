@@ -113,3 +113,45 @@ def test_the_live_page_hydrates_before_it_polls(tmp_path):
     assert "if (window.__STATIC_PAYLOAD__)" in live
     assert "setInterval(tick, 3000)" in live, "the live page must still poll"
     assert "ctl.abort()" in live, "a hung request must surface, not hang"
+
+
+def test_root_route_polls_and_static_route_does_not(tmp_path):
+    """/`` used frozen=True by accident, so the 3s poll never started and
+    the live page silently froze after first paint. /static must stay frozen
+    so a screenshot can settle."""
+    import urllib.request
+
+    from research import dashboard as dash
+    from research.session import ResearchSession
+
+    session = ResearchSession.create(
+        tmp_path / "run", task="toy", editable="src/research/candidate_toy.py",
+        worktree=str(tmp_path / "wt"), branch="autoresearch/poll",
+        folds=2, repeats=1, max_rounds=3, budget_seconds=1.0,
+        primary_metric="toy/macro_f1",
+    )
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), dash.make_handler(session))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        root = urllib.request.urlopen(base + "/", timeout=5).read().decode()
+        static = urllib.request.urlopen(base + "/static", timeout=5).read().decode()
+        assert '"frozen": false' in root
+        assert '"frozen": true' in static
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_history_view_has_round_and_stage_controls(tmp_path):
+    """The history view is the selectable surface: round, stage and the
+    unified trend grid must be real DOM, not just a string in a comment."""
+    from research.dashboard import render_page
+
+    page = render_page()
+    for fragment in ('id="roundSel"', 'id="stageSel"', 'id="trends"',
+                     'data-view="history"', 'id="sliceEvents"'):
+        assert fragment in page, fragment

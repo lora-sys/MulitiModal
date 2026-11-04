@@ -304,12 +304,16 @@ class ResearchSession:
                     "primary_value": metrics.get("primary_value"),
                     "primary_std": metrics.get("primary_std"),
                     "primary_sem": metrics.get("primary_sem"),
+                    "fold_seconds": metrics.get("fold_seconds"),
                     "best_so_far": entry.get("best_so_far"),
                     "complexity": entry.get("complexity"),
                     "git_commit_sha": entry.get("git_commit_sha"),
                     "proposer": entry.get("proposer"),
                     "agent_kind": entry.get("agent_kind"),
                     "elapsed_s": entry.get("elapsed_s"),
+                    "diagnostics": entry.get("diagnostics") or {},
+                    "per_class": entry.get("per_class"),
+                    "doctor_counts": (entry.get("doctor") or {}).get("counts") or {},
                 }
             )
         return {

@@ -239,64 +239,188 @@ PAGE = """<!doctype html>
 <title>__TITLE__</title>
 <style>
 :root{
+  /* lieflat-charts Mono grammar: unchanged tokens, lifted from mono-tokens.js */
   --ink:#1C1C1A; --paper:#F0EFEB; --muted:#8F8E88; --faint:#C6C5BF; --grid:#DEDDD6;
   --l1:#1C1C1A; --l2:#4A4944; --l3:#6A6963; --l4:#8F8E88; --l5:#B0AFA9; --l6:#C6C5BF;
+  --card:#F7F6F2;
   --font:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   --radius:24px;
+  color-scheme:light;
+}
+/* a monitoring strip is read around the clock; honour the host's theme.
+   The same Mono ladder is inverted, so brightness still encodes importance. */
+@media (prefers-color-scheme:dark){
+  :root{
+    --ink:#F0EFEB; --paper:#161614; --card:#1E1E1B;
+    --muted:#9A9992; --faint:#6B6A64; --grid:#333330;
+    --l1:#F0EFEB; --l2:#CAC9C2; --l3:#A4A39C; --l4:#8B8A83;
+    --l5:#5F5E59; --l6:#45443F;
+    color-scheme:dark;
+  }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--font);
-     -webkit-font-smoothing:antialiased}
-/* the run bar: conclusion first, then the facts, joined with · */
-header{padding:28px 32px 4px}
-h1{margin:0;font-size:26px;font-weight:700;letter-spacing:-.02em;line-height:1.15}
-.sub{margin:8px 0 0;color:var(--muted);font-size:14px;font-weight:500}
+     -webkit-font-smoothing:antialiased;line-height:1.5}
+.eyebrow{margin:0 0 10px;color:var(--l4);font-size:10px;font-weight:700;
+         letter-spacing:.18em;text-transform:uppercase}
+header{padding:36px 32px 22px;border-bottom:1px solid var(--grid)}
+h1{margin:0;font-size:34px;font-weight:700;letter-spacing:-.035em;line-height:1.1}
+.sub{margin:10px 0 0;color:var(--muted);font-size:13px;font-weight:500}
 .sub b{color:var(--ink);font-weight:700}
-.pill{display:inline-block;margin-left:10px;padding:2px 10px;border-radius:999px;
-      font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-      background:var(--ink);color:var(--paper)}
+.pill{display:inline-flex;align-items:center;gap:6px;margin-left:10px;padding:3px 11px;
+      border-radius:999px;font-size:10px;font-weight:700;letter-spacing:.07em;
+      text-transform:uppercase;background:var(--ink);color:var(--paper);
+      vertical-align:middle}
+.pill::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;
+              opacity:.85}
 .pill.stale{background:var(--l3)}
-.wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:20px;
-      padding:20px 32px 32px}
-/* borderless cards, separated by whitespace; radius 24 */
-.card{background:var(--paper);border-radius:var(--radius);padding:22px 24px 18px}
+.wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));
+      gap:18px;padding:24px 32px 40px}
+/* borderless cards separated by whitespace, radius 24 (Mono grammar).
+   A one-step paper lift gives the card an edge without a border or shadow. */
+/* No entrance animation: a monitoring page must be fully legible on first
+   paint, including in headless captures and on slow links where a delayed
+   opacity:0 frame can leave a card permanently dim. */
+.card{background:var(--card);border-radius:var(--radius);padding:26px 28px 22px;
+      min-width:0}
 .card.wide{grid-column:1/-1}
-h2{margin:0;font-size:16.5px;font-weight:700;letter-spacing:-.02em}
-.csub{margin:6px 0 16px;color:var(--muted);font-size:12px;font-weight:500}
-.src{margin:14px 0 0;color:var(--faint);font-size:10px;font-weight:600;
-     letter-spacing:.12em;text-transform:uppercase}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--grid);vertical-align:top}
-th{color:var(--muted);font-weight:600;font-size:10px;letter-spacing:.1em;text-transform:uppercase}
-td.num{font-variant-numeric:tabular-nums;font-weight:600}
-.tag{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
-.tag.KEEP{color:var(--ink)}
-.tag.REVERT{color:var(--l4)}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
-      color:var(--l2);line-height:1.7}
-.row{display:flex;gap:10px;align-items:baseline;color:var(--muted);font-size:12.5px}
+h2{margin:0;font-size:18px;font-weight:700;letter-spacing:-.025em;line-height:1.3}
+.csub{margin:7px 0 18px;color:var(--muted);font-size:12.5px;font-weight:500}
+.src{margin:16px 0 0;color:var(--l3);font-size:10px;font-weight:600;
+     letter-spacing:.11em;text-transform:uppercase}
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--grid);
+      vertical-align:top;overflow-wrap:anywhere}
+th{color:var(--l4);font-weight:700;font-size:10px;letter-spacing:.1em;text-transform:uppercase}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+tbody tr:hover{background:var(--paper)}
+.tag{display:inline-flex;align-items:center;padding:3px 9px;border-radius:7px;
+     font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+     background:var(--grid);color:var(--l3)}
+.tag.KEEP{background:var(--ink);color:var(--paper)}
+.tag.REVERT{background:transparent;background:var(--grid);color:var(--l3)}
+.mono{font-family:var(--mono);font-size:11.5px;color:var(--l2);line-height:1.75}
+.row{display:flex;gap:18px;align-items:baseline;flex-wrap:wrap;color:var(--muted);
+     font-size:12.5px}
 .row b{color:var(--ink);font-weight:700}
-.finding{font-size:12.5px;margin:6px 0}
+.finding{font-size:12.5px;margin:7px 0;padding-left:11px;position:relative}
+.finding::before{content:"";position:absolute;left:0;top:.55em;width:4px;height:4px;
+                 border-radius:50%;background:var(--l5)}
 .finding.BLOCKED{color:var(--ink);font-weight:700}
+.finding.BLOCKED::before{background:var(--ink)}
 .finding.WARNING{color:var(--l2);font-weight:600}
+.finding.WARNING::before{background:var(--l3)}
 .finding.INFO,.finding.UNVERIFIED{color:var(--muted)}
 .na{color:var(--muted);font-style:italic}
-.hyp{font-size:15px;font-weight:600;line-height:1.45}
-.kv{margin-top:10px;color:var(--muted);font-size:12.5px}
+.hyp{font-size:17px;font-weight:600;line-height:1.45;letter-spacing:-.01em}
+.kv{margin-top:11px;color:var(--muted);font-size:12.5px}
 .kv b{color:var(--ink)}
 svg text{font-family:var(--font)}
-/* ECharts needs an explicit container height; without it init() finds no size and
-   draws nothing (silently, which is how this rendered as an empty card) */
-#chart{height:250px;width:100%}
-footer{padding:18px 32px 28px;color:var(--faint);font-size:10px;font-weight:600;
-       letter-spacing:.12em;text-transform:uppercase}
+/* ECharts needs an explicit height; the KPI counter sits in the top band,
+   so the plot gets more room than the old 250px card. */
+#chart{height:320px;width:100%;cursor:pointer}
+#chart:focus-visible{outline:2px solid var(--l3);outline-offset:4px;border-radius:8px}
+.legend{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:0 0 8px;
+        color:var(--l4);font-size:11px;font-weight:600}
+.legend i{display:inline-block;width:9px;height:9px;margin-right:6px;
+          vertical-align:-1px;border-radius:50%;background:var(--ink)}
+.legend i.hollow{background:transparent;border:1.5px solid var(--l4)}
+.legend i.dash{width:18px;height:0;border-radius:0;background:transparent;
+               border-top:1.5px dashed var(--l4);vertical-align:3px}
+/* ── view controls ─────────────────────────────────────────────────────── */
+[hidden]{display:none!important}
+.controls{display:flex;gap:18px;align-items:center;flex-wrap:wrap;
+          padding:14px 32px;border-bottom:1px solid var(--grid);
+          position:sticky;top:0;z-index:20;background:var(--paper)}
+.tabs{display:inline-flex;gap:4px;padding:4px;border-radius:999px;background:var(--card)}
+.tab{appearance:none;border:0;background:transparent;color:var(--l4);cursor:pointer;
+     padding:7px 18px;border-radius:999px;font:inherit;font-size:12px;font-weight:700;
+     letter-spacing:.08em;text-transform:uppercase;transition:background .2s,color .2s}
+.tab:hover{color:var(--ink)}
+.tab.is-active{background:var(--ink);color:var(--paper)}
+.tab:focus-visible,.ghost:focus-visible,select:focus-visible{outline:2px solid var(--l3);
+     outline-offset:2px}
+.selectors{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-left:auto}
+.selectors label{display:inline-flex;align-items:center;gap:8px;color:var(--l4);
+  font-size:10px;font-weight:700;letter-spacing:.11em;text-transform:uppercase}
+select{appearance:none;background:var(--card);color:var(--ink);border:0;border-radius:9px;
+  padding:8px 30px 8px 12px;font:inherit;font-size:12px;font-weight:600;cursor:pointer;
+  background-image:linear-gradient(45deg,transparent 50%,var(--l4) 50%),
+                   linear-gradient(135deg,var(--l4) 50%,transparent 50%);
+  background-position:calc(100% - 15px) 52%,calc(100% - 10px) 52%;
+  background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.ghost{appearance:none;background:transparent;border:0;color:var(--l4);cursor:pointer;
+  font:inherit;font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+  padding:8px 10px;border-radius:9px}
+.ghost:hover{background:var(--card);color:var(--ink)}
+/* ── history: slice inspector ─────────────────────────────────────────── */
+.slicehead{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+.slicehead .chip{display:inline-block;padding:3px 10px;border-radius:7px;background:var(--ink);
+  color:var(--paper);font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase}
+.slicegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+  gap:18px;margin-top:18px}
+.sliceblock h3{margin:0 0 10px;color:var(--l4);font-size:10px;font-weight:700;
+  letter-spacing:.12em;text-transform:uppercase}
+.kvrow{display:flex;justify-content:space-between;gap:12px;padding:6px 0;
+  border-bottom:1px solid var(--grid);font-size:12.5px;color:var(--muted)}
+.kvrow b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+.evt{display:grid;grid-template-columns:52px 1fr auto;gap:10px;padding:9px 0;
+  border-bottom:1px solid var(--grid);font-size:12px;align-items:baseline}
+.evt .seq{color:var(--l4);font-family:var(--mono);font-size:11px}
+.evt .msg{color:var(--l2);overflow-wrap:anywhere}
+.evt .num{color:var(--ink);font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+.evt .meta{grid-column:2/-1;color:var(--l4);font-size:10.5px;letter-spacing:.04em}
+.stagebar{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:12px;color:var(--muted)}
+.stagebar .bar{height:6px;border-radius:3px;background:var(--ink);min-width:2px}
+.stagebar .bar.ref{background:var(--l5)}
+.stagebar b{color:var(--ink);font-variant-numeric:tabular-nums}
+/* ── history: unified trend grid (Glance small multiples) ──────────────── */
+.trends{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:18px}
+.trend{background:var(--paper);border-radius:16px;padding:16px 18px 12px;min-width:0}
+.trend h3{margin:0;font-size:12.5px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+.trend .tunit{margin:4px 0 8px;color:var(--l4);font-size:10.5px;font-weight:600}
+.spark{height:104px;width:100%;cursor:pointer}
+.sparkval{font-size:22px;font-weight:800;letter-spacing:-.03em;color:var(--ink);
+  font-variant-numeric:tabular-nums;line-height:1.1;margin-top:2px}
+.sparksub{color:var(--l4);font-size:10px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;margin:4px 0 0}
+.trend.is-na .spark{display:none}
+.trend.is-na .na{margin:14px 0}
+@media (max-width:640px){.controls{padding:12px 18px}.selectors{margin-left:0;width:100%}
+  .trends,.slicegrid{grid-template-columns:1fr}}
+footer{padding:20px 32px 32px;color:var(--l3);font-size:10px;font-weight:600;
+       letter-spacing:.11em;text-transform:uppercase;border-top:1px solid var(--grid)}
+@media (max-width:640px){
+  header{padding:26px 18px 18px} h1{font-size:28px}
+  .wrap{padding:18px 18px 28px;gap:14px} .card{padding:20px 18px}
+  #chart{height:270px} footer{padding:18px}
+  table{font-size:12px} th,td{padding:8px 6px}
+}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head>
 <body>
 <header>
+  <p class="eyebrow">autonomous research · read-only monitor · loopback</p>
   <h1 id="title">AutoResearch</h1>
   <p class="sub" id="idsub">loading…</p>
 </header>
+<div class="controls">
+  <div class="tabs" role="tablist" aria-label="dashboard view">
+    <button type="button" class="tab is-active" data-view="current"
+            role="tab" aria-selected="true">Current</button>
+    <button type="button" class="tab" data-view="history"
+            role="tab" aria-selected="false">History</button>
+  </div>
+  <div class="selectors" id="selectors" hidden>
+    <label for="roundSel">round <select id="roundSel"></select></label>
+    <label for="stageSel">stage <select id="stageSel"></select></label>
+    <button type="button" class="ghost" id="clearSel">clear</button>
+  </div>
+</div>
+
+<div id="view-current">
 <div class="wrap">
   <section class="card wide">
     <h2 id="verdict">Waiting for the first scored round</h2>
@@ -307,14 +431,22 @@ footer{padding:18px 32px 28px;color:var(--faint);font-size:10px;font-weight:600;
   <section class="card wide">
     <h2>Trusted metric per round, against the best so far</h2>
     <p class="csub" id="chartsub">trusted metric per round · the line draws, the number counts · click to replay</p>
+    <div class="legend">
+      <span><i></i> kept round</span><span><i class="hollow"></i> reverted round</span>
+      <span><i class="dash"></i> best so far</span>
+    </div>
     <div id="chart"></div>
     <p class="src" id="chartsrc">source: run manifest · trusted evaluator (isolated process)</p>
   </section>
-  <section class="card">
+  <section class="card wide">
     <h2 id="rounds-title">What was tried, in order</h2>
     <p class="csub">hypothesis · decided by the trusted metric, not by the candidate</p>
-    <table id="rounds"><thead><tr><th>#</th><th>hypothesis</th><th>decision</th>
-      <th>value</th><th>best</th><th>next action</th></tr></thead><tbody></tbody></table>
+    <div class="tablewrap"><table id="rounds">
+      <colgroup><col style="width:48px"><col style="width:30%"><col style="width:96px">
+      <col style="width:88px"><col style="width:88px"><col></colgroup>
+      <thead><tr><th>#</th><th>hypothesis</th><th>decision</th>
+      <th class="num">value</th><th class="num">best</th><th>next action</th></tr></thead>
+      <tbody></tbody></table></div>
     <p class="src">source: run manifest · append-only</p>
   </section>
   <section class="card">
@@ -342,12 +474,66 @@ footer{padding:18px 32px 28px;color:var(--faint);font-size:10px;font-weight:600;
     <p class="src">source: events.jsonl · single writer</p>
   </section>
 </div>
+</div>
+
+<div id="view-history" hidden>
+<div class="wrap">
+  <section class="card wide">
+    <div class="slicehead">
+      <h2 id="sliceTitle">All rounds · all stages</h2>
+      <span class="chip" id="sliceChip">overview</span>
+    </div>
+    <p class="csub" id="sliceSub">pick a round and a stage to inspect exactly what the coordinator recorded there</p>
+    <div class="row" id="sliceStats"></div>
+    <div class="slicegrid">
+      <div class="sliceblock"><h3>Round record</h3><div id="sliceRound"></div></div>
+      <div class="sliceblock"><h3>Stage breakdown</h3><div id="sliceStages"></div></div>
+      <div class="sliceblock"><h3>Diagnostics &amp; doctor</h3><div id="sliceDiag"></div></div>
+    </div>
+    <p class="src">source: run manifest + coordinator event log · append-only</p>
+  </section>
+  <section class="card wide">
+    <h2 id="sliceEventsTitle">Events in this slice</h2>
+    <p class="csub" id="sliceEventsSub">coordinator-written only; a candidate never writes here</p>
+    <div id="sliceEvents" class="mono"></div>
+    <p class="src">source: events.jsonl · single trusted writer</p>
+  </section>
+  <section class="card wide">
+    <h2>Every recorded number, as a trend</h2>
+    <p class="csub">one line per metric · the same Mono grammar as the main chart · click a card to pin that round</p>
+    <div class="trends" id="trends"></div>
+    <p class="src">source: run manifest + coordinator events · NOT_AVAILABLE means nothing was recorded</p>
+  </section>
+</div>
+</div>
+
 <footer>read-only view · operations live in the cli · charts follow the lieflat-charts mono grammar</footer>
 <script>__ECHARTS__</script>
 <script>
-const state = {lastSeq: 0, history: [], drawn: false};
-const T = {ink:"#1C1C1A", paper:"#F0EFEB", muted:"#8F8E88", faint:"#C6C5BF", grid:"#DEDDD6",
-           l1:"#1C1C1A", l2:"#4A4944", l3:"#6A6963", l4:"#8F8E88", l5:"#B0AFA9", l6:"#C6C5BF"};
+const state = {lastSeq: 0, history: [], events: [], drawn: false,
+               view: "current", round: "all", stage: "all", sparkSig: ""};
+const cv = (n, f) => getComputedStyle(document.documentElement)
+                        .getPropertyValue(n).trim() || f;
+function pal(){
+  return {ink: cv("--ink","#1C1C1A"), paper: cv("--paper","#F0EFEB"),
+          card: cv("--card","#F7F6F2"), muted: cv("--muted","#8F8E88"),
+          faint: cv("--faint","#C6C5BF"), grid: cv("--grid","#DEDDD6"),
+          l2: cv("--l2","#4A4944"), l3: cv("--l3","#6A6963"),
+          l4: cv("--l4","#8F8E88"), l5: cv("--l5","#B0AFA9")};
+}
+const T = pal();
+const STAGES = ["DOCTOR","PROPOSING","TRAINING","EVALUATING","DECIDING","IDLE","DONE"];
+function num(v){ return (typeof v === "number" && isFinite(v)) ? v : null; }
+function mean(xs){ const a = xs.filter(v => v !== null);
+  return a.length ? a.reduce((p,c)=>p+c,0)/a.length : null; }
+function fmtN(v, d){ return num(v) === null ? "NOT_AVAILABLE"
+  : Number(v).toFixed(d === undefined ? 4 : d); }
+function mergeEvents(base, incoming){
+  const bySeq = new Map();
+  for (const e of base || []) if (e && typeof e.seq === "number") bySeq.set(e.seq, e);
+  for (const e of incoming || []) if (e && typeof e.seq === "number") bySeq.set(e.seq, e);
+  return Array.from(bySeq.values()).sort((a,b)=>a.seq-b.seq);
+}
 function el(id){return document.getElementById(id);}
 function text(node, value){ node.textContent = (value === null || value === undefined || value === "")
   ? "NOT_AVAILABLE" : String(value); }
@@ -454,7 +640,10 @@ function renderStatus(s){
     d.append(kb, document.createTextNode(fmt(v)));
     tel.appendChild(d);
   }
+  state.events = mergeEvents(state.events, s.events || []);
+  state.history = s.history || [];
   drawChart(s.history);
+  if (state.view === "history") renderHistory();
 }
 /* ── G18 · Draw-in + Counter (lieflat-charts Glance family) ───────────────────
    Skeleton taken from the upstream gallery card "H1 revenue, drawn in one stroke":
@@ -513,36 +702,71 @@ function drawChart(rows, replay){
     const g = echarts.getInstanceByDom(node) || echarts.init(node);
     g.clear();
     const gen = g18Gen;
+    const C = pal();
     const labels = scored.map(r => "R" + r.round);
     const metric = scored.map(r => r.primary_value);
     const best = scored.map(r => (typeof r.best_so_far === "number" ? r.best_so_far : null));
     const champion = scored.reduce((acc, r) =>
       (typeof r.best_so_far === "number" && (acc === null || r.best_so_far > acc)) ? r.best_so_far : acc,
       null);
-    const top = Math.max.apply(null, metric.concat(best.filter(v => v !== null))) || 1;
+    const all = metric.concat(best.filter(v => v !== null));
+    const lo = Math.min.apply(null, all), hi = Math.max.apply(null, all);
+    // A metric that moves in the third decimal collapses if the axis starts at
+    // zero. Show a labelled, tightly padded value axis instead of hiding it:
+    // the reader can then see BOTH the shape and the actual magnitudes.
+    const pad = Math.max((hi - lo) * 0.28, Math.abs(hi) * 0.002, 1e-6);
     const last = scored[scored.length - 1];
+    // decision markers: filled ink = KEEP, hollow = REVERT (Mono grammar).
+    // Two fixed-symbol series, because per-item `symbol` overrides are not
+    // reliable across ECharts versions and silently dropped the hollow dots.
+    // A category axis needs the category VALUE, not its numeric index.
+    const kept = [], reverted = [];
+    scored.forEach((r, i) => {
+      (r.outcome === "KEEP" ? kept : reverted)
+        .push({value: [labels[i], r.primary_value]});
+    });
     g.setOption({
       animationDuration: G18.DUR, animationEasing: "cubicOut",
-      textStyle: {fontFamily: "Inter"},
-      tooltip: {show: false},
-      grid: {left: 14, right: 20, top: 64, bottom: 24},
+      textStyle: {fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"},
+      tooltip: {show: true, trigger: "axis", renderMode: "richText",
+        backgroundColor: C.card, borderColor: C.grid, borderWidth: 1,
+        textStyle: {color: C.ink, fontSize: 12},
+        axisPointer: {type: "line", lineStyle: {color: C.l4, type: "dashed"}},
+        formatter: (ps) => {
+          const i = ps && ps[0] ? ps[0].dataIndex : 0;
+          const r = scored[i] || {};
+          return "round " + (r.round === undefined ? "NOT_AVAILABLE" : r.round)
+            + "  ·  " + (r.outcome || "NOT_AVAILABLE")
+            + "\\nmetric  " + fmt(r.primary_value)
+            + "\\nbest    " + fmt(r.best_so_far)
+            + "\\nfold sd " + fmt(r.primary_std);
+        }},
+      grid: {left: 62, right: 24, top: 74, bottom: 34},
       xAxis: {type: "category", data: labels, boundaryGap: false,
-        axisLine: {show: false}, axisTick: {show: false}, splitLine: {show: false},
-        axisLabel: {color: G18.FAINT, fontFamily: "Inter", fontSize: 9, fontWeight: 600,
-          interval: Math.max(0, Math.ceil(labels.length / 6) - 1)}},
-      // A metric that moves in the third decimal collapses onto the top edge if the
-      // axis starts at zero (measured: 0.6016 vs 0.5869 sat flat against the grid
-      // line). The axis is hidden, so pad the data range instead of anchoring to 0.
-      yAxis: {show: false, min: (value) => value.min - (value.max - value.min) * 4,
-              max: (value) => value.max + (value.max - value.min) * 0.15},
+        axisLine: {lineStyle: {color: C.grid}}, axisTick: {show: false},
+        splitLine: {show: false},
+        axisLabel: {color: C.l3, fontFamily: "Inter", fontSize: 11, fontWeight: 600,
+          margin: 12, interval: Math.max(0, Math.ceil(labels.length / 8) - 1)}},
+      yAxis: {type: "value", min: lo - pad, max: hi + pad, splitNumber: 4,
+        axisLine: {show: false}, axisTick: {show: false},
+        axisLabel: {color: C.l3, fontSize: 10, fontFamily: "Inter",
+          formatter: (v) => Number(v).toFixed(3), margin: 10},
+        splitLine: {lineStyle: {color: C.grid, width: 1}}},
       series: [
         {name: "metric", type: "line", data: metric, smooth: 0.2, symbol: "none",
-         lineStyle: {color: G18.INK, width: 2.6},
+         lineStyle: {color: C.ink, width: 2.6, cap: "round"}, z: 3,
          areaStyle: {color: {type: "linear", x: 0, y: 0, x2: 0, y2: 1,
-           colorStops: [{offset: 0, color: "rgba(28,28,26,.14)"},
-                        {offset: 1, color: "rgba(28,28,26,0)"}]}}},
+           colorStops: [{offset: 0, color: hexA(C.ink, .15)},
+                        {offset: 1, color: hexA(C.ink, 0)}]}}},
         {name: "best so far", type: "line", data: best, smooth: 0.2, symbol: "none",
-         connectNulls: true, lineStyle: {color: G18.MUTED, width: 1.4, type: "dashed"}},
+         connectNulls: true, z: 2,
+         lineStyle: {color: C.l4, width: 1.6, type: "dashed"}},
+        {name: "kept", type: "scatter", data: kept, z: 5, symbol: "circle",
+         symbolSize: 9, itemStyle: {color: C.ink}, tooltip: {show: false}},
+        {name: "reverted", type: "scatter", data: reverted, z: 5,
+         symbol: "circle", symbolSize: 10,
+         itemStyle: {color: C.card, borderColor: C.ink, borderWidth: 2},
+         tooltip: {show: false}},
       ],
     });
     // the counter: one big number that counts up, exactly the template's shape
@@ -557,9 +781,9 @@ function drawChart(rows, replay){
       const value = (target * eased).toFixed(4);
       g.setOption({graphic: [{id: "kpi", type: "group", left: 16, top: 8, children: [
         {type: "text", left: 0, top: 0,
-         style: {text: "best " + value, font: "800 32px Inter", fill: G18.INK}},
-        {type: "text", left: 0, top: 38,
-         style: {text: caption, font: "600 10px Inter", fill: G18.MUTED}},
+         style: {text: "best " + value, font: "800 34px Inter", fill: C.ink}},
+        {type: "text", left: 0, top: 42,
+         style: {text: caption, font: "600 10px Inter", fill: C.muted}},
       ]}]});
       if (p < 1) requestAnimationFrame(tick);
     };
@@ -567,10 +791,22 @@ function drawChart(rows, replay){
   });
 }
 
+function hexA(hex, a){
+  const h = String(hex || "").replace("#", "");
+  if (h.length !== 6) return "rgba(28,28,26," + a + ")";
+  const n = parseInt(h, 16);
+  return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + ","
+    + (n & 255) + "," + a + ")";
+}
+
 addEventListener("resize", () => {
   const node = el("chart");
   const instance = node && echarts.getInstanceByDom(node);
   if (instance) instance.resize();
+  for (const n of document.querySelectorAll(".spark")) {
+    const s = echarts.getInstanceByDom(n);
+    if (s) s.resize();
+  }
 });
 
 function renderEvents(s){
@@ -586,6 +822,340 @@ function renderEvents(s){
   }
   while(list.childElementCount > 60) list.removeChild(list.lastChild);
 }
+/* ── History view: round/stage picker, slice inspector, unified trend grid ──
+   Everything here reads the same inlined/polled payload as the current view.
+   Data is always written through textContent: no markup is ever built from a
+   run's strings, so a hostile hypothesis cannot become HTML.               */
+function setView(view){
+  state.view = view;
+  for (const b of document.querySelectorAll(".tab")) {
+    const on = b.dataset.view === view;
+    b.classList.toggle("is-active", on);
+    b.setAttribute("aria-selected", on ? "true" : "false");
+  }
+  el("view-current").hidden = view !== "current";
+  el("view-history").hidden = view !== "history";
+  el("selectors").hidden = view !== "history";
+  if (view === "history") { fillSelectors(); renderHistory(); }
+  else {
+    const g = echarts.getInstanceByDom(el("chart"));
+    if (g) g.resize();
+  }
+}
+
+function addOption(sel, value, label){
+  const o = document.createElement("option");
+  o.value = value; o.textContent = label; sel.appendChild(o);
+}
+
+function fillSelectors(){
+  const rs = el("roundSel"), ss = el("stageSel");
+  const rounds = (state.history || []).map(r => String(r.round));
+  const seen = new Set();
+  for (const e of state.events) if (e.stage) seen.add(e.stage);
+  const stages = STAGES.filter(s => seen.has(s))
+    .concat(Array.from(seen).filter(s => STAGES.indexOf(s) < 0).sort());
+  const rSig = rounds.join(",");
+  if (rs.dataset.sig !== rSig) {
+    rs.dataset.sig = rSig; rs.textContent = "";
+    addOption(rs, "all", "all rounds");
+    for (const r of rounds) addOption(rs, r, "round " + r);
+  }
+  const sSig = stages.join(",");
+  if (ss.dataset.sig !== sSig) {
+    ss.dataset.sig = sSig; ss.textContent = "";
+    addOption(ss, "all", "all stages");
+    for (const s of stages) addOption(ss, s, s.toLowerCase());
+  }
+  rs.value = rounds.indexOf(state.round) >= 0 || state.round === "all" ? state.round : "all";
+  ss.value = stages.indexOf(state.stage) >= 0 || state.stage === "all" ? state.stage : "all";
+  state.round = rs.value; state.stage = ss.value;
+}
+
+function kvRow(host, k, v){
+  const d = document.createElement("div"); d.className = "kvrow";
+  const a = document.createElement("span"); a.textContent = String(k);
+  const b = document.createElement("b");
+  b.textContent = (v === null || v === undefined || v === "") ? "NOT_AVAILABLE" : String(v);
+  d.append(a, b); host.appendChild(d);
+}
+
+function sliceEvents(){
+  return state.events.filter(e =>
+    (state.round === "all" || String(e.round) === state.round) &&
+    (state.stage === "all" || e.stage === state.stage));
+}
+
+function renderSlice(){
+  const rounds = state.history || [];
+  const evts = sliceEvents();
+  const picked = state.round !== "all"
+    ? rounds.find(r => String(r.round) === state.round) : null;
+  const where = [state.round === "all" ? "all rounds" : "round " + state.round,
+                 state.stage === "all" ? "all stages" : state.stage.toLowerCase()];
+  text(el("sliceTitle"), where.join(" · "));
+  text(el("sliceChip"), picked ? (picked.outcome || "recorded") : "overview");
+  const secs = evts.reduce((a,e) => a + (num(e.elapsed_seconds) || 0), 0);
+  const folds = new Set(evts.filter(e => e.fold !== null && e.fold !== undefined)
+    .map(e => String(e.repeat) + ":" + String(e.fold))).size;
+  text(el("sliceSub"), evts.length + " coordinator events · " + secs.toFixed(1)
+    + "s recorded · " + folds + " distinct fold runs · pick a round and a stage to narrow it");
+
+  const st = el("sliceStats"); st.textContent = "";
+  const counts = {};
+  for (const e of evts) counts[e.status || "unknown"] = (counts[e.status || "unknown"] || 0) + 1;
+  for (const [k,v] of Object.entries(counts).sort()) {
+    const s = document.createElement("span");
+    const b = document.createElement("b"); b.textContent = String(v);
+    s.append(b, document.createTextNode(" " + k)); st.appendChild(s);
+  }
+  if (!Object.keys(counts).length) text(st, "no events in this slice (NOT_AVAILABLE)");
+
+  const rec = el("sliceRound"); rec.textContent = "";
+  if (!picked) {
+    text(rec, "no single round selected — choose one above to see its record");
+  } else {
+    kvRow(rec, "run id", picked.run_id);
+    kvRow(rec, "decision", picked.outcome || picked.decision);
+    kvRow(rec, "hypothesis", picked.hypothesis);
+    kvRow(rec, "controlled change", picked.controlled_change);
+    kvRow(rec, "expected observation", picked.expected_observation);
+    kvRow(rec, "reason", picked.reason);
+    kvRow(rec, "trusted metric", fmtN(picked.primary_value));
+    kvRow(rec, "best so far", fmtN(picked.best_so_far));
+    kvRow(rec, "fold sd", fmtN(picked.primary_std));
+    kvRow(rec, "wall clock", picked.elapsed_s === null || picked.elapsed_s === undefined
+      ? "NOT_AVAILABLE" : fmtN(picked.elapsed_s, 1) + "s");
+    kvRow(rec, "next action", picked.next_action);
+  }
+
+  const sb = el("sliceStages"); sb.textContent = "";
+  const byStage = {};
+  for (const e of evts) {
+    const k = e.stage || "unknown";
+    byStage[k] = byStage[k] || {n: 0, s: 0};
+    byStage[k].n += 1; byStage[k].s += (num(e.elapsed_seconds) || 0);
+  }
+  const keys = Object.keys(byStage).sort();
+  const maxS = Math.max.apply(null, keys.map(k => byStage[k].s).concat([1e-9]));
+  if (!keys.length) text(sb, "no stage events in this slice (NOT_AVAILABLE)");
+  for (const k of keys) {
+    const row = document.createElement("div"); row.className = "stagebar";
+    const name = document.createElement("span");
+    name.style.minWidth = "88px"; name.textContent = k.toLowerCase();
+    const bar = document.createElement("span"); bar.className = "bar";
+    bar.style.width = Math.max(2, 90 * byStage[k].s / maxS) + "px";
+    const v = document.createElement("b");
+    v.textContent = byStage[k].n + " · " + byStage[k].s.toFixed(1) + "s";
+    row.append(name, bar, v); sb.appendChild(row);
+  }
+
+  const dg = el("sliceDiag"); dg.textContent = "";
+  const d = picked && picked.diagnostics ? picked.diagnostics : {};
+  const dc = picked && picked.doctor_counts ? picked.doctor_counts : {};
+  kvRow(dg, "zero-F1 classes", d.zero_f1_count === undefined ? "NOT_AVAILABLE" : d.zero_f1_count);
+  kvRow(dg, "classes evaluated", d.total_evaluated_classes === undefined ? "NOT_AVAILABLE" : d.total_evaluated_classes);
+  const worst = Array.isArray(d.worst_classes) ? d.worst_classes : [];
+  kvRow(dg, "worst classes", worst.length ? worst.map(w =>
+    String(w.class) + (w.f1 === undefined ? "" : " (" + Number(w.f1).toFixed(4) + ")")).join(", ") : "NOT_AVAILABLE");
+  for (const k of ["BLOCKED","WARNING","INFO","UNVERIFIED"]) {
+    kvRow(dg, "doctor " + k.toLowerCase(), dc[k] === undefined ? "NOT_AVAILABLE" : dc[k]);
+  }
+  const pc = picked && picked.per_class;
+  kvRow(dg, "per-class report", pc && Object.keys(pc).length
+    ? Object.keys(pc).length + " classes" : "NOT_AVAILABLE");
+
+  const list = el("sliceEvents"); list.textContent = "";
+  const shown = evts.slice(-200).reverse();
+  if (!shown.length) text(list, "no events in this slice (NOT_AVAILABLE)");
+  for (const e of shown) {
+    const row = document.createElement("div"); row.className = "evt";
+    const q = document.createElement("span"); q.className = "seq";
+    q.textContent = "#" + (e.seq === undefined ? "—" : e.seq);
+    const m = document.createElement("span"); m.className = "msg";
+    m.textContent = (e.stage || "unknown") + " · " + (e.status || "unknown")
+      + (e.message ? " · " + e.message : "");
+    const n = document.createElement("span"); n.className = "num";
+    n.textContent = num(e.elapsed_seconds) === null ? "—"
+      : e.elapsed_seconds.toFixed(1) + "s" + (num(e.budget_seconds) === null
+        ? "" : " / " + e.budget_seconds + "s");
+    const meta = document.createElement("span"); meta.className = "meta";
+    meta.textContent = (e.time || "NOT_AVAILABLE")
+      + (e.round !== null && e.round !== undefined ? " · round " + e.round : "")
+      + (e.fold !== null && e.fold !== undefined ? " · fold " + e.fold : "")
+      + (e.repeat !== null && e.repeat !== undefined ? " · repeat " + e.repeat : "")
+      + (e.metrics && Object.keys(e.metrics).length ? " · " + JSON.stringify(e.metrics).slice(0, 160) : "");
+    row.append(q, m, n, meta); list.appendChild(row);
+  }
+  if (evts.length > shown.length) {
+    const more = document.createElement("div"); more.className = "na";
+    more.textContent = "showing the latest 200 of " + evts.length + " events";
+    list.appendChild(more);
+  }
+  text(el("sliceEventsSub"), evts.length + " events match this slice · newest first");
+}
+
+/* One catalogue, one renderer: every number the manifest or the coordinator
+   records gets the SAME Glance-family treatment (one stroke, area fade, sparse
+   labels, a big last-value counter). A metric with no numeric observation is
+   shown as NOT_AVAILABLE rather than silently dropped. */
+function metricCatalogue(){
+  const rounds = state.history || [];
+  const evts = state.events || [];
+  const labels = rounds.map(r => "R" + r.round);
+  const at = (r, k) => num(r[k]);
+  const nested = (r, group, k) => num((r && r[group] || {})[k]);
+  const diag = (r, k) => num((r && r.diagnostics || {})[k]);
+  const doc = (r, k) => num((r && r.doctor_counts || {})[k]);
+  const folds = r => Array.isArray(r.fold_seconds)
+    ? r.fold_seconds.filter(v => typeof v === "number" && isFinite(v)) : [];
+  const stageSecs = (r, stage) => {
+    const xs = evts.filter(e => String(e.round) === String(r.round) && e.stage === stage)
+      .map(e => num(e.elapsed_seconds)).filter(v => v !== null);
+    return xs.length ? xs.reduce((a,b)=>a+b,0) : null;
+  };
+  const evCount = r => evts.filter(e => String(e.round) === String(r.round)).length;
+  let keeps = 0, reverts = 0;
+  const cumKeep = [], cumRevert = [];
+  for (const r of rounds) {
+    if (r.outcome === "KEEP") keeps += 1;
+    if (r.outcome === "REVERT") reverts += 1;
+    cumKeep.push(keeps); cumRevert.push(reverts);
+  }
+  const defs = [
+    ["Trusted metric", "primary metric · higher is better", r => at(r,"primary_value"), 4, "run manifest · trusted evaluator"],
+    ["Best so far", "champion after each round", r => at(r,"best_so_far"), 4, "run manifest"],
+    ["Fold dispersion", "primary_std across CV folds", r => at(r,"primary_std"), 4, "run manifest"],
+    ["Fold SEM", "primary_sem where recorded", r => at(r,"primary_sem"), 4, "run manifest"],
+    ["Round wall clock", "seconds", r => at(r,"elapsed_s"), 1, "coordinator timer"],
+    ["Mean fold time", "seconds per fold", r => mean(folds(r)), 1, "runner fold timings"],
+    ["Slowest fold", "seconds", r => folds(r).length ? Math.max.apply(null, folds(r)) : null, 1, "runner fold timings"],
+    ["AST nodes after", "complexity of the editable file", r => nested(r,"complexity","nodes_after"), 0, "guard complexity metric"],
+    ["Complexity growth", "nodes added this round", r => nested(r,"complexity","growth"), 0, "guard complexity metric"],
+    ["Gain floor", "min gain required per added node", r => nested(r,"complexity","min_gain_required"), 5, "selection policy"],
+    ["Zero-F1 classes", "diagnostic reflection slice", r => diag(r,"zero_f1_count"), 0, "evaluator diagnostics"],
+    ["Classes evaluated", "diagnostic reflection slice", r => diag(r,"total_evaluated_classes"), 0, "evaluator diagnostics"],
+    ["Doctor BLOCKED", "findings per round", r => doc(r,"BLOCKED"), 0, "doctor postflight"],
+    ["Doctor WARNING", "findings per round", r => doc(r,"WARNING"), 0, "doctor postflight"],
+    ["Doctor INFO", "findings per round", r => doc(r,"INFO"), 0, "doctor postflight"],
+    ["Doctor UNVERIFIED", "findings per round", r => doc(r,"UNVERIFIED"), 0, "doctor postflight"],
+    ["Cumulative KEEP", "rounds kept so far", r => cumKeep[rounds.indexOf(r)], 0, "run manifest"],
+    ["Cumulative REVERT", "rounds reverted so far", r => cumRevert[rounds.indexOf(r)], 0, "run manifest"],
+    ["Coordinator events", "events written for this round", evCount, 0, "events.jsonl"],
+  ];
+  for (const s of STAGES) {
+    defs.push(["Stage · " + s.toLowerCase(), "recorded seconds in this stage",
+      r => stageSecs(r, s), 1, "events.jsonl"]);
+  }
+  return {labels: labels, rounds: rounds, defs: defs.map(d => ({
+    label: d[0], unit: d[1], get: d[2], digits: d[3], source: d[4],
+    values: rounds.map(r => { const v = d[2](r);
+      return (typeof v === "number" && isFinite(v)) ? v : null; })
+  }))};
+}
+
+function disposeSparks(){
+  for (const n of document.querySelectorAll(".spark")) {
+    const g = echarts.getInstanceByDom(n);
+    if (g) g.dispose();
+  }
+}
+
+function renderTrends(){
+  const cat = metricCatalogue();
+  const host = el("trends");
+  const C = pal();
+  disposeSparks();
+  host.textContent = "";
+  const selected = state.round === "all" ? -1
+    : cat.rounds.findIndex(r => String(r.round) === state.round);
+  for (const m of cat.defs) {
+    const observed = m.values.filter(v => v !== null);
+    const card = document.createElement("section");
+    card.className = "trend" + (observed.length ? "" : " is-na");
+    const h = document.createElement("h3"); h.textContent = m.label;
+    const u = document.createElement("p"); u.className = "tunit"; u.textContent = m.unit;
+    const box = document.createElement("div"); box.className = "spark";
+    const val = document.createElement("div"); val.className = "sparkval";
+    const sub = document.createElement("p"); sub.className = "sparksub";
+    sub.textContent = m.source;
+    card.append(h, u, box, val, sub);
+    host.appendChild(card);
+    if (!observed.length) {
+      const na = document.createElement("div"); na.className = "na";
+      na.textContent = "NOT_AVAILABLE · nothing recorded";
+      card.insertBefore(na, val);
+      val.textContent = "—";
+      continue;
+    }
+    const last = observed[observed.length - 1];
+    val.textContent = last.toFixed(m.digits);
+    const g = echarts.init(box);
+    const lo = Math.min.apply(null, observed), hi = Math.max.apply(null, observed);
+    const pad = Math.max((hi - lo) * 0.25, Math.abs(hi) * 0.001, 1e-6);
+    const markLine = selected >= 0 && selected < cat.labels.length ? {
+      silent: true, symbol: "none",
+      lineStyle: {color: C.l4, width: 1, type: "dashed"},
+      label: {show: false}, data: [{xAxis: selected}]
+    } : {data: []};
+    g.setOption({
+      animationDuration: G18.DUR, animationEasing: "cubicOut",
+      grid: {left: 4, right: 6, top: 8, bottom: 18},
+      tooltip: {show: true, trigger: "axis", renderMode: "richText",
+        backgroundColor: C.card, borderColor: C.grid, borderWidth: 1,
+        textStyle: {color: C.ink, fontSize: 11},
+        formatter: (ps) => {
+          const i = ps && ps[0] ? ps[0].dataIndex : 0;
+          return cat.labels[i] + "  " + (m.values[i] === null
+            ? "NOT_AVAILABLE" : m.values[i].toFixed(m.digits));
+        }},
+      xAxis: {type: "category", data: cat.labels, boundaryGap: false,
+        axisLine: {lineStyle: {color: C.grid}}, axisTick: {show: false},
+        axisLabel: {color: C.l4, fontSize: 9, fontWeight: 600, margin: 6,
+          interval: Math.max(0, Math.ceil(cat.labels.length / 4) - 1)}},
+      yAxis: {type: "value", show: false, min: lo - pad, max: hi + pad},
+      series: [{name: m.label, type: "line", data: m.values,
+        connectNulls: true, smooth: 0.2, symbol: "none",
+        lineStyle: {color: C.ink, width: 2}, z: 3,
+        areaStyle: {color: {type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [{offset: 0, color: hexA(C.ink, .13)},
+                       {offset: 1, color: hexA(C.ink, 0)}]}},
+        markLine: markLine}],
+    });
+    g.on("click", (p) => {
+      const i = p.dataIndex;
+      if (i === undefined || !cat.rounds[i]) return;
+      state.round = String(cat.rounds[i].round);
+      el("roundSel").value = state.round;
+      renderHistory();
+    });
+  }
+}
+
+function renderHistory(){
+  fillSelectors();
+  renderSlice();
+  // a 3s poll delivers the same payload again; re-initing every sparkline
+  // would flicker and restart every draw-in. Only redraw on real changes.
+  const sig = JSON.stringify([state.history, state.events, state.round, state.stage]);
+  if (sig === state.sparkSig) return;
+  state.sparkSig = sig;
+  renderTrends();
+}
+
+for (const b of document.querySelectorAll(".tab")) {
+  b.addEventListener("click", () => setView(b.dataset.view));
+}
+el("roundSel").addEventListener("change", (e) => {
+  state.round = e.target.value; renderHistory();
+});
+el("stageSel").addEventListener("change", (e) => {
+  state.stage = e.target.value; renderSlice();
+});
+el("clearSel").addEventListener("click", () => {
+  state.round = "all"; state.stage = "all"; renderHistory();
+});
+
 async function tick(){
   try{
     // without a deadline a hung request leaves the page silently stale, which
@@ -635,17 +1205,21 @@ if (window.__STATIC_PAYLOAD__) {
 """
 
 
-def render_static(session: ResearchSession, *, max_events: int = 60,
+def render_static(session: ResearchSession, *, max_events: int = MAX_EVENTS_PER_REQUEST,
                   frozen: bool = True) -> str:
-    """The page with its payload inlined and no polling.
+    """The page with its payload inlined; `frozen` decides whether it polls.
 
-    Same CSS, same markup, same renderers; only the transport is gone. Used for
-    screenshots, archives and the acceptance check that the page really paints.
+    Same CSS, same markup, same renderers on every route. `/` passes
+    ``frozen=False`` so the page hydrates from the inlined payload and then
+    keeps polling; `/static` and the report archive pass ``frozen=True`` so a
+    screenshot has a page that settles. Events are inlined in ascending seq
+    order so the client's prepend renderer shows every row, newest first.
     """
     payload = _status_payload(session, after=0)
-    payload["events"] = list(reversed(payload.get("events") or []))[:max_events]
-    # `frozen` marks the archive route: the page hydrates and then stops, so a
-    # screenshot has something that settles. `/` hydrates and keeps polling.
+    # the history view needs every event to slice by round/stage, not just the
+    # latest few. MAX_RESPONSE_BYTES still bounds the payload, and _clip has
+    # already bounded every message and metric carried in each event.
+    payload["events"] = list(payload.get("events") or [])[:max_events]
     payload["frozen"] = bool(frozen)
     blob = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     inject = f'<script>window.__STATIC_PAYLOAD__ = {blob};</script>\n'
@@ -692,8 +1266,10 @@ def make_handler(session: ResearchSession):
                 return
             if path == "/":
                 # first paint from data, then poll: the page is useful even if
-                # the client's first request never comes back
-                self._send(200, render_static(session).encode("utf-8"),
+                # the client's first request never comes back. `frozen=False`
+                # is what actually starts tick()/setInterval — the archive
+                # route keeps frozen=True so a screenshot can settle.
+                self._send(200, render_static(session, frozen=False).encode("utf-8"),
                            "text/html; charset=utf-8", MAX_PAGE_BYTES)
             elif path == "/static":
                 # same page, payload inlined, no polling: for archives and for
@@ -834,7 +1410,7 @@ def make_runs_handler(runs_root: str | Path):
                 self._json({"error": str(exc), "runs": list_runs(runs_root)}, 404)
                 return
             if path == "/":
-                self._send(200, render_static(session).encode("utf-8"),
+                self._send(200, render_static(session, frozen=False).encode("utf-8"),
                            "text/html; charset=utf-8", MAX_PAGE_BYTES)
             elif path == "/static":
                 self._send(200, render_static(session, frozen=True).encode("utf-8"),
