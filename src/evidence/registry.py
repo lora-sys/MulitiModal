@@ -192,15 +192,21 @@ class EvidenceRegistry:
                 scope = entry.get("scope")
                 if scope == SCOPE_EXTERNAL or path.startswith("upstream:"):
                     continue  # another repository, not checkable from here
-                # Registry paths sometimes append an annotation, e.g.
-                # "Share data.xls (dev host, git-ignored)"; resolve the file,
-                # not the prose, or an existing file looks absent. Only strip
-                # when the path actually ends with that parenthesised note -
-                # a real filename may legitimately contain " (".
-                if path.endswith(")") and " (" in path:
-                    path = path[: path.rindex(" (")]
                 checkable += 1
-                if (base / path).exists():
+                target = base / path
+                if not target.exists():
+                    # Some registry entries append an annotation instead of a
+                    # path, e.g. "Share data.xls (dev host, git-ignored)". Only
+                    # fall back to the stripped form when that is what actually
+                    # resolves: a real filename may itself end in a parenthesised
+                    # suffix ("notes (draft)"), and trimming it unconditionally
+                    # invented defects for files that are present.
+                    if path.endswith(")") and " (" in path:
+                        stripped = path[: path.rindex(" (")]
+                        if (base / stripped).exists():
+                            path = stripped
+                            target = base / stripped
+                if target.exists():
                     resolved += 1
                     continue
                 absent += 1

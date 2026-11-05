@@ -406,6 +406,32 @@ def test_annotated_reference_path_still_resolves(tmp_path):
     assert EvidenceRegistry([claim]).audit_references(root=tmp_path) == []
 
 
+def test_filename_ending_in_parentheses_is_not_treated_as_annotation(tmp_path):
+    """A repository file whose own name ends with a parenthesised suffix must
+    resolve as written.
+
+    Stripping the trailing "(...)" unconditionally - as the first version of the
+    annotation handling did - invented MISSING-REPO-REFERENCE defects for present
+    files, which trains readers to distrust the guard.
+    """
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "notes (draft)").write_text("x")
+    lines = EvidenceRegistry(
+        [_claim("docs/notes (draft)", TRACKED_IN_GIT, "repo")]
+    ).audit_references(root=tmp_path)
+    assert lines == []
+
+
+def test_annotated_path_reports_the_cited_form_when_absent(tmp_path):
+    """The fallback only ever *resolves*; when neither form exists, the report
+    still names the path the record cites, not a trimmed guess."""
+    (tmp_path / "docs").mkdir()
+    lines = EvidenceRegistry(
+        [_claim("docs/gone.md (dev host)", TRACKED_IN_GIT, "repo")]
+    ).audit_references(root=tmp_path)
+    assert lines[0].startswith("MISSING-REPO-REFERENCE c: docs/gone.md (dev host)"), lines
+
+
 def test_parenthesis_in_real_filename_is_not_read_as_annotation(tmp_path):
     """A path containing " (" but not ending in that paren is a real file;
     truncating it would raise a false MISSING-REPO-REFERENCE defect."""
