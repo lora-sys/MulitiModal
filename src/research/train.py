@@ -10,7 +10,8 @@ import json
 from pathlib import Path
 
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.naive_bayes import ComplementNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.multiclass import OneVsRestClassifier
 from sklearn.pipeline import make_pipeline
 
 
@@ -27,7 +28,10 @@ def main() -> None:
     model = make_pipeline(
         TfidfVectorizer(analyzer="char_wb", ngram_range=(1, 4), min_df=1,
                         binary=True, sublinear_tf=True),
-        ComplementNB(alpha=1.0),
+        OneVsRestClassifier(LogisticRegression(
+            solver="liblinear", C=10.0, class_weight="balanced", max_iter=2000,
+            random_state=args.seed,
+        )),
     )
     model.fit([row["text"] for row in training], [row["label"] for row in training])
     predictions = model.predict(texts).tolist()
