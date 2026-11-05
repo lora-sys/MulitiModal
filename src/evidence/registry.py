@@ -13,7 +13,6 @@ claims being VERIFIED.
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -24,10 +23,17 @@ NOT_AVAILABLE = "NOT_AVAILABLE"
 NOT_APPLICABLE = "NOT_APPLICABLE"
 STATES = (VERIFIED, UNVERIFIED, NOT_VERIFIED, NOT_AVAILABLE, NOT_APPLICABLE)
 
-# A retrieved_files entry carrying this digest is a repository file: the git
-# blob is the evidence. Anything with a real digest lives outside Git
-# (data/, runs/, artifacts/ on the dev host) and is host-local by contract.
+# A retrieved_files entry carries a real digest when the file itself is the
+# evidence, and the `TRACKED-IN-GIT` digest when the git blob is. Neither says
+# where the file lives - `pdf-spec` is tracked yet has a real SHA-256 - so scope
+# is declared per entry. Inferring it from the Git index or from `check-ignore`
+# made the verdict depend on the host reading the record.
 TRACKED_IN_GIT = "TRACKED-IN-GIT"
+
+SCOPE_REPO = "repo"  # part of this checkout; a missing file is a defect
+SCOPE_HOST = "host"  # outside Git by design: data/, runs/, artifacts/
+SCOPE_EXTERNAL = "external"  # another repository (upstream:...)
+SCOPES = (SCOPE_REPO, SCOPE_HOST, SCOPE_EXTERNAL)
 
 ENGINEERING = "GO_ENGINEERING"
 REAL_DATA_TRAINING = "GO_REAL_DATA_TRAINING"
@@ -75,6 +81,22 @@ class EvidenceClaim:
             if "path" not in f or not ({"sha256", "md5"} & set(f)):
                 raise ValueError(
                     f"claim {self.claim_id!r}: retrieved_files entries need path plus sha256 or md5"
+                )
+            scope = f.get("scope")
+            if scope not in SCOPES:
+                raise ValueError(
+                    f"claim {self.claim_id!r}: {f['path']!r} needs scope in {SCOPES}, got {scope!r}"
+                )
+            digest = f.get("sha256") or f.get("md5") or ""
+            if digest == TRACKED_IN_GIT and scope != SCOPE_REPO:
+                raise ValueError(
+                    f"claim {self.claim_id!r}: {f['path']!r} cites a git blob "
+                    "but is not declared repo scope"
+                )
+            if str(f["path"]).startswith("upstream:") and scope != SCOPE_EXTERNAL:
+                raise ValueError(
+                    f"claim {self.claim_id!r}: {f['path']!r} is external; declare "
+                    f"scope={SCOPE_EXTERNAL!r}"
                 )
 
     def to_dict(self) -> dict:
@@ -144,21 +166,20 @@ class EvidenceRegistry:
     def audit_references(self, root: str | Path | None = None) -> list[str]:
         """Report evidence files that no longer resolve.
 
-        A reference's scope is decided by the repository's own ignore rules, not
-        by the digest field: anything not declared to live outside Git is the
-        evidence body itself, so renaming or deleting it voids a VERIFIED claim
-        silently. That already happened
-        once (`tests/runtime/test_autoresearch.py`, removed by 37f4d11 while
-        `tcm-engineering-smoke` stayed VERIFIED). Trusting the digest instead
-        would miss `pdf-spec`, which cites the tracked
-        `docs/source/pre-massage-fatigue-prediction-framework.pdf` with a real
-        SHA-256, and reading the Git index would miss it again once its deletion
-        is committed. Repository paths must exist in the checkout; ignored ones
-        (data/, runs/, artifacts/) are reported as a gap, not a defect - but
-        absence says nothing about which host should hold them: 2026-11-05 found
-        two such claims missing on the dev host as well. A claim whose
-        references are ALL unresolvable is called out separately, because that
-        claim cannot be re-verified on this checkout at all.
+        Scope is declared in each `retrieved_files` entry, so the verdict is the
+        same on every machine. It used to be inferred, three ways, each wrong in
+        its own way: "has a digest" missed `pdf-spec` (a tracked file with a real
+        SHA-256); the Git index missed a repository reference as soon as its
+        deletion was committed - the normal case; and `git check-ignore` also
+        honours `.git/info/exclude` and the user's global excludes, so one
+        private `*.pdf` rule turned a repository defect into an informational
+        gap. Repo paths must exist in the checkout; host paths live outside Git
+        by design (data/, runs/, artifacts/) and are reported as a gap, not a
+        defect - though absence says nothing about which host should hold them:
+        2026-11-05 found two such claims missing on the dev host as well.
+        External paths point into another repository and are not checkable here.
+        A claim whose references are ALL unresolvable is called out separately,
+        because that claim cannot be re-verified on this checkout.
         """
         base = Path(root) if root is not None else Path(__file__).resolve().parents[2]
         lines = []
@@ -168,8 +189,9 @@ class EvidenceRegistry:
             checkable = 0
             for entry in claim.retrieved_files:
                 path = str(entry.get("path", ""))
-                if path.startswith("upstream:"):
-                    continue  # external repository, not checkable here
+                scope = entry.get("scope")
+                if scope == SCOPE_EXTERNAL or path.startswith("upstream:"):
+                    continue  # another repository, not checkable from here
                 # Registry paths sometimes append an annotation, e.g.
                 # "Share data.xls (dev host, git-ignored)"; resolve the file,
                 # not the prose, or an existing file looks absent. Only strip
@@ -177,15 +199,12 @@ class EvidenceRegistry:
                 # a real filename may legitimately contain " (".
                 if path.endswith(")") and " (" in path:
                     path = path[: path.rindex(" (")]
-                digest = entry.get("sha256") or entry.get("md5") or ""
                 checkable += 1
                 if (base / path).exists():
                     resolved += 1
                     continue
                 absent += 1
-                host_local = self._is_host_local(base, path)
-                in_repo = digest == TRACKED_IN_GIT if host_local is None else not host_local
-                if in_repo:
+                if scope == SCOPE_REPO:
                     lines.append(
                         f"MISSING-REPO-REFERENCE {claim.claim_id}: "
                         f"{path} is cited as the evidence body but is not in "
@@ -194,7 +213,7 @@ class EvidenceRegistry:
                 else:
                     lines.append(
                         f"host-local-absent {claim.claim_id}: {path} "
-                        "(git-ignored; not present on this host)"
+                        "(declared host scope; not present on this host)"
                     )
             if checkable and not resolved:
                 lines.append(
@@ -203,33 +222,6 @@ class EvidenceRegistry:
                     "limitations before treating this claim as checkable"
                 )
         return lines
-
-    @staticmethod
-    def _is_host_local(root: Path, path: str) -> bool | None:
-        """Whether `path` is declared to live outside Git, or None if unknown.
-
-        Scope must not come from the index: `git ls-files` lists cached entries
-        only, so once a deletion is committed the evidence path disappears from
-        it and a repository reference would be downgraded to a host gap - the
-        same silent loss this audit exists to catch, one step later.
-        `.gitignore` is the durable, committed statement of what lives outside
-        the repo (data/, runs/, artifacts/), so it decides scope here.
-
-        None means Git could not answer (no repository, or no Git); the caller
-        then falls back to the `TRACKED-IN-GIT` sentinel.
-        """
-        try:
-            result = subprocess.run(
-                ("git", "-C", str(root), "check-ignore", "-q", "--", path),
-                capture_output=True,
-            )
-        except OSError:
-            return None
-        if result.returncode == 0:
-            return True
-        if result.returncode == 1:
-            return False
-        return None
 
 
 # Gate requirements: a gate is GRANTED only when every listed claim is
