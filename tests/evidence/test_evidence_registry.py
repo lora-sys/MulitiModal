@@ -136,15 +136,18 @@ def test_gate_cannot_be_promoted_without_evidence(registry):
     gates = evaluate_gates(EvidenceRegistry(demoted), "tcm_constitution")
     assert gates[REAL_DATA_TRAINING].granted is False
 
-    forged = EvidenceRegistry(list(registry.claims.values()) + [
-        EvidenceClaim(
-            claim_id="tcm-engineering-smoke-perfect-score",
-            primary_url="https://example.com",
-            exact_supported_claim="smoke score 0.0",
-            verification_state="UNVERIFIED",
-            limitations="score alone never promotes or demotes gates",
-        )
-    ])
+    forged = EvidenceRegistry(
+        list(registry.claims.values())
+        + [
+            EvidenceClaim(
+                claim_id="tcm-engineering-smoke-perfect-score",
+                primary_url="https://example.com",
+                exact_supported_claim="smoke score 0.0",
+                verification_state="UNVERIFIED",
+                limitations="score alone never promotes or demotes gates",
+            )
+        ]
+    )
     assert evaluate_gates(forged, "tcm_constitution")[REAL_DATA_TRAINING].granted
 
 
@@ -195,7 +198,9 @@ def test_missing_repo_reference_is_reported_as_defect(tmp_path):
     )
     assert lines == [
         "MISSING-REPO-REFERENCE c: tests/removed_suite.py is cited as the "
-        "evidence body but is not in the checkout"
+        "evidence body but is not in the checkout",
+        "UNRESOLVABLE-ON-CHECKOUT c: all 1 reference(s) absent; re-fetch per "
+        "its limitations before treating this claim as checkable",
     ]
 
 
@@ -205,8 +210,50 @@ def test_host_local_gap_is_not_reported_as_repo_defect(tmp_path):
     lines = EvidenceRegistry([_claim("data/local/share.xls", "6206f432b683f8a7")]).audit_references(
         root=tmp_path
     )
-    assert lines == ["host-local-absent c: data/local/share.xls (git-ignored; dev host only)"]
     assert not any(line.startswith("MISSING-REPO-REFERENCE") for line in lines)
+    assert lines[0] == (
+        "host-local-absent c: data/local/share.xls (git-ignored; not present on this host)"
+    )
+
+
+def test_partially_resolvable_claim_is_not_called_unresolvable(tmp_path):
+    """One missing git-ignored file must not escalate a claim that still has
+    a readable reference in the checkout."""
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "report.md").write_text("x")
+    registry = EvidenceRegistry(
+        [
+            EvidenceClaim(
+                claim_id="c",
+                primary_url="https://example.com",
+                exact_supported_claim="x",
+                verification_state=VERIFIED,
+                access_date="2026-11-05",
+                retrieved_files=(
+                    {"path": "docs/report.md", "sha256": TRACKED_IN_GIT},
+                    {"path": "data/local/gone.xls", "md5": "363d3e388df6"},
+                ),
+            )
+        ]
+    )
+    assert [line.split(":")[0] for line in registry.audit_references(root=tmp_path)] == [
+        "host-local-absent c"
+    ]
+
+
+def test_v8_real_training_claim_keeps_a_git_reference(registry):
+    """Its three run artifacts are gone on both hosts and the reproduction
+    probe was deleted by 37f4d11, so the in-git report is the only reference
+    that lets anyone re-check the claim."""
+    claim = registry.claims["tcm-real-training-v8"]
+    tracked = [
+        entry["path"]
+        for entry in claim.retrieved_files
+        if (entry.get("sha256") or entry.get("md5")) == TRACKED_IN_GIT
+    ]
+    assert "docs/reports/tcm-50-real-training.md" in tracked
+    for path in tracked:
+        assert (REGISTRY_PATH.parents[2] / path).is_file(), path
 
 
 def test_annotated_reference_path_still_resolves(tmp_path):
@@ -223,8 +270,7 @@ def test_parenthesis_in_real_filename_is_not_read_as_annotation(tmp_path):
     truncating it would raise a false MISSING-REPO-REFERENCE defect."""
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "foo (old).py").write_text("")
-    lines = EvidenceRegistry([_claim("tests/foo (old).py",
-                                     TRACKED_IN_GIT)]).audit_references(
+    lines = EvidenceRegistry([_claim("tests/foo (old).py", TRACKED_IN_GIT)]).audit_references(
         root=tmp_path
     )
     assert lines == []

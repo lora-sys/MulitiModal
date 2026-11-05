@@ -116,7 +116,7 @@
         }
       ],
       "exact_supported_claim": "Historical CCMQ-60 rule engine (src/labels/ccmq60.py) implemented and cross-checked: subscale item groups, reverse keys (per subscale), and scale sizes re-parsed from the Zenodo researcher SAS source bytes match the engine tables; the engine scores the 14-row TEST_DATA reference sample under both missing policies; decision thresholds 30/40 (biased) and 60/30/40 (balanced) per PMC10164641 section 2.2 (ZYYXH/T157-2009); all eight Mendeley score columns fingerprint-verify to the same edition (damp-heat=6 fingerprint is edition-distinctive).",
-      "limitations": "Su et al. 2019 paper's own abbreviation definition table is paywalled, so the column mapping is FINGERPRINT_CROSS_CHECKED, not paper-table verified; 2009 edition item texts not compared word-by-word; subject row 273 violates the item-count fingerprint on four columns (QC-flagged, excluded from rule cross-checks); the researcher SAS is not an official oracle (#47).",
+      "limitations": "Su et al. 2019 paper's own abbreviation definition table is paywalled, so the column mapping is FINGERPRINT_CROSS_CHECKED, not paper-table verified; 2009 edition item texts not compared word-by-word; subject row 273 violates the item-count fingerprint on four columns (QC-flagged, excluded from rule cross-checks); the researcher SAS is not an official oracle (#47). 2026-11-05 reference audit: the two data/local/zenodo-4431679 paths above exist on NEITHER acam-lab nor this host, while the mendeley path still resolves; the missing pair is recoverable from Zenodo record 4431679 (DOI 10.5281/zenodo.4431679, CC BY 4.0, registered in src/data/datasets.py:108-120) and re-confirmed against the md5 values recorded above. VERIFIED state unchanged.",
       "verification_state": "VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
@@ -206,7 +206,7 @@
         }
       ],
       "exact_supported_claim": "Researcher CCMQ scoring code retrieved: TEST_DATA.xlsx holds 14 subjects x 63 CCMQ item responses; SAS/SPSS syntax implements researcher scoring. Eligibility: rules_test_only — usable to verify a #38 rule-engine implementation against researcher scoring, never as supervised training data.",
-      "limitations": "Researcher code is not an official scorer (#47/#38); 14 subjects is a test sample only; ZYYXH/T157-2009 edition.",
+      "limitations": "Researcher code is not an official scorer (#47/#38); 14 subjects is a test sample only; ZYYXH/T157-2009 edition. 2026-11-05 reference audit: all three files are absent on both known hosts, so the SAS/SPSS byte-level cross-check in tests/labels/test_ccmq60.py currently skips everywhere rather than only on non-dev hosts; re-fetch from https://zenodo.org/records/4431679 (registered in src/data/datasets.py:108-120) and verify against the md5 values above to restore it. VERIFIED state unchanged.",
       "verification_state": "VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED"
@@ -232,6 +232,10 @@
       "verification_state": "VERIFIED",
       "retrieved_files": [
         {
+          "path": "docs/reports/tcm-50-real-training.md",
+          "sha256": "TRACKED-IN-GIT"
+        },
+        {
           "path": "runs/real-tcm-v8/manifest.jsonl",
           "sha256": "b21ffe0f8ee9673574f16854bc8821b793f45332a1375fcbf2c548d3b5b1358f"
         },
@@ -244,7 +248,7 @@
           "sha256": "73a51b060946f561bc418392d266a2db5fad189891858a4069152d4ad0780675"
         }
       ],
-      "limitations": "标签为 RULE 派生类别（≥40=YES），非作者发布的分类标签，非临床真值；受试者身份=数据行序（数据集无 ID 列，UNVERIFIED），划分仅行级互斥；holdout 42 人、无重采样置信区间；选择余量由折间 std 派生，winner's curse 仍存在；proposer 归属为自报（AGENT_ISOLATION_UNVERIFIED）；无独立参考数据，故 GO_RESEARCH_CLAIMS 仍 NOT_GRANTED。",
+      "limitations": "标签为 RULE 派生类别（≥40=YES），非作者发布的分类标签，非临床真值；受试者身份=数据行序（数据集无 ID 列，UNVERIFIED），划分仅行级互斥；holdout 42 人、无重采样置信区间；选择余量由折间 std 派生，winner's curse 仍存在；proposer 归属为自报（AGENT_ISOLATION_UNVERIFIED）；无独立参考数据，故 GO_RESEARCH_CLAIMS 仍 NOT_GRANTED。 2026-11-05 reference audit: the three run-artifact paths above are absent on both this host and acam-lab; acam-lab keeps only artifacts/tcm-50-v8/NOT_RECOVERABLE.json (status NOT_REPRODUCIBLE, recording delivered weights 9d642282767df088... against today's refit cb9f59be6a5dcfc2..., holdout_read false, split reproducible 191/41/42). That file names its probe as scripts/reconstruct_tcm_50_v8.py, which commit 37f4d11 deleted, so the reproduction probe no longer exists either. The durable in-git carrier for these numbers is docs/reports/tcm-50-real-training.md, now cited above; the VERIFIED state, recorded hashes and reported numbers are unchanged.",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
       "blocks": []

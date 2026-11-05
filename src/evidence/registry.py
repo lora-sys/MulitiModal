@@ -73,8 +73,7 @@ class EvidenceClaim:
         for f in self.retrieved_files:
             if "path" not in f or not ({"sha256", "md5"} & set(f)):
                 raise ValueError(
-                    f"claim {self.claim_id!r}: retrieved_files entries need "
-                    "path plus sha256 or md5"
+                    f"claim {self.claim_id!r}: retrieved_files entries need path plus sha256 or md5"
                 )
 
     def to_dict(self) -> dict:
@@ -148,13 +147,19 @@ class EvidenceRegistry:
         deleting that file voids a VERIFIED claim silently — this already
         happened once (`tests/runtime/test_autoresearch.py`, removed by
         37f4d11 while `tcm-engineering-smoke` stayed VERIFIED). Such a path
-        must exist in the checkout; anything else is reported as a host-local
-        gap, because real data and run artifacts are git-ignored by design
-        and legitimately absent on a non-dev host.
+        must exist in the checkout. Anything else lives outside Git (data/,
+        runs/, artifacts/) and is reported as a gap, not a defect — but
+        absence says nothing about which host should hold it: 2026-11-05 found
+        two such claims missing on the dev host as well. A claim whose
+        references are ALL unresolvable is called out separately, because that
+        claim cannot be re-verified on this checkout at all.
         """
         base = Path(root) if root is not None else Path(__file__).resolve().parents[2]
         lines = []
         for claim in self.claims.values():
+            resolved = 0
+            absent = 0
+            checkable = 0
             for entry in claim.retrieved_files:
                 path = str(entry.get("path", ""))
                 if path.startswith("upstream:"):
@@ -167,8 +172,11 @@ class EvidenceRegistry:
                 if path.endswith(")") and " (" in path:
                     path = path[: path.rindex(" (")]
                 digest = entry.get("sha256") or entry.get("md5") or ""
+                checkable += 1
                 if (base / path).exists():
+                    resolved += 1
                     continue
+                absent += 1
                 if digest == TRACKED_IN_GIT:
                     lines.append(
                         f"MISSING-REPO-REFERENCE {claim.claim_id}: "
@@ -177,8 +185,15 @@ class EvidenceRegistry:
                     )
                 else:
                     lines.append(
-                        f"host-local-absent {claim.claim_id}: {path} (git-ignored; dev host only)"
+                        f"host-local-absent {claim.claim_id}: {path} "
+                        "(git-ignored; not present on this host)"
                     )
+            if checkable and not resolved:
+                lines.append(
+                    f"UNRESOLVABLE-ON-CHECKOUT {claim.claim_id}: all "
+                    f"{absent} reference(s) absent; re-fetch per its "
+                    "limitations before treating this claim as checkable"
+                )
         return lines
 
 

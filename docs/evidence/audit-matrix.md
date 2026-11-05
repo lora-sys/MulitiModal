@@ -31,3 +31,17 @@
 负例保障（tests/evidence）：无哈希/访问日期的 claim 不能标 VERIFIED；NOT_VERIFIED/NOT_AVAILABLE 必须写明缺口或阻塞；把数据 claim 伪标 VERIFIED 之前会被构造器拒绝——任何"来源错误/缺标准原文/标签不匹配"情况都只能停在 NOT_GRANTED。
 
 引用可核对性（2026-11-05 增补）：`sha256` 记为 `TRACKED-IN-GIT` 的 `retrieved_files` 条目，其证据本体就是仓库里的 git blob，因此该文件一旦被重命名或删除，VERIFIED 主张会静默失去实现体。此事已实际发生过一次：`37f4d11` 随 bounded RSI harness 删除 `tests/runtime/test_autoresearch.py`，而 `tcm-engineering-smoke` 仍保持 VERIFIED 且无人察觉。现由 `EvidenceRegistry.audit_references()` 与 `tests/evidence/test_evidence_registry.py::test_repo_tracked_references_resolve` 机械拦截：仓库内引用不存在即判缺陷；`data/`、`runs/`、`artifacts/` 等按约定 git-ignored 的条目只报主机缺口，不计缺陷。任何删除 `tests/**`、`src/**` 的改动若牵动被引用文件，必须同步核对 `registry.json` 并保留原始裁决文字与退役归属说明。
+
+## 引用可核对性实测（2026-11-05，双主机）
+
+由 `EvidenceRegistry.audit_references()` 实测，非人工转述。两台机器指同一 `feature/clean-slate` 提交：本机 macOS（Python 3.13，无 torch/transformers/xlrd）与开发机 `acam-lab`（Python 3.12，torch 2.13.0 / transformers 5.13.1 / xlrd 2.0.2 / accelerate 1.13.0 均已装）。
+
+| claim | 引用类别 | 本机 | acam-lab | 结论 |
+| --- | --- | --- | --- | --- |
+| `mendeley-dataset-files`、`tcm-label-rules-historical-verified` 的 mendeley 条目 | 真实数据（git-ignored） | 在 | 在 | 可现场按 sha256 复核 |
+| `tcm-label-rules-historical-verified`、`zenodo-ccmq-scripts` 的 `data/local/zenodo-4431679/*` | 参考代码与测试数据 | **缺** | **缺** | 两台都缺。`tests/labels/test_ccmq60.py` 的 SAS 字节级交叉核对因此在**任何**机器上都是 skip，不只是非开发机。可按 `src/data/datasets.py:108-120` 登记的 Zenodo record 4431679（`10.5281/zenodo.4431679`，CC BY 4.0）重新获取并用已记录 md5 复核 |
+| `tcm-engineering-smoke`、`physio-engineering-smoke` | 仓库文件（`TRACKED-IN-GIT`） | 在 | 在 | 守卫实测 0 条仓库引用缺失（修复前 `tcm-engineering-smoke` 指向已被 `37f4d11` 删除的 `tests/runtime/test_autoresearch.py`） |
+| `tcm-real-training-v8` 的 `runs/real-tcm-v8/*` 与 `artifacts/tcm-50-v8/summary.json` | 运行工件 | **缺** | **缺** | acam-lab 仅存 `artifacts/tcm-50-v8/NOT_RECOVERABLE.json`（`status: NOT_REPRODUCIBLE`，交付权重 `9d642282…` 对今日重训 `cb9f59be…`，`holdout_read: false`），且该文件点名的复现脚本 `scripts/reconstruct_tcm_50_v8.py` 也已被 `37f4d11` 删除。因此把 git 内的 `docs/reports/tcm-50-real-training.md` 补为其引用，claim 才在任意检出上留有一个可解析锚点 |
+| `constitution-v1-champion` / `sd-v2-ar1-champion` 工件（供 `scripts/tcm_minimal_demo.py` 使用） | 二进制工件 | **缺** | 在（含 `model.joblib`、`labels.json`、`registry_entry.json`，provenance 记录 champion `16c26582`、selection masked MAE 14.1437、`holdout_used: false`） | 属研究主机产物，符合"工件不入 Git"约定。故本机 `tests/scripts/test_tcm_minimal_demo.py` 的 6 个失败是**主机缺口**，不是 `AGENTS.md` 第 3 节交付声明失真 |
+
+**没有改动任何 `verification_state`**：三条受影响 claim 只补充了引用与 limitations 中的实测事实，`GO_ENGINEERING`/`GO_REAL_DATA_TRAINING`/`GO_RESEARCH_CLAIMS` 的 granted 结果两模型六格实测与修复前逐项一致。
