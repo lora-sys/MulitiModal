@@ -392,9 +392,6 @@ class ModelRegistry:
             return None
         return self._specs.get(model_id)
 
-    def model_ids(self) -> tuple[str, ...]:
-        return tuple(self._specs)
-
 
 # --------------------------------------------------------------------------- TF-IDF+LR 工件
 
