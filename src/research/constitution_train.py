@@ -4,9 +4,9 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-014 假设（由特征组消融驱动）：冠军软集成仍用 9 维（人口学 6 + 人体
-测量 3）；round-001 与 round-009 都显示加特征易引入噪声。仅改动特征子集为
-纯人口学 6 维，检验 Huber/kNN 软集成在更低维空间是否更稳，其余全部不变。
+round-015 假设（由特征组消融驱动）：round-009 脉波、round-006 舌象在单 Huber
+下均无增益，但尚未在冠军软集成下测试经络电导组（9:21，12 维）。在 9 维基础上
+加入该组，检验 kNN 的局部距离能否从经络信号获益，其余配置不变。
 """
 
 from __future__ import annotations
@@ -148,7 +148,7 @@ def main() -> None:
 
     train_x, train_mask = matrix(rows)
     predict_x, predict_mask = matrix(inputs["rows"])
-    keep = slice(0, 6)  # 仅人口学 6 维
+    keep = list(range(0, 9)) + list(range(9, 21))  # 基础 9 维 + 经络 12 维
     train_x, train_mask = train_x[:, keep], train_mask[:, keep]
     predict_x, predict_mask = predict_x[:, keep], predict_mask[:, keep]
     y = np.array([row["scores"] for row in rows], dtype=float)
