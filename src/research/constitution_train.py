@@ -4,11 +4,10 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-007 假设（由逐折/逐维/受试者级分析驱动）：冠军相对基线的改进高度异质
-（151/274 改善，平均 |delta|=1.82 远大于平均 delta=-0.216），且逐维差异明显
-（阴虚/气郁改善、阳虚略退）。因此不再用单一全局模型，而是在**训练折内部**
-再做 5 折 CV，为每个维度单独在「训练折中位数基线」与「岭回归预测」之间挑选
-收缩权重 alpha；所有预处理与权重选择都只使用训练折数据。
+round-008 假设（由受试者级分析驱动）：评估指标是 MAE，而 Ridge 拟合的是 MSE；
+受试者误差高度异质（top10% 占约 20% 总误差），高误差受试者会拉动最小二乘。
+改用 Huber 稳健损失（IRLS 对大残差降权）拟合同一 9 维特征子集，delta 只由
+训练折残差决定；所有预处理与拟合都只使用训练折数据。
 """
 
 from __future__ import annotations
@@ -20,8 +19,7 @@ from pathlib import Path
 import numpy as np
 
 RIDGE = 100.0
-ALPHA_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
-INNER_FOLDS = 5
+IRLS_STEPS = 6
 
 
 def matrix(records: list[dict]) -> tuple[np.ndarray, np.ndarray]:
@@ -51,40 +49,28 @@ def transform(x: np.ndarray, mask: np.ndarray, preprocess) -> np.ndarray:
     return np.concatenate([(filled - mean) / scale, (~mask).astype(float)], axis=1)
 
 
-def fit_ridge(features: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """返回 (系数, 每维中位数基线)，全部由传入的训练行拟合。"""
+def huber_fit(features: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Huber IRLS，多输出；delta 由训练折残差中位数决定。"""
+    columns = features.shape[1]
     center = np.median(y, axis=0)
-    gram = features.T @ features + RIDGE * np.eye(features.shape[1])
-    coefficients = np.linalg.solve(gram, features.T @ (y - center))
+    target = y - center
+    eye = RIDGE * np.eye(columns)
+    gram = features.T @ features + eye
+    coefficients = np.linalg.solve(gram, features.T @ target)
+    residual = np.abs(target - features @ coefficients)
+    delta = max(float(np.median(residual)), 1.0)
+    for _ in range(IRLS_STEPS):
+        weight = np.where(residual <= delta, 1.0,
+                          delta / np.maximum(residual, 1e-9))
+        for j in range(y.shape[1]):
+            w = weight[:, j]
+            weighted = features * np.sqrt(w)[:, None]
+            coefficients[:, j] = np.linalg.solve(
+                weighted.T @ weighted + eye,
+                features.T @ (w * target[:, j]),
+            )
+        residual = np.abs(target - features @ coefficients)
     return coefficients, center
-
-
-def predict(features: np.ndarray, coefficients: np.ndarray,
-            center: np.ndarray) -> np.ndarray:
-    return features @ coefficients + center
-
-
-def select_alphas(train_x, train_mask, y, seed: int) -> np.ndarray:
-    """训练折内部 5 折 CV：逐维挑选 median→ridge 的收缩权重。"""
-    n = len(y)
-    rng = np.random.default_rng(seed)
-    order = rng.permutation(n)
-    parts = np.array_split(order, INNER_FOLDS)
-    losses = np.zeros((len(ALPHA_GRID), y.shape[1]))
-    for part in parts:
-        mask = np.ones(n, dtype=bool)
-        mask[part] = False
-        inner_x, inner_m, inner_y = train_x[mask], train_mask[mask], y[mask]
-        val_x, val_m, val_y = train_x[part], train_mask[part], y[part]
-        preprocess = fit_preprocess(inner_x, inner_m)
-        coefficients, center = fit_ridge(transform(inner_x, inner_m, preprocess), inner_y)
-        ridge_pred = predict(transform(val_x, val_m, preprocess), coefficients, center)
-        median_pred = np.broadcast_to(np.median(inner_y, axis=0), val_y.shape)
-        for index, alpha in enumerate(ALPHA_GRID):
-            blended = (1.0 - alpha) * median_pred + alpha * ridge_pred
-            losses[index] += np.abs(blended - val_y).sum(axis=0)
-    # 平手时偏好更小的 alpha（更稳健的中位数端）
-    return np.array([ALPHA_GRID[int(np.argmin(losses[:, j]))] for j in range(y.shape[1])])
 
 
 def main() -> None:
@@ -110,11 +96,8 @@ def main() -> None:
     y = np.array([row["scores"] for row in rows], dtype=float)
 
     preprocess = fit_preprocess(train_x, train_mask)
-    coefficients, center = fit_ridge(transform(train_x, train_mask, preprocess), y)
-    ridge_pred = predict(transform(predict_x, predict_mask, preprocess), coefficients, center)
-    median_pred = np.broadcast_to(np.median(y, axis=0), (len(predict_x), n_dims))
-    alphas = select_alphas(train_x, train_mask, y, args.seed)
-    output = (1.0 - alphas) * median_pred + alphas * ridge_pred
+    coefficients, center = huber_fit(transform(train_x, train_mask, preprocess), y)
+    output = transform(predict_x, predict_mask, preprocess) @ coefficients + center
     Path(args.output).write_text(json.dumps(output.tolist()), encoding="utf-8")
 
 
