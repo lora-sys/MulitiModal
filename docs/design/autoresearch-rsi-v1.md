@@ -1,5 +1,14 @@
 # AutoResearch RSI V1 设计（TCM Profile 先行）— #44 调研报告
 
+> **落位状态（2026-11-05 核对）**：本文为历史设计。它描述的实现体
+> `src/research/{frozen,guard,loop,evaluator,model_export,tasks,runner,spawn}.py`
+> 与 `src/runtime/harness.py` 已分别由 `5f543c4`（改为单文件实验制）与
+> `37f4d11`（删除 autonomous loop 与 legacy harness）删除；当前 AutoResearch
+> 契约见 [AGENTS.md](../../AGENTS.md) 第 1 节第 2 条「AutoResearch 双轨单文件约束」与
+> [docs/autoresearch-design.md](../autoresearch-design.md)。本文保留仅供沿革追溯，
+> 其中的文件级路径与模块划分**不得**作为现状依据。
+
+
 状态：**设计冻结稿**，直接指导 #45 的实现与 #50 的真实训练验收。
 日期：2026-10-30。本报告不启动任何真实长期自动训练（#45 才实现 harness，#50 才接真实数据）。
 
