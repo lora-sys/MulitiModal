@@ -27,7 +27,7 @@ def main() -> None:
     texts = json.loads(Path(args.predict).read_text(encoding="utf-8"))
     model = make_pipeline(
         TfidfVectorizer(analyzer="char", ngram_range=(1, 4), min_df=1,
-                        max_df=0.9, sublinear_tf=True),
+                        binary=True, sublinear_tf=True),
         OneVsRestClassifier(LogisticRegression(
             solver="liblinear", C=4.0, class_weight="balanced", max_iter=2000,
             random_state=args.seed,
