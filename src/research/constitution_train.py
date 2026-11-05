@@ -4,11 +4,10 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-010 假设（由逐维分析驱动）：冠军相对基线的改善逐维差异极大（阴虚 -0.72、
-气郁 -0.49、阳虚 +0.11）；round-009 又证明全局加特征组有害。因此不再为所有
-维度使用同一特征集，而是在**训练折内部**做 5 折 CV，为每个维度独立地从
-「中位数基线」与多个 Huber 特征组中挑选 MAE 最小的候选。所有统计量、权重与
-选择都只用训练折数据，验证折标签从不参与。
+round-011 假设（由受试者级异质性驱动）：线性/H 稳健模型都假设全局函数形式；
+改用 k 近邻局部回归，对 9 维标准化特征取 k 个最近训练受试者的**逐维中位数**
+（中位数直接对齐 MAE）。k 由训练折内 5 折 CV 挑选，所有距离统计量、填补值与
+选择都只使用训练折数据。
 """
 
 from __future__ import annotations
@@ -19,20 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
-RIDGE = 100.0
-IRLS_STEPS = 6
 INNER_FOLDS = 5
-
-# 候选特征组：None 表示纯中位数基线
-GROUPS: dict[str, list[int] | None] = {
-    "median": None,
-    "base9": list(range(0, 9)),
-    "demo6": list(range(0, 6)),
-    "anthro3": list(range(6, 9)),
-    "meridian12": list(range(9, 21)),
-    "pulse15": list(range(36, 51)),
-    "tongue12": list(range(51, 63)),
-}
+K_GRID = (5, 10, 20, 30, 40, 60)
 
 
 def matrix(records: list[dict]) -> tuple[np.ndarray, np.ndarray]:
@@ -45,7 +32,13 @@ def matrix(records: list[dict]) -> tuple[np.ndarray, np.ndarray]:
     return values, mask
 
 
-def preprocess(x: np.ndarray, mask: np.ndarray):
+def build_features(x: np.ndarray, mask: np.ndarray, stats) -> np.ndarray:
+    medians, mean, scale = stats
+    filled = np.where(mask, x, medians)
+    return np.concatenate([(filled - mean) / scale, (~mask).astype(float)], axis=1)
+
+
+def fit_stats(x: np.ndarray, mask: np.ndarray):
     with np.errstate(invalid="ignore"):
         medians = np.nanmedian(x, axis=0)
     medians = np.where(np.isfinite(medians), medians, 0.0)
@@ -56,76 +49,31 @@ def preprocess(x: np.ndarray, mask: np.ndarray):
     return medians, mean, scale
 
 
-def design(x: np.ndarray, mask: np.ndarray, stats) -> np.ndarray:
-    medians, mean, scale = stats
-    filled = np.where(mask, x, medians)
-    return np.concatenate([(filled - mean) / scale, (~mask).astype(float)], axis=1)
+def knn_predict(train_f, train_y, test_f, k: int) -> np.ndarray:
+    # 欧氏距离，按可用特征维度归一（特征数固定）
+    diff = test_f[:, None, :] - train_f[None, :, :]
+    distances = np.sqrt(np.sum(diff * diff, axis=2))
+    neighbours = np.argsort(distances, axis=1)[:, :k]
+    return np.median(train_y[neighbours], axis=1)
 
 
-def huber_fit(features: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    columns = features.shape[1]
-    center = np.median(y, axis=0)
-    target = y - center
-    eye = RIDGE * np.eye(columns)
-    coefficients = np.linalg.solve(features.T @ features + eye, features.T @ target)
-    residual = np.abs(target - features @ coefficients)
-    delta = max(float(np.median(residual)), 1.0)
-    for _ in range(IRLS_STEPS):
-        weight = np.where(residual <= delta, 1.0,
-                          delta / np.maximum(residual, 1e-9))
-        for j in range(y.shape[1]):
-            w = weight[:, j]
-            weighted = features * np.sqrt(w)[:, None]
-            coefficients[:, j] = np.linalg.solve(
-                weighted.T @ weighted + eye,
-                features.T @ (w * target[:, j]),
-            )
-        residual = np.abs(target - features @ coefficients)
-    return coefficients, center
-
-
-def fit_group(name: str, x, mask, y):
-    """在给定训练行上拟合一个候选，返回可用于预测的状态。"""
-    columns = GROUPS[name]
-    if columns is None:
-        return {"median": np.median(y, axis=0)}
-    sub_x, sub_mask = x[:, columns], mask[:, columns]
-    stats = preprocess(sub_x, sub_mask)
-    coefficients, center = huber_fit(design(sub_x, sub_mask, stats), y)
-    return {"stats": stats, "columns": columns,
-            "coefficients": coefficients, "center": center}
-
-
-def predict_group(state, x, mask, n_rows: int) -> np.ndarray:
-    if "median" in state:
-        return np.broadcast_to(state["median"], (n_rows, len(state["median"])))
-    columns = state["columns"]
-    features = design(x[:, columns], mask[:, columns], state["stats"])
-    return features @ state["coefficients"] + state["center"]
-
-
-def choose_per_dimension(x, mask, y, seed: int) -> list[str]:
-    """训练折内 5 折 CV：逐维挑选 MAE 最小的候选组。"""
-    names = list(GROUPS)
+def choose_k(train_f, y, seed: int) -> int:
     n = len(y)
     order = np.random.default_rng(seed).permutation(n)
     parts = np.array_split(order, INNER_FOLDS)
-    losses = {name: np.zeros(y.shape[1]) for name in names}
+    losses = {k: 0.0 for k in K_GRID}
     for part in parts:
         keep = np.ones(n, dtype=bool)
         keep[part] = False
-        inner_x, inner_m, inner_y = x[keep], mask[keep], y[keep]
-        val_x, val_m, val_y = x[part], mask[part], y[part]
-        for name in names:
-            state = fit_group(name, inner_x, inner_m, inner_y)
-            pred = predict_group(state, val_x, val_m, len(part))
-            losses[name] += np.abs(pred - val_y).sum(axis=0)
-    chosen = []
-    for j in range(y.shape[1]):
-        # 平手时按 GROUPS 顺序（median 优先），保持确定性
-        best = min(names, key=lambda name: (losses[name][j], names.index(name)))
-        chosen.append(best)
-    return chosen
+        inner_f, inner_y = train_f[keep], y[keep]
+        val_f, val_y = train_f[part], y[part]
+        diff = val_f[:, None, :] - inner_f[None, :, :]
+        distances = np.sqrt(np.sum(diff * diff, axis=2))
+        order_nn = np.argsort(distances, axis=1)
+        for k in K_GRID:
+            pred = np.median(inner_y[order_nn[:, :k]], axis=1)
+            losses[k] += float(np.abs(pred - val_y).sum())
+    return min(K_GRID, key=lambda k: (losses[k], K_GRID.index(k)))
 
 
 def main() -> None:
@@ -145,15 +93,16 @@ def main() -> None:
 
     train_x, train_mask = matrix(rows)
     predict_x, predict_mask = matrix(inputs["rows"])
+    keep = slice(0, 9)  # 冠军特征子集：人口学 6 + 人体测量 3
+    train_x, train_mask = train_x[:, keep], train_mask[:, keep]
+    predict_x, predict_mask = predict_x[:, keep], predict_mask[:, keep]
     y = np.array([row["scores"] for row in rows], dtype=float)
 
-    chosen = choose_per_dimension(train_x, train_mask, y, args.seed)
-    states = {name: fit_group(name, train_x, train_mask, y)
-              for name in set(chosen)}
-    n_rows = len(predict_x)
-    output = np.empty((n_rows, n_dims), dtype=float)
-    for j, name in enumerate(chosen):
-        output[:, j] = predict_group(states[name], predict_x, predict_mask, n_rows)[:, j]
+    stats = fit_stats(train_x, train_mask)
+    train_f = build_features(train_x, train_mask, stats)
+    test_f = build_features(predict_x, predict_mask, stats)
+    k = choose_k(train_f, y, args.seed)
+    output = knn_predict(train_f, y, test_f, k)
     Path(args.output).write_text(json.dumps(output.tolist()), encoding="utf-8")
 
 
