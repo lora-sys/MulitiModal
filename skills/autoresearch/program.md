@@ -15,7 +15,7 @@
 1. 阅读 `AGENTS.md`、`skills/autoresearch/SKILL.md`、本文件，以及 `src/research/prepare.py`、`src/research/train.py`。建立独立的 `autoresearch/<tag>` 分支或 worktree，核对 Git 状态。
 2. 使用开发机 Python 环境以及已有 CPU/GPU，不启用 Docker、sandbox、额外 Agent 服务或训练调度平台。检查实际依赖和数据访问情况，不因设备上有 CUDA 就假定 sklearn 使用了 GPU。
 3. 检查 `runs/sd-v2/short/selection_manifest.json` 和 `selection_records.json` 是否存在，核对 `prepare.py` 内固定的 manifest 和 dataset SHA-256、148 类标签、受试者分组、折内单向精确文本去重。真实数据和模型工件不提交 Git。
-4. 冻结本次比较的 seed、folds、repeats、每折训练预算、依赖、硬件和评价代码版本。允许为不同算力预算开新研究组，但新组必须重跑基线；不同协议或预算的分数不得直接排序。
+4. 采用与 Karpathy AutoResearch 对齐的单次训练墙钟预算：每折固定 5 分钟，即 `--budget 300`。冻结 seed、4 folds × 2 repeats、依赖、硬件和评价代码版本。每轮有 8 次独立折训练，因此整轮训练上限累计为 40 分钟，另加数据加载与评分时间。不同协议或预算的分数不得直接排序。
 5. 为本次研究建立忽略 Git 的 `runs/<tag>/` 目录，存放日志、`round-*.json`、`results.tsv` 和 `status.json`。先检查既有结果是否完整；不能覆盖已有轮次。
 6. 第一轮运行未经修改的 `train.py` 基线。若本研究组已有同一协议、同一源码的完整基线记录，可以校验后复用；不得凭历史报告填入新分数。
 
@@ -41,10 +41,10 @@ python -m research.prepare \
   --candidate src/research/train.py \
   --out runs/<tag>/round-000.json \
   --folds 4 --repeats 2 \
-  --seed 20261104 --budget <per_fold_seconds>
+  --seed 20261104 --budget 300
 ```
 
-将 `<tag>` 换成当前研究目录，并为后续轮次顺序使用 `round-001.json` 等新路径。`<per_fold_seconds>` 是在本研究组首次基线前确定的每折固定秒数，不代表总研究时长。现有程序约束单折最大 3600 秒，不要临时修改这个限制让候选占优。
+将 `<tag>` 换成当前研究目录，并为后续轮次顺序使用 `round-001.json` 等新路径。与 Karpathy 的单次 5 分钟训练不同，我们的正式一轮需完成 8 次受试者分组折训练：`--budget 300` 表示**每折最多 300 秒墙钟时间**，并非整轮 5 分钟。当前 `prepare.py` 将 300 秒作为超时上限，训练如果提前完成会立即评分，并不会强制训练满 5 分钟；不得称作严格的固定时长训练。所有候选必须使用相同上限、折分组和种子。**不设置研究总时长或总轮数。**
 
 评估器计算 148 类 macro-F1，不能使用 `train.py` 自报的指标。读取每折结果、均值、标准差、训练耗时、实际使用的计算设备、候选 commit 和输入哈希。所有真实本机结果标记 `LOCAL_EXPERIMENTAL`，不冒充独立防篡改认证结果。
 
