@@ -4,10 +4,10 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-008 假设（由受试者级分析驱动）：评估指标是 MAE，而 Ridge 拟合的是 MSE；
-受试者误差高度异质（top10% 占约 20% 总误差），高误差受试者会拉动最小二乘。
-改用 Huber 稳健损失（IRLS 对大残差降权）拟合同一 9 维特征子集，delta 只由
-训练折残差决定；所有预处理与拟合都只使用训练折数据。
+round-009 假设（由特征组分析驱动）：round-001 全 63 维在 MSE 下过拟合，
+round-006 舌象组在 Ridge 下也无增益；但 Huber 稳健损失改变了模型对特征的利用
+方式。在冠军 Huber 的 9 维基础特征之外加入脉波组（36:51，15 维），检验高维
+生理信号在稳健损失下是否带来增量信息。
 """
 
 from __future__ import annotations
@@ -90,7 +90,7 @@ def main() -> None:
 
     train_x, train_mask = matrix(rows)
     predict_x, predict_mask = matrix(inputs["rows"])
-    keep = slice(0, 9)  # 冠军特征子集：人口学 6 + 人体测量 3
+    keep = list(range(0, 9)) + list(range(36, 51))  # 9 维基础 + 脉波 15 维
     train_x, train_mask = train_x[:, keep], train_mask[:, keep]
     predict_x, predict_mask = predict_x[:, keep], predict_mask[:, keep]
     y = np.array([row["scores"] for row in rows], dtype=float)
