@@ -4,8 +4,14 @@ import json
 
 import pytest
 
-from runtime.cli import build_parser, main
-from runtime.protocols import train_candidate, trusted_score
+try:
+    from runtime.cli import build_parser, main
+    from runtime.protocols import train_candidate, trusted_score
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    pytest.skip("torch 未安装：神经栈只在 acam-lab 训练与验收", allow_module_level=True)
+
 
 pytestmark = pytest.mark.synthetic
 

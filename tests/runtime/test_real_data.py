@@ -4,19 +4,26 @@ fail-closed evaluation and the checkpoint smoke_only gateways."""
 import random
 
 import pytest
-import torch
 
-from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord
-from data.real_split import build_real_manifest
-from runtime.checkpoint import load_training_checkpoint
-from runtime.real_data import (
-    RealBatchProvider,
-    build_real_model,
-    real_eval_manifest,
-    real_input_spec,
-)
-from runtime.tcm_eval import TCMTrustedEvaluator
-from runtime.trainer import Trainer, TrainerConfig
+try:
+    import torch
+
+    from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord
+    from data.real_split import build_real_manifest
+    from runtime.checkpoint import load_training_checkpoint
+    from runtime.real_data import (
+        RealBatchProvider,
+        build_real_model,
+        real_eval_manifest,
+        real_input_spec,
+    )
+    from runtime.tcm_eval import TCMTrustedEvaluator
+    from runtime.trainer import Trainer, TrainerConfig
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    pytest.skip("torch 未安装：神经栈只在 acam-lab 训练与验收", allow_module_level=True)
+
 
 pytestmark = pytest.mark.synthetic
 

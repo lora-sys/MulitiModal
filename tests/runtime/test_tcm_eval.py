@@ -3,21 +3,28 @@
 import math
 
 import pytest
-import torch
 
-from core.models import default_tcm_model
-from runtime.batches import SyntheticBatchProvider
-from runtime.checkpoint import load_training_checkpoint
-from runtime.tcm_eval import (
-    PRIMARY_METRIC,
-    EvalManifest,
-    TCMTrustedEvaluator,
-    compute_per_dim_stats,
-    compute_subject_level_metrics,
-    make_synthetic_tcm_manifest,
-)
-from runtime.tcm_infer import TCMPredictor
-from runtime.trainer import Trainer, TrainerConfig
+try:
+    import torch
+
+    from core.models import default_tcm_model
+    from runtime.batches import SyntheticBatchProvider
+    from runtime.checkpoint import load_training_checkpoint
+    from runtime.tcm_eval import (
+        PRIMARY_METRIC,
+        EvalManifest,
+        TCMTrustedEvaluator,
+        compute_per_dim_stats,
+        compute_subject_level_metrics,
+        make_synthetic_tcm_manifest,
+    )
+    from runtime.tcm_infer import TCMPredictor
+    from runtime.trainer import Trainer, TrainerConfig
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    pytest.skip("torch 未安装：神经栈只在 acam-lab 训练与验收", allow_module_level=True)
+
 
 pytestmark = pytest.mark.synthetic
 

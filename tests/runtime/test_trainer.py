@@ -1,13 +1,20 @@
 """Trainer/Evaluator/Checkpoint contract tests on synthetic fixtures (#49)."""
 
 import pytest
-import torch
 
-from core.models import default_physio_model, default_tcm_model
-from runtime.batches import SyntheticBatchProvider, assert_subject_disjoint
-from runtime.checkpoint import load_training_checkpoint
-from runtime.evaluation import METRIC_VERSION
-from runtime.trainer import Trainer, TrainerConfig
+try:
+    import torch
+
+    from core.models import default_physio_model, default_tcm_model
+    from runtime.batches import SyntheticBatchProvider, assert_subject_disjoint
+    from runtime.checkpoint import load_training_checkpoint
+    from runtime.evaluation import METRIC_VERSION
+    from runtime.trainer import Trainer, TrainerConfig
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    pytest.skip("torch 未安装：神经栈只在 acam-lab 训练与验收", allow_module_level=True)
+
 
 pytestmark = pytest.mark.synthetic
 

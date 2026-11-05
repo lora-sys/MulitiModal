@@ -1,16 +1,23 @@
 """Model forward/backward/mask behavior on synthetic tensors (#48/#39)."""
 
 import pytest
-import torch
-from conftest import HIDDEN, NUM_SCORES, physio_batch, tcm_batch
 
-from core.losses import (
-    masked_mae_loss,
-    masked_mse_loss,
-    masked_multilabel_bce_loss,
-    masked_softmax_ce_loss,
-)
-from core.models import default_physio_model, default_tcm_model
+try:
+    import torch
+    from conftest import HIDDEN, NUM_SCORES, physio_batch, tcm_batch
+
+    from core.losses import (
+        masked_mae_loss,
+        masked_mse_loss,
+        masked_multilabel_bce_loss,
+        masked_softmax_ce_loss,
+    )
+    from core.models import default_physio_model, default_tcm_model
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    pytest.skip("torch 未安装：神经栈只在 acam-lab 训练与验收", allow_module_level=True)
+
 
 pytestmark = pytest.mark.synthetic
 
