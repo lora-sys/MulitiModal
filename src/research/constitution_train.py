@@ -4,8 +4,8 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-003 假设：9 维特征下 ridge=30 正则过强；降到 5 检验该低容量空间的
-最优收缩强度。特征子集与折内预处理保持不变。
+round-004 假设：9 维特征下 shrink 峰值可能右移；ridge 30→100 检验另一侧。
+特征子集与折内预处理保持不变。
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ def main() -> None:
 
     features = transform(train_x, train_mask)
     test_features = transform(predict_x, predict_mask)
-    ridge = 5.0
+    ridge = 100.0
     gram = features.T @ features + ridge * np.eye(features.shape[1])
     coefficients = np.linalg.solve(gram, features.T @ (y - y.mean(axis=0)))
     predictions = test_features @ coefficients + y.mean(axis=0)
