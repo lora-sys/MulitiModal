@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -439,7 +440,11 @@ def test_skill_flow_baseline_candidate_and_monitor(tmp_path):
         return commit, result, decision
 
     baseline_commit, baseline, _ = experiment(0, "synthetic baseline")
-    training.write_text(source.replace("C=4.0", "C=3.0"))
+    # 冠军候选冻结为 C=10.0；替换必须真实产生变化，否则第二次 commit 为空，
+    # 整个 skill-flow 回归会失败。用正则匹配任意 C 字面量，与冠军数值解耦。
+    trial_source = re.sub(r"C=\d+(?:\.\d+)?", "C=3.0", source, count=1)
+    assert trial_source != source, "synthetic trial candidate must differ from the baseline"
+    training.write_text(trial_source)
     trial_commit, trial, decision = experiment(1, "synthetic trial", baseline["macro_f1"])
     if decision == "REVERT":
         subprocess.run(["git", "reset", "--hard", baseline_commit], cwd=repo,

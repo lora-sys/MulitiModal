@@ -104,6 +104,10 @@ class TfidfNgramConfig:
     # "multinomial-saga"：一次多项式拟合，真实规模可用（8k 文档×148 类 64s/30 iters，
     # 2026-11-02 实测）。两者以 dev macro-F1 择优冻结，选择随 provenance 入档。
     solver: str = "ovr-liblinear"
+    # 交付冠军（commit d8371c7b）需要 char_wb 边界特征与二值化计数。默认值维持
+    # #53 基线行为，既有调用与测试不受影响。
+    analyzer: str = "char"
+    binary: bool = False
 
 
 class TfidfNgramBaseline:
@@ -134,9 +138,10 @@ class TfidfNgramBaseline:
                 (
                     "tfidf",
                     TfidfVectorizer(
-                        analyzer="char",
+                        analyzer=cfg.analyzer,
                         ngram_range=(cfg.ngram_low, cfg.ngram_high),
                         min_df=cfg.min_df,
+                        binary=cfg.binary,
                         sublinear_tf=cfg.sublinear_tf,
                     ),
                 ),
@@ -215,6 +220,8 @@ class TfidfNgramBaseline:
                 "class_weight": cfg.class_weight,
                 "max_iter": cfg.max_iter,
                 "solver": cfg.solver,
+                "analyzer": cfg.analyzer,
+                "binary": cfg.binary,
                 "solver_rationale": (
                     "multinomial lbfgs FD-gradient perf defect in sklearn1.9/scipy1.18"
                 ),

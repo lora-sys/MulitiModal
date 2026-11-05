@@ -26,10 +26,10 @@ def main() -> None:
     training = json.loads(Path(args.train).read_text(encoding="utf-8"))
     texts = json.loads(Path(args.predict).read_text(encoding="utf-8"))
     model = make_pipeline(
-        TfidfVectorizer(analyzer="char", ngram_range=(1, 3), min_df=2,
-                        sublinear_tf=True),
+        TfidfVectorizer(analyzer="char_wb", ngram_range=(1, 4), min_df=1,
+                        binary=True, sublinear_tf=True),
         OneVsRestClassifier(LogisticRegression(
-            solver="liblinear", C=4.0, class_weight="balanced", max_iter=2000,
+            solver="liblinear", C=10.0, class_weight="balanced", max_iter=2000,
             random_state=args.seed,
         )),
     )
