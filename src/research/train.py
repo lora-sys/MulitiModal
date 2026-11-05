@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.svm import LinearSVC
+from sklearn.linear_model import LogisticRegression
 from sklearn.multiclass import OneVsRestClassifier
 from sklearn.pipeline import make_pipeline
 
@@ -27,9 +27,9 @@ def main() -> None:
     texts = json.loads(Path(args.predict).read_text(encoding="utf-8"))
     model = make_pipeline(
         TfidfVectorizer(analyzer="char", ngram_range=(1, 4), min_df=1,
-                        sublinear_tf=True),
-        OneVsRestClassifier(LinearSVC(
-            C=4.0, class_weight="balanced", max_iter=2000,
+                        max_df=0.9, sublinear_tf=True),
+        OneVsRestClassifier(LogisticRegression(
+            solver="liblinear", C=4.0, class_weight="balanced", max_iter=2000,
             random_state=args.seed,
         )),
     )
