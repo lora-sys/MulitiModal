@@ -1,19 +1,20 @@
-"""第二阶段可编辑候选：八维体质评分回归基线。
+"""第二阶段可编辑候选：八维体质评分回归。
 
 冻结评价器只给本进程两个 JSON 文件（train.json / predict.json），运行在隔离
-目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。基点模型只使用训练
-折的 8 个观测维度，输出 (n, 8) 的分数；平和质完全未观测，绝不预测。
+目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
+输出必须是 (n, 8)，绝不预测第 9 维。
 
-基线策略：每维训练折中位数（对 MAE 稳健），不使用任何特征。后续轮次由
-AutoResearch 循环在本文件内自主提出假设并修改。
+round-001 假设：63 维生理特征比纯中位数基线含更多信息。所有预处理（缺失值
+中位数、标准化统计量、岭回归系数）都只在训练折内拟合。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import statistics
 from pathlib import Path
+
+import numpy as np
 
 
 def main() -> None:
@@ -29,11 +30,40 @@ def main() -> None:
     rows = training["rows"]
     n_dims = len(training["score_dims"])
     if n_dims != 8 or any(len(row["scores"]) != n_dims for row in rows):
-        raise ValueError("baseline expects exactly 8 observed constitution scores")
-    medians = [statistics.median(row["scores"][index] for row in rows)
-               for index in range(n_dims)]
-    predictions = [list(medians) for _ in inputs["rows"]]
-    Path(args.output).write_text(json.dumps(predictions), encoding="utf-8")
+        raise ValueError("candidate expects exactly 8 observed constitution scores")
+
+    def matrix(records: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+        values = np.array(
+            [[np.nan if value is None else float(value) for value in row["features"]]
+             for row in records], dtype=float,
+        )
+        mask = np.array([row["feature_mask"] for row in records], dtype=bool)
+        values[~mask] = np.nan
+        return values, mask
+
+    train_x, train_mask = matrix(rows)
+    predict_x, predict_mask = matrix(inputs["rows"])
+    y = np.array([row["scores"] for row in rows], dtype=float)
+
+    # 折内拟合：中位数填补 + 标准化 + 缺失指示（统计量只来自训练折）
+    with np.errstate(invalid="ignore"):
+        medians = np.nanmedian(train_x, axis=0)
+    medians = np.where(np.isfinite(medians), medians, 0.0)
+    filled_train = np.where(train_mask, train_x, medians)
+    mean = filled_train.mean(axis=0)
+    scale = np.where(filled_train.std(axis=0) > 1e-9, filled_train.std(axis=0), 1.0)
+
+    def transform(x: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        filled = np.where(mask, x, medians)
+        return np.concatenate([(filled - mean) / scale, (~mask).astype(float)], axis=1)
+
+    features = transform(train_x, train_mask)
+    test_features = transform(predict_x, predict_mask)
+    ridge = 30.0
+    gram = features.T @ features + ridge * np.eye(features.shape[1])
+    coefficients = np.linalg.solve(gram, features.T @ (y - y.mean(axis=0)))
+    predictions = test_features @ coefficients + y.mean(axis=0)
+    Path(args.output).write_text(json.dumps(predictions.tolist()), encoding="utf-8")
 
 
 if __name__ == "__main__":
