@@ -1,16 +1,23 @@
 """Spec and batch contract tests: rejection paths are the point (#48)."""
 
 import pytest
-import torch
-from conftest import physio_batch, physio_spec, tcm_batch, tcm_spec
 
-from core.batch import ModelBatch
-from core.specs import (
-    InputSpecSet,
-    ModalitySpec,
-    TargetSpec,
-    make_physio_input_spec,
-)
+try:
+    import torch
+    from conftest import physio_batch, physio_spec, tcm_batch, tcm_spec
+
+    from core.batch import ModelBatch
+    from core.specs import (
+        InputSpecSet,
+        ModalitySpec,
+        TargetSpec,
+        make_physio_input_spec,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    pytest.skip("torch 未安装：神经栈只在 acam-lab 训练与验收", allow_module_level=True)
+
 
 pytestmark = pytest.mark.synthetic
 

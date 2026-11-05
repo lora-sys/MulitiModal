@@ -3,17 +3,24 @@
 import json
 
 import pytest
-import torch
-from conftest import HIDDEN, physio_batch, tcm_batch
 
-from core.models import default_physio_model, default_tcm_model
-from core.registry import (
-    MODEL_BUILDERS,
-    batch_predict,
-    load_model,
-    resolve_device,
-    save_model,
-)
+try:
+    import torch
+    from conftest import HIDDEN, physio_batch, tcm_batch
+
+    from core.models import default_physio_model, default_tcm_model
+    from core.registry import (
+        MODEL_BUILDERS,
+        batch_predict,
+        load_model,
+        resolve_device,
+        save_model,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    pytest.skip("torch 未安装：神经栈只在 acam-lab 训练与验收", allow_module_level=True)
+
 
 pytestmark = pytest.mark.synthetic
 

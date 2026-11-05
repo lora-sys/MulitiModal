@@ -1,9 +1,21 @@
-"""Shared synthetic batch factories for core tests (#48)."""
+"""Shared synthetic batch factories for core tests (#48).
 
-import torch
+The factories need torch, which is only installed on the acam-lab dev host. This
+conftest therefore stays importable without torch (placeholders, no skip here):
+the three `tests/core` modules each skip themselves at module level. Skipping
+from a conftest turned out to depend on how the directory was invoked, so the
+decision belongs to the modules, not to the shared helper.
+"""
 
-from core.batch import ModelBatch
-from core.specs import make_physio_input_spec, make_tcm_input_spec
+try:
+    import torch
+
+    from core.batch import ModelBatch
+    from core.specs import make_physio_input_spec, make_tcm_input_spec
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    torch = ModelBatch = make_physio_input_spec = make_tcm_input_spec = None
 
 BODY_DIM = 12
 PHYSIO_DIM = 7
