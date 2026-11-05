@@ -10,7 +10,8 @@
       "retrieved_files": [
         {
           "path": "docs/source/pre-massage-fatigue-prediction-framework.pdf",
-          "sha256": "29727daced33cc95506f580ea542f4bd1386c9a44b29cf1e2836627439eed781"
+          "sha256": "29727daced33cc95506f580ea542f4bd1386c9a44b29cf1e2836627439eed781",
+          "scope": "repo"
         }
       ],
       "exact_supported_claim": "BPSI (Eq.2) is a Pre-only weighted index; EFRI (Eq.3) is an experimental During-EEG + Post-Pre composite target; Eq.4-9 sketch the dual-branch dual-head network. Design intent only.",
@@ -26,12 +27,23 @@
       "access_date": "2026-10-30",
       "retrieved_files": [
         {
-          "path": "tests/runtime/test_autoresearch.py",
-          "sha256": "TRACKED-IN-GIT"
+          "path": "tests/runtime/test_cli.py",
+          "sha256": "TRACKED-IN-GIT",
+          "scope": "repo"
+        },
+        {
+          "path": "tests/runtime/test_trainer.py",
+          "sha256": "TRACKED-IN-GIT",
+          "scope": "repo"
+        },
+        {
+          "path": "tests/runtime/test_tcm_eval.py",
+          "sha256": "TRACKED-IN-GIT",
+          "scope": "repo"
         }
       ],
       "exact_supported_claim": "TCM dual-model engineering loop (model V1, trainer, checkpoint, trusted evaluator, inference API, bounded RSI harness) runs end-to-end on synthetic tensors: 77 pytest cases green on dev host acam-lab; ruff clean.",
-      "limitations": "SMOKE_ONLY by definition (#22/#47): synthetic tensors prove engineering validity only; no scientific or clinical claim is supported; real training metrics cannot be derived from these runs.",
+      "limitations": "SMOKE_ONLY by definition (#22/#47): synthetic tensors prove engineering validity only; no scientific or clinical claim is supported; real training metrics cannot be derived from these runs. 2026-11-05 reference audit: this claim originally cited tests/runtime/test_autoresearch.py, which commit 37f4d11 deleted together with the bounded RSI harness. The VERIFIED verdict and the 77-case result it recorded are NOT rewritten; only the checkable evidence body is restated as the three surviving tests/runtime files above. Any harness-specific engineering assertion retired with that implementation and is no longer claimed here.",
       "verification_state": "VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED"
@@ -44,7 +56,8 @@
       "retrieved_files": [
         {
           "path": "tests/runtime/test_trainer.py",
-          "sha256": "TRACKED-IN-GIT"
+          "sha256": "TRACKED-IN-GIT",
+          "scope": "repo"
         }
       ],
       "exact_supported_claim": "PhysioBPSIEFRIModel forward/loss/checkpoint paths execute on synthetic Pre-only tensors with During/Post rejection enforced.",
@@ -61,7 +74,8 @@
       "retrieved_files": [
         {
           "path": "data/local/mendeley-cxtph3tjsg-v1/Share data.xls (dev host, git-ignored)",
-          "sha256": "6206f432b683f8a7b9a75dae23e598a4f01a41a4f8af84b099924b9d85d08a96"
+          "sha256": "6206f432b683f8a7b9a75dae23e598a4f01a41a4f8af84b099924b9d85d08a96",
+          "scope": "host"
         }
       ],
       "exact_supported_claim": "Dataset downloaded and audited: 274 subjects x 71 columns; eight constitution score columns (YaD/YiD/QiDf/PW/WH/BS/SDa/QDp) 0-100, fully observed with zero missing; no balanced-constitution (9th) column exists; no explicit subject ID column (row order = anonymous identity); zero duplicate rows; CC BY 4.0. Eligibility: train_candidate for 8/9-dim masked score regression under ZYYXH/T157-2009 (edition fingerprint-verified).",
@@ -96,19 +110,22 @@
       "retrieved_files": [
         {
           "path": "data/local/zenodo-4431679/CCMQ SAS code.sas",
-          "md5": "3b622e25070847c767c31806d07afcf2"
+          "md5": "3b622e25070847c767c31806d07afcf2",
+          "scope": "host"
         },
         {
           "path": "data/local/zenodo-4431679/TEST_DATA.xlsx",
-          "md5": "363d3e388df625425242fb2e45ec3d97"
+          "md5": "363d3e388df625425242fb2e45ec3d97",
+          "scope": "host"
         },
         {
           "path": "data/local/mendeley-cxtph3tjsg-v1/Share data.xls",
-          "sha256": "6206f432b683f8a7b9a75dae23e598a4f01a41a4f8af84b099924b9d85d08a96"
+          "sha256": "6206f432b683f8a7b9a75dae23e598a4f01a41a4f8af84b099924b9d85d08a96",
+          "scope": "host"
         }
       ],
       "exact_supported_claim": "Historical CCMQ-60 rule engine (src/labels/ccmq60.py) implemented and cross-checked: subscale item groups, reverse keys (per subscale), and scale sizes re-parsed from the Zenodo researcher SAS source bytes match the engine tables; the engine scores the 14-row TEST_DATA reference sample under both missing policies; decision thresholds 30/40 (biased) and 60/30/40 (balanced) per PMC10164641 section 2.2 (ZYYXH/T157-2009); all eight Mendeley score columns fingerprint-verify to the same edition (damp-heat=6 fingerprint is edition-distinctive).",
-      "limitations": "Su et al. 2019 paper's own abbreviation definition table is paywalled, so the column mapping is FINGERPRINT_CROSS_CHECKED, not paper-table verified; 2009 edition item texts not compared word-by-word; subject row 273 violates the item-count fingerprint on four columns (QC-flagged, excluded from rule cross-checks); the researcher SAS is not an official oracle (#47).",
+      "limitations": "Su et al. 2019 paper's own abbreviation definition table is paywalled, so the column mapping is FINGERPRINT_CROSS_CHECKED, not paper-table verified; 2009 edition item texts not compared word-by-word; subject row 273 violates the item-count fingerprint on four columns (QC-flagged, excluded from rule cross-checks); the researcher SAS is not an official oracle (#47). 2026-11-05 reference audit: the two data/local/zenodo-4431679 paths above exist on NEITHER acam-lab nor this host, while the mendeley path still resolves; the missing pair is recoverable from Zenodo record 4431679 (DOI 10.5281/zenodo.4431679, CC BY 4.0, registered in src/data/datasets.py:108-120) and re-confirmed against the md5 values recorded above. VERIFIED state unchanged.",
       "verification_state": "VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
@@ -153,7 +170,8 @@
       "retrieved_files": [
         {
           "path": "upstream:README.md@228791fb",
-          "sha256": "3958fd4195ac2f98ed35c4eaa4f3028a335165ee24945e96426c408d25793a41"
+          "sha256": "3958fd4195ac2f98ed35c4eaa4f3028a335165ee24945e96426c408d25793a41",
+          "scope": "external"
         }
       ],
       "exact_supported_claim": "Upstream autoresearch is usable under MIT: README lines 90-92 state '## License / MIT'; GitHub API license field is null and no LICENSE file exists in the root listing; maintainer svlandeg confirms in issue #523: 'the readme states it's MIT, so feel free to use it as such'.",
@@ -186,19 +204,22 @@
       "retrieved_files": [
         {
           "path": "data/local/zenodo-4431679/TEST_DATA.xlsx (dev host, git-ignored)",
-          "md5": "363d3e388df625425242fb2e45ec3d97"
+          "md5": "363d3e388df625425242fb2e45ec3d97",
+          "scope": "host"
         },
         {
           "path": "data/local/zenodo-4431679/CCMQ SAS code.sas (dev host, git-ignored)",
-          "md5": "3b622e25070847c767c31806d07afcf2"
+          "md5": "3b622e25070847c767c31806d07afcf2",
+          "scope": "host"
         },
         {
           "path": "data/local/zenodo-4431679/CCMQ SPSS syntax.sps (dev host, git-ignored)",
-          "md5": "d843895a1fa7f626a7aa62c116757704"
+          "md5": "d843895a1fa7f626a7aa62c116757704",
+          "scope": "host"
         }
       ],
       "exact_supported_claim": "Researcher CCMQ scoring code retrieved: TEST_DATA.xlsx holds 14 subjects x 63 CCMQ item responses; SAS/SPSS syntax implements researcher scoring. Eligibility: rules_test_only — usable to verify a #38 rule-engine implementation against researcher scoring, never as supervised training data.",
-      "limitations": "Researcher code is not an official scorer (#47/#38); 14 subjects is a test sample only; ZYYXH/T157-2009 edition.",
+      "limitations": "Researcher code is not an official scorer (#47/#38); 14 subjects is a test sample only; ZYYXH/T157-2009 edition. 2026-11-05 reference audit: all three files are absent on both known hosts, so the SAS/SPSS byte-level cross-check in tests/labels/test_ccmq60.py currently skips everywhere rather than only on non-dev hosts; re-fetch from https://zenodo.org/records/4431679 (registered in src/data/datasets.py:108-120) and verify against the md5 values above to restore it. VERIFIED state unchanged.",
       "verification_state": "VERIFIED",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED"
@@ -224,19 +245,27 @@
       "verification_state": "VERIFIED",
       "retrieved_files": [
         {
+          "path": "docs/reports/tcm-50-real-training.md",
+          "sha256": "TRACKED-IN-GIT",
+          "scope": "repo"
+        },
+        {
           "path": "runs/real-tcm-v8/manifest.jsonl",
-          "sha256": "b21ffe0f8ee9673574f16854bc8821b793f45332a1375fcbf2c548d3b5b1358f"
+          "sha256": "b21ffe0f8ee9673574f16854bc8821b793f45332a1375fcbf2c548d3b5b1358f",
+          "scope": "host"
         },
         {
           "path": "runs/real-tcm-v8/champion/weights.pt",
-          "sha256": "9d642282767df088a115a60d81b8102f29fca9a4931e2894df0ca48f35a25ad2"
+          "sha256": "9d642282767df088a115a60d81b8102f29fca9a4931e2894df0ca48f35a25ad2",
+          "scope": "host"
         },
         {
           "path": "artifacts/tcm-50-v8/summary.json",
-          "sha256": "73a51b060946f561bc418392d266a2db5fad189891858a4069152d4ad0780675"
+          "sha256": "73a51b060946f561bc418392d266a2db5fad189891858a4069152d4ad0780675",
+          "scope": "host"
         }
       ],
-      "limitations": "标签为 RULE 派生类别（≥40=YES），非作者发布的分类标签，非临床真值；受试者身份=数据行序（数据集无 ID 列，UNVERIFIED），划分仅行级互斥；holdout 42 人、无重采样置信区间；选择余量由折间 std 派生，winner's curse 仍存在；proposer 归属为自报（AGENT_ISOLATION_UNVERIFIED）；无独立参考数据，故 GO_RESEARCH_CLAIMS 仍 NOT_GRANTED。",
+      "limitations": "标签为 RULE 派生类别（≥40=YES），非作者发布的分类标签，非临床真值；受试者身份=数据行序（数据集无 ID 列，UNVERIFIED），划分仅行级互斥；holdout 42 人、无重采样置信区间；选择余量由折间 std 派生，winner's curse 仍存在；proposer 归属为自报（AGENT_ISOLATION_UNVERIFIED）；无独立参考数据，故 GO_RESEARCH_CLAIMS 仍 NOT_GRANTED。 2026-11-05 reference audit: the three run-artifact paths above are absent on both this host and acam-lab; acam-lab keeps only artifacts/tcm-50-v8/NOT_RECOVERABLE.json (status NOT_REPRODUCIBLE, recording delivered weights 9d642282767df088... against today's refit cb9f59be6a5dcfc2..., holdout_read false, split reproducible 191/41/42). That file names its probe as scripts/reconstruct_tcm_50_v8.py, which commit 37f4d11 deleted, so the reproduction probe no longer exists either. The durable in-git carrier for these numbers is docs/reports/tcm-50-real-training.md, now cited above; the VERIFIED state, recorded hashes and reported numbers are unchanged.",
       "owner": "lora-sys",
       "reviewer": "AGENT_NOT_VERIFIED",
       "blocks": []

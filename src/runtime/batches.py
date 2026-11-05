@@ -123,7 +123,7 @@ class SyntheticBatchProvider:
     ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         if self.task == "tcm":
             # Deterministic, learnable from body features (NOT real labels;
-            # exists so harness candidates differ measurably on smoke runs).
+            # exists so smoke runs give a candidate a measurable signal to fit).
             body = features["body_features"]
             idx = torch.arange(NUM_SCORES) % body.shape[1]
             labels = (body[:, idx] > 0.5).float()

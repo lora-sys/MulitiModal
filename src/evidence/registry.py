@@ -23,6 +23,18 @@ NOT_AVAILABLE = "NOT_AVAILABLE"
 NOT_APPLICABLE = "NOT_APPLICABLE"
 STATES = (VERIFIED, UNVERIFIED, NOT_VERIFIED, NOT_AVAILABLE, NOT_APPLICABLE)
 
+# A retrieved_files entry carries a real digest when the file itself is the
+# evidence, and the `TRACKED-IN-GIT` digest when the git blob is. Neither says
+# where the file lives - `pdf-spec` is tracked yet has a real SHA-256 - so scope
+# is declared per entry. Inferring it from the Git index or from `check-ignore`
+# made the verdict depend on the host reading the record.
+TRACKED_IN_GIT = "TRACKED-IN-GIT"
+
+SCOPE_REPO = "repo"  # part of this checkout; a missing file is a defect
+SCOPE_HOST = "host"  # outside Git by design: data/, runs/, artifacts/
+SCOPE_EXTERNAL = "external"  # another repository (upstream:...)
+SCOPES = (SCOPE_REPO, SCOPE_HOST, SCOPE_EXTERNAL)
+
 ENGINEERING = "GO_ENGINEERING"
 REAL_DATA_TRAINING = "GO_REAL_DATA_TRAINING"
 RESEARCH_CLAIMS = "GO_RESEARCH_CLAIMS"
@@ -68,8 +80,23 @@ class EvidenceClaim:
         for f in self.retrieved_files:
             if "path" not in f or not ({"sha256", "md5"} & set(f)):
                 raise ValueError(
-                    f"claim {self.claim_id!r}: retrieved_files entries need "
-                    "path plus sha256 or md5"
+                    f"claim {self.claim_id!r}: retrieved_files entries need path plus sha256 or md5"
+                )
+            scope = f.get("scope")
+            if scope not in SCOPES:
+                raise ValueError(
+                    f"claim {self.claim_id!r}: {f['path']!r} needs scope in {SCOPES}, got {scope!r}"
+                )
+            digest = f.get("sha256") or f.get("md5") or ""
+            if digest == TRACKED_IN_GIT and scope != SCOPE_REPO:
+                raise ValueError(
+                    f"claim {self.claim_id!r}: {f['path']!r} cites a git blob "
+                    "but is not declared repo scope"
+                )
+            if str(f["path"]).startswith("upstream:") and scope != SCOPE_EXTERNAL:
+                raise ValueError(
+                    f"claim {self.claim_id!r}: {f['path']!r} is external; declare "
+                    f"scope={SCOPE_EXTERNAL!r}"
                 )
 
     def to_dict(self) -> dict:
@@ -136,11 +163,78 @@ class EvidenceRegistry:
                 lines.append(line)
         return lines
 
+    def audit_references(self, root: str | Path | None = None) -> list[str]:
+        """Report evidence files that no longer resolve.
+
+        Scope is declared in each `retrieved_files` entry, so the verdict is the
+        same on every machine. It used to be inferred, three ways, each wrong in
+        its own way: "has a digest" missed `pdf-spec` (a tracked file with a real
+        SHA-256); the Git index missed a repository reference as soon as its
+        deletion was committed - the normal case; and `git check-ignore` also
+        honours `.git/info/exclude` and the user's global excludes, so one
+        private `*.pdf` rule turned a repository defect into an informational
+        gap. Repo paths must exist in the checkout; host paths live outside Git
+        by design (data/, runs/, artifacts/) and are reported as a gap, not a
+        defect - though absence says nothing about which host should hold them:
+        2026-11-05 found two such claims missing on the dev host as well.
+        External paths point into another repository and are not checkable here.
+        A claim whose references are ALL unresolvable is called out separately,
+        because that claim cannot be re-verified on this checkout.
+        """
+        base = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+        lines = []
+        for claim in self.claims.values():
+            resolved = 0
+            absent = 0
+            checkable = 0
+            for entry in claim.retrieved_files:
+                path = str(entry.get("path", ""))
+                scope = entry.get("scope")
+                if scope == SCOPE_EXTERNAL or path.startswith("upstream:"):
+                    continue  # another repository, not checkable from here
+                checkable += 1
+                target = base / path
+                if not target.exists():
+                    # Some registry entries append an annotation instead of a
+                    # path, e.g. "Share data.xls (dev host, git-ignored)". Only
+                    # fall back to the stripped form when that is what actually
+                    # resolves: a real filename may itself end in a parenthesised
+                    # suffix ("notes (draft)"), and trimming it unconditionally
+                    # invented defects for files that are present.
+                    if path.endswith(")") and " (" in path:
+                        stripped = path[: path.rindex(" (")]
+                        if (base / stripped).exists():
+                            path = stripped
+                            target = base / stripped
+                if target.exists():
+                    resolved += 1
+                    continue
+                absent += 1
+                if scope == SCOPE_REPO:
+                    lines.append(
+                        f"MISSING-REPO-REFERENCE {claim.claim_id}: "
+                        f"{path} is cited as the evidence body but is not in "
+                        "the checkout"
+                    )
+                else:
+                    lines.append(
+                        f"host-local-absent {claim.claim_id}: {path} "
+                        "(declared host scope; not present on this host)"
+                    )
+            if checkable and not resolved:
+                lines.append(
+                    f"UNRESOLVABLE-ON-CHECKOUT {claim.claim_id}: all "
+                    f"{absent} reference(s) absent; re-fetch per its "
+                    "limitations before treating this claim as checkable"
+                )
+        return lines
+
 
 # Gate requirements: a gate is GRANTED only when every listed claim is
 # VERIFIED in the registry. GO_ENGINEERING is derived from engineering
 # smoke claims only; the higher gates require real-data evidence, so a
-# smoke score can never promote them (#47 hard rule 8).
+# smoke score can never promote them (#47：三级门禁独立判定，见 AGENTS.md
+# 第 2.3 节「证据分级声明」)。
 GATE_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
     "tcm_constitution": {
         ENGINEERING: ("tcm-engineering-smoke",),

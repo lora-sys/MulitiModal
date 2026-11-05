@@ -9,6 +9,27 @@ Pi），经主流程逐条核验后确认为真实问题的条目。此清单是
 `PYTHONPATH=src python scripts/review_eval.py [--summary artifacts/tcm-50/summary.json]`
 退出码非 0 = 存在回归。单元级检查同时以 pytest 用例固化。
 
+> **执行状态（2026-11-05 核对，条目正文未改动）**：上段的统一执行体
+> `scripts/review_eval.py`（1899 行）已随 `75b3cd9 refactor(scripts): remove dead
+> report and legacy review_eval scripts` 删除，连带删除了其自身的
+> `tests/runtime/test_review_eval.py`。因此本清单 56 个条目中 **45 条的「验证」列
+> 指向的 `review_eval eNN_*` 函数已不可执行**，其中 23 条同时列有 pytest 用例，
+> 仍可运行。本文件自此是**人工核对用的规范清单**，不再是自动门禁；条目的
+> 「不得重写既有条目」约束保持不变，任何条目只有在对应回归被重新固化为 pytest
+> 用例后才恢复机械可验证，届时应在该条目「验证」列追加新执行体而不替换原文。
+> 另：本清单为 #50 冻结基准，其中多个条目的修复体不再存在于仓库里（不只是验证
+> 函数丢失），分两类：（一）实现体仍在本仓、但已无调用方——E01 的
+> `exclude_subjects_from_manifest` 现在 `src/data/real_split.py:211` **零调用**
+> （仅 L280 有一句文字提及），E02 的 `n_undefined_f1` 仅存在于已退役的
+> `src/runtime/tcm_eval.py:113,142,372,424`；（二）实现体随被删脚本一起消失——E06
+> `_fixed_training`、E16 `metric_params`/`champion_provenance`、E23
+> `apply_config_patch`、E28 `assert_champion_matches_manifest`、E41 `_worker_env`、
+> E46 `score_failed` 在现仓 `src`+`tests` 中已无任何出现，它们原先位于
+> `scripts/review_eval.py` 与 `scripts/tcm_real_report.py`（`git show 75b3cd9^` 可查）。
+> 两类都不能靠重跑 `review_eval.py` 复核。
+> 这些条目仍作为历史裁决保留，但其行为已在仓库内不可验证；删除或重写它们需要
+> 单独授权。
+
 | ID | 来源 | 问题（一句话） | 修复后行为 | 验证 |
 | --- | --- | --- | --- | --- |
 | E01 | Pi R-01 | QC 敏感性对照用了重新 shuffle 的划分（~13% 受试者换分区，且 273 在 holdout） | `exclude_subjects_from_manifest` 保持原划分仅剔除 QC 行，scaler 在缩减 train 折内重拟合 | review_eval `e01_qc_split_preserved` + pytest |
