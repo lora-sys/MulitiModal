@@ -4,7 +4,7 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-004 假设：9 维特征下 shrink 峰值可能右移；ridge 30→100 检验另一侧。
+round-005 假设：ridge 从 30→100 持续改善，检验 300 是否越过峰值。
 特征子集与折内预处理保持不变。
 """
 
@@ -63,7 +63,7 @@ def main() -> None:
 
     features = transform(train_x, train_mask)
     test_features = transform(predict_x, predict_mask)
-    ridge = 100.0
+    ridge = 300.0
     gram = features.T @ features + ridge * np.eye(features.shape[1])
     coefficients = np.linalg.solve(gram, features.T @ (y - y.mean(axis=0)))
     predictions = test_features @ coefficients + y.mean(axis=0)
