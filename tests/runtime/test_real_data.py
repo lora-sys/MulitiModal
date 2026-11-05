@@ -8,7 +8,7 @@ import torch
 
 from data.mendeley import FEATURE_GROUP_SIZES, SubjectRecord
 from data.real_split import build_real_manifest
-from runtime.checkpoint import load_training_checkpoint, save_training_checkpoint
+from runtime.checkpoint import load_training_checkpoint
 from runtime.real_data import (
     RealBatchProvider,
     build_real_model,
