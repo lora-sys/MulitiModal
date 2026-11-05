@@ -4,8 +4,8 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-006 假设：ridge=100 冠军只用 9 维人口学/人体测量；舌象组（51:63）
-可能含中医体质增量信息。加入该 12 维，其他配置不变。
+round-004 假设：9 维特征下 shrink 峰值可能右移；ridge 30→100 检验另一侧。
+特征子集与折内预处理保持不变。
 """
 
 from __future__ import annotations
@@ -44,9 +44,9 @@ def main() -> None:
     train_x, train_mask = matrix(rows)
     predict_x, predict_mask = matrix(inputs["rows"])
     # 只用前 9 维（人口学 6 + 人体测量 3），降低容量
-    keep = list(range(0, 9)) + list(range(51, 63))
-    train_x, train_mask = train_x[:, keep], train_mask[:, keep]
-    predict_x, predict_mask = predict_x[:, keep], predict_mask[:, keep]
+    selected = slice(0, 9)
+    train_x, train_mask = train_x[:, selected], train_mask[:, selected]
+    predict_x, predict_mask = predict_x[:, selected], predict_mask[:, selected]
     y = np.array([row["scores"] for row in rows], dtype=float)
 
     # 折内拟合：中位数填补 + 标准化 + 缺失指示（统计量只来自训练折）
