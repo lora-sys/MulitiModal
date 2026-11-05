@@ -1,19 +1,75 @@
-# 本项目的证候研究适配
+# TCM-SD 证候分类研究适配说明
 
-这份说明是通用 AutoResearch Skill 的一个任务实例；任务事实不写进 Skill。
+本文档详细说明 [AutoResearch Skill](../skills/autoresearch/SKILL.md) 在中医证候多分类任务（TCM-SD）上的具体实现契约与运行标准。
 
-- 目标：以短症状主诉预测证候类别；当前任务不提供临床诊断。
-- 历史选择口径：TCM-SD protocol-v2，受试者分组、折内对验证集做单向精确文本去重，148 类 macro-F1，越高越好。现有 holdout 预算已用尽。
-- 候选文件：`src/research/train.py`。固定任务协议、候选执行和结果记录位于 `src/research/prepare.py`；只读监控位于 `src/research/dashboard.py`。
-- 当前状态：候选由本机 Python 子进程在临时目录运行，未通过 OS/容器级隔离，也未阻断网络。`AGENT_ISOLATION_UNVERIFIED` 仍成立；本地分数不能作为可信科研评分或临床结论。
-- 运行前先建立专用、干净的 Git worktree 和新的忽略目录 `runs/<tag>`。使用固定预算、seed、folds 和 repeats，不需要 Docker 镜像。完整流程见 [通用 Skill](../skills/autoresearch/SKILL.md) 和 [程序契约](../skills/autoresearch/program.md)。
+---
 
-从可信代码检出目录执行一次合成评估（路径按实际 worktree 修改）：
+## 1. 任务背景与核心规格
+
+- **预测目标**：输入患者的单条中文症状主诉短文本，预测其所属的中医证候类别（共 148 类别）。本任务仅作为健康参考，明确不提供临床诊断。
+- **数据集特征**：基于 TCM-SD 真实数据集，共计 54,152 例临床短文本，遵循 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 知识共享许可协议（非商业研究）。
+- **评价协议**：protocol-v2
+  - **受试者级物理隔离**：同一受试者的全部记录不可跨折拆分；
+  - **文本去重保障**：在训练折内部对验证折执行单向精确文本去重，消除简单文本记忆带来的虚高表现；
+  - **评价指标**：148 类宏平均 `macro-F1`（值在 [0, 1] 区间，数值越高越好）；
+  - **折次与种子**：标准评估执行 4 折 × 2 次重复（共 8 折次验证），随机种子固化为 `20261104`；
+  - **测试集状态**：历史 holdout 测试集解锁预算已彻底耗尽，严禁用于本轮候选的训练或选择。
+
+---
+
+## 2. 模块与入口职责
+
+- **唯一可编辑候选源码**：`src/research/train.py`。
+- **固化外部评价入口**：`src/research/prepare.py`。
+- **原生轻量只读看板**：`src/research/dashboard.py`。
+- **交付与部署契约**：`src/syndrome/delivery.py`。
+
+---
+
+## 3. 标准操作指南
+
+### 3.1 真实数据正式评估命令
+每轮探索更新指定输出的 JSON 路径：
 
 ```bash
-PYTHONPATH=src python -m research.prepare --synthetic \
-  --candidate /absolute/path/worktree/src/research/train.py \
-  --out /absolute/path/runs/tag/round-000.json --budget 60 --folds 2 --repeats 1
+export PYTHONPATH=src
+python -m research.prepare \
+  --manifest runs/sd-v2/short/selection_manifest.json \
+  --dataset runs/sd-v2/short/selection_records.json \
+  --candidate src/research/train.py \
+  --out runs/<tag>/round-000.json \
+  --folds 4 --repeats 2 --seed 20261104 --budget 300
 ```
 
-用 `python -m research.prepare record --help` 查看记录命令；记录要求候选文件与 Git 提交哈希一致，且不允许混合协议。`./solve.sh dashboard --run /absolute/path/runs/tag` 启动本机只读监控。本地结果文件没有独立认证，不能视为可信科研评分。
+### 3.2 快速合成冒烟评估 (Smoke Mode)
+用于在无真实数据或仅验证工程通路时快速执行：
+
+```bash
+export PYTHONPATH=src
+python -m research.prepare --synthetic \
+  --candidate src/research/train.py \
+  --out runs/<tag>/smoke-000.json \
+  --budget 60 --folds 2 --repeats 1
+```
+
+### 3.3 决策记录命令
+```bash
+python -m research.prepare record \
+  --results runs/<tag>/results.tsv \
+  --result runs/<tag>/round-xxx.json \
+  --commit <sha> \
+  --decision KEEP|REVERT|CRASH \
+  --description "<假设与实现描述>"
+```
+
+### 3.4 启动实时只读仪表盘
+```bash
+./solve.sh dashboard --run runs/<tag>
+```
+
+---
+
+## 4. 证据边界与合规声明
+
+- 本地评估由 Python 子进程在受限临时目录下运行，当前属于 `AGENT_ISOLATION_UNVERIFIED` 状态；
+- 本机生成的全部实验结果统一归属于 `LOCAL_EXPERIMENTAL` 级别，不可直接外推为具有外部通用性或临床证据力的学术结论。

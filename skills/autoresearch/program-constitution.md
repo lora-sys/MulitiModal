@@ -1,35 +1,28 @@
-# 中医体质 AutoResearch 第二阶段研究程序（最小、独立、冻结）
+# AutoResearch 任务契约：中医体质八维回归
 
-在证候线 program.md 之后启动的第二条研究线。复用同一 Skill、Git
-KEEP/REVERT/CRASH 循环、results.tsv 契约与 `research.dashboard` 只读监控；
-不新建训练平台、不使用 Docker、不启动多 Agent、不安装新依赖。
+本程序契约定义中医体质 AutoResearch 研究线的全流程规范。本任务与证候分类线（TCM-SD）完全平行且独立，共用轻量科研基础设施（Git KEEP/REVERT/CRASH 决策闭环、`results.tsv` 契约与 `research.dashboard` 原生只读仪表盘），不引入外部 Docker、多 Agent 或复杂平台。
 
-## 研究目标与冻结条件
+## 1. 研究目标与冻结条件
 
-- 数据：Mendeley `Share data.xls`，274 名受试者，8 维 PUBLISHED 体质评分
-  （ZYYXH/T157-2009，0–100）。平和质是第 9 维且**完全未观测**：ABSTAIN，
-  不伪造、不补零、不猜测，任何候选输出必须是 (n, 8)。
-- 主指标：`constitution/masked_mae`（8 维平均绝对误差），**越低越好**，
-  direction=minimize。RULE 派生标签与 PUBLISHED 评分不可互换。
-- 划分：selection-only 分组 4 折 × 2 重复，seed 20261105；同一受试者不跨
-  分区；holdout 为空（历史体质 holdout 2/2 解锁预算已耗尽，不得重复使用）。
-- 冻结哈希：`CONSTITUTION_DATASET_SHA256` = 原始 xls sha256；manifest 与
-  records 的 sha256 冻结在 `src/research/constitution_data.py`。
-- 预算：每折最多 300 秒（5 分钟墙钟），不额外安装依赖。
-- 证据状态：`LOCAL_EXPERIMENTAL`；评估器隔离 `AGENT_ISOLATION_UNVERIFIED`。
-  体质线 `GO_RESEARCH_CLAIMS` 仍为 `NOT_GRANTED`（缺独立参照数据），
-  任何 dev/CV 分数都不得推导科研结论或临床有效性。
+- **真实数据集**：Mendeley 数据源 `Share data.xls`，覆盖 274 名真实受试者，8 个 PUBLISHED 偏颇体质维度评分（依据行业标准 ZYYXH/T157-2009，分值范围 0~100）。
+- **第 9 维平和质严格拒判**：平和质在源数据中完全未被观测（0/274），执行 **ABSTAIN** 策略，严禁填零、插值或伪造，任何候选模型输出形状必须严格为 `(n, 8)`。
+- **主评价指标**：`constitution/masked_mae`（8 维平均绝对误差），**数值越低越好**（direction=`minimize`）。RULE 派生标签与 PUBLISHED 真实评分严格不可互换。
+- **验证折划分**：仅在选择集（selection partition）内进行受试者级 4 折 × 2 次重复（共 8 折次验证），随机种子固化为 `20261105`；同一受试者严禁跨折出现；测试集 holdout 显式为空（历史 2/2 次 holdout 解锁预算已耗尽，严禁复用）。
+- **完整性与防篡改哈希**：`CONSTITUTION_DATASET_SHA256` 绑定原始 Excel 文件的 sha256 校验和，选择集清单与记录哈希硬编码于 `src/research/constitution_data.py` 中。
+- **执行预算**：单折时间上限 300 秒（5 分钟墙钟时间），不安装未声明的重量级依赖。
+- **科学证据分级**：标记为 `LOCAL_EXPERIMENTAL`，评价隔离级别为 `AGENT_ISOLATION_UNVERIFIED`。体质线 `GO_RESEARCH_CLAIMS` 状态为 `NOT_GRANTED`，本地验证集指标严禁推导为临床有效性结论。
 
-## 先验证，再研究
+## 2. 严谨校验与实验前提
 
-1. **真实数据验证**：`python -m research.constitution_data verify` 核对哈希、
-   274 行、8 维、平和质未观测、缺失特征 mask、holdout 为空、标签来源。
-2. **回归基线**：`round-000.json` 记录基线候选（8 维训练折中位数），
-   以 `record --decision KEEP` 建立冠军。
-3. **自主实验**：之后每轮提出一个可检验假设，只改
-   `src/research/constitution_train.py`，提交 commit、完整评估、记录决策。
+1. **真实数据只读校验**：
+   ```bash
+   python -m research.constitution_data verify
+   ```
+   严格校验 Excel 哈希、274 行记录、8 维有效评分、平和质未观测、特征缺失 mask、holdout 为空以及标签血统。
+2. **基线对齐**：通过 `round-000.json` 沉淀基线模型（8 维训练折中位数回归），以 `record --decision KEEP` 确立初始 Champion。
+3. **自主探索**：后续每轮提出单一明确假设，仅修改 `src/research/constitution_train.py`，提交 commit 并执行完整外挂打分。
 
-## 固定评价命令
+## 3. 固化评价入口
 
 ```bash
 export PYTHONPATH=src
@@ -42,54 +35,53 @@ python -m research.constitution \
   --folds 4 --repeats 2 --seed 20261105 --budget 300
 ```
 
-评分由 `research.constitution` 在候选进程外计算，不采纳候选自报指标。
+> [!NOTE]
+> 评分计算由 `research.constitution` 在隔离子进程外部执行，候选自报分数不予采纳。
 
-## 实验循环
+## 4. 实验循环规则
 
-1. 查看当前 champion、Git HEAD、`results.tsv` 与上轮结果，提出一个可检验假设。
-2. 只修改 `src/research/constitution_train.py`，提交 commit，运行完整固定评价。
-3. 用 `python -m research.constitution record` 将 commit、masked_mae、假设和
-   KEEP / REVERT / CRASH 写入 `results.tsv`。
-4. **KEEP**：masked_mae 严格低于 champion 且实现值得保留。
-   **REVERT**：未改善，重置到 champion。**CRASH**：超时或结果无效，
-   检查日志、最多修复两次，否则回退；CRASH 不产生有效分数。
-5. 根据本轮结果选择下一假设，不提前排定全部实验，不逐轮请示。
+1. **提出假设**：查阅当前 Champion、Git HEAD、`results.tsv` 及上一轮逐维误差，提出单一可检验假设。
+2. **候选编辑与提交**：仅编辑 `src/research/constitution_train.py` 并提交 Git Commit。
+3. **评价判定**：
+   - **KEEP**：masked MAE 严格优于 Champion，且模型架构提升合理。
+   - **REVERT**：指标未提升，`git reset --hard` 回退至 Champion。
+   - **CRASH**：超时或异常报错，限就地排查 2 次，未恢复则果断回滚。
+4. **决策落盘**：
+   ```bash
+   python -m research.constitution record \
+     --repo . \
+     --results runs/constitution-v1/results.tsv \
+     --result runs/constitution-v1/round-xxx.json \
+     --commit <sha> \
+     --decision KEEP|REVERT|CRASH \
+     --description "<假设与改动摘要>"
+   ```
+5. **实时看板查看**：
+   ```bash
+   ./solve.sh dashboard --run runs/constitution-v1
+   ```
 
-只读监控（复用现有 Dashboard）：
+## 5. 第一轮交付成果（已冻结）
 
-```bash
-./solve.sh dashboard --run runs/constitution-v1
-```
+第一轮探索共计 18 轮（6 KEEP / 12 REVERT / 0 CRASH），产出冻结冠军 Commit `16c26582`：
+- **模型方案**：Huber 鲁棒全局线性回归 + kNN 局部中位数回归的逐维软集成，选用前 9 维基础特征（人口学 6 维 + 人体测量 3 维）。
+- **折外泛化表现**：折外 masked MAE 达到 **14.1437**（显著优于中位数基线的 15.65 与单一模型的表现）。
+- **交付与验收入口**（与证候线标准交付同构，工件与协议物理隔离）：
+  ```bash
+  export PYTHONPATH=src
+  python -m research.constitution_delivery deliver   # 最终全量拟合 + 工件导出 + 自动化验收
+  python -m research.constitution_delivery verify    # 纯只读核对（哈希与鲁棒性校验，不重新训练）
+  ```
+- **核心工件与输出清单**：
+  - 持久化模型工件：`artifacts/constitution-v1-champion/`（包含 `model.joblib`、`labels.json`、`registry_entry.json`，内嵌全量 sha256 清单与完整 provenance）。
+  - 交付审计报告：`runs/constitution-delivery/v1/`（包含 `delivery-report.json`、`per-dimension.json`、`verification.json`）。
+  - 8 维安全推理接口：`ConstitutionInference`，严格输出 8 个 PUBLISHED 维度；**第 9 维平和质恒定返回 ABSTAIN**；对缺失或超界输入严格防御（返回 `ABSTAIN` 或 `OUT_OF_DOMAIN`）。
+  - 所有逐维指标均严格源于 4 折 × 2 次重复的折外预测，非训练集内虚高自评。
 
-## 第一轮交付（已冻结，不再调参）
+## 6. 严令禁止事项
 
-第一轮共 18 轮（6 KEEP / 12 REVERT / 0 CRASH），冻结冠军 commit
-`16c26582`（Huber 全局线性 + kNN 局部中位数的逐维软集成，9 维基础特征），
-折外 masked MAE 14.1437；结果见 `runs/constitution-v1/results.tsv`。
-
-交付入口（与证候线 `syndrome.delivery` 同构，数据/协议/工件独立）：
-
-```bash
-export PYTHONPATH=src
-python -m research.constitution_delivery deliver   # 最终训练 + 工件 + 验收
-python -m research.constitution_delivery verify    # 只核对，不训练
-```
-
-- 工件：`artifacts/constitution-v1-champion/`（model.joblib / labels.json /
-  registry_entry.json，带 sha256 清单与 provenance）；
-- 报告：`runs/constitution-delivery/v1/`（delivery-report.json /
-  per-dimension.json / verification.json）；
-- 八维推理：`ConstitutionInference`，只输出 8 个 PUBLISHED 维度，
-  **第 9 维平和质永远 ABSTAIN**，缺失/越界输入 ABSTAIN 或 OUT_OF_DOMAIN；
-- 逐维误差全部来自冻结 4 折 × 2 重复的折外预测，不是训练内自评；
-- 不使用历史 holdout、不宣称外部泛化或临床有效性。
-
-后续轮次若重启，必须新建 `autoresearch/<tag>` 分支，不得在主分支提交实验。
-
-## 禁止事项
-
-- 不修改冻结评价协议、数据、标签、划分、seed、预算、主指标或方向；
-- 不修改证候线冠军模型与 `src/research/train.py`；
-- 不把缺失特征补零、不把未观测平和质当 0 分或任何猜测值；
-- 不读取任何历史 holdout、不宣称外部泛化已验证；
-- 不引入 Docker、多 Agent、新训练平台或新依赖。
+- 严禁篡改评价器逻辑、真实数据集文件、标签空间、验证折划分、随机种子或时间预算。
+- 严禁修改证候任务线及其候选文件 `src/research/train.py`。
+- 严禁对缺失特征盲目补零，严禁对未观测的平和质伪造预测值。
+- 严禁访问或重开已耗尽预算的历史 holdout 测试集。
+- 严禁引入 Docker、分布式 Agent 集群或破坏本地轻量闭环。

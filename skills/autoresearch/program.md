@@ -1,24 +1,30 @@
-# AutoResearch: TCM-SD
+# AutoResearch 任务契约：TCM-SD 证候分类
 
-让 Coding Agent 参考 [karpathy/autoresearch](https://github.com/karpathy/autoresearch) 自主改进中医证候分类模型。当前只研究 TCM-SD 的 148 类中文短主诉分类，主指标为 macro-F1，越高越好。其他中医体质和 PDF 生理预测任务另行研究。
+本契约规范 Coding Agent 在 TCM-SD 数据集上的自主模型探索闭环，参考 [karpathy/autoresearch](https://github.com/karpathy/autoresearch) 的极简科研工程理念。当前任务专注于 148 类中医中文短主诉证候分类，以 148 类 `macro-F1` 为核心评价指标（数值越高越好）。
 
-## Setup
+## 1. 任务前置与环境设置
 
-1. 阅读 `AGENTS.md`、`skills/autoresearch/SKILL.md`、`src/research/prepare.py` 和 `src/research/train.py`。新建 `autoresearch/<tag>` 分支或独立 worktree。
-2. 核查本机真实 TCM-SD 开发选择集及冻结哈希：`runs/sd-v2/short/selection_manifest.json`、`selection_records.json`。固定 protocol v2 的受试者分组、折内单向文本去重、148 类 macro-F1、4 折 × 2 次重复和 seed。禁止使用已耗尽解锁预算的历史 holdout。
-3. 训练使用开发机 Python 和实际可用的 CPU/GPU，不使用 Docker。**每折最多 5 分钟墙钟时间**，即 `--budget 300`。一轮包含 8 次训练，最多约 40 分钟加评估开销。当前实现是超时上限，模型提前完成就提前结束，并非强制训练满 5 分钟。
-4. 在 Git 忽略目录 `runs/<tag>/` 保存 `results.tsv`、`round-*.json`、日志和 `status.json`。第一轮运行原样 `train.py` 建立基线；历史约 0.3199 仅供对照，不能代替本轮真实评分。
+1. **阅读规范**：执行前仔细通读 [AGENTS.md](../../AGENTS.md)、[SKILL.md](SKILL.md) 以及评价器实现 [prepare.py](../../src/research/prepare.py)。
+2. **分支隔离**：新建独立的 `autoresearch/<tag>` 实验分支或独立 git worktree，所有探索性 commit 严禁直接推送到主分支。
+3. **核查数据集与冻结哈希**：
+   - 清单路径：`runs/sd-v2/short/selection_manifest.json`
+   - 记录路径：`runs/sd-v2/short/selection_records.json`
+   - 固化 protocol-v2 评估协议：受试者严格分组、折内单向文本去重、148 类 macro-F1、4 折 × 2 次重复（共 8 折次验证）、种子 `20261104`。
+   - **禁止触碰 holdout**：历史 holdout 测试集解锁预算已耗尽，严禁用于本轮候选筛选或调参。
+4. **资源约束**：使用本机 Python 环境与可用 CPU/GPU。单折训练时间上限为 300 秒（`--budget 300`），整轮 8 次训练加上评估开销总墙钟时间约为 40 分钟。超时将触发超时熔断，提前收敛则提前结束。
+5. **记录目录**：在 `.gitignore` 保护的 `runs/<tag>/` 目录下保存 `results.tsv`、逐轮配置 `round-*.json`、训练日志以及 `status.json`。
 
-## Rules
+## 2. 核心研发守则
 
-- **只允许修改 `src/research/train.py`**。模型、特征、超参数、损失函数和训练策略由 Agent 自主决定。
-- **不得修改 `prepare.py`、评价器、数据、标签、划分、seed 或训练预算**。不额外安装依赖；训练折之外的数据不能用于拟合。
-- 不假设神经网络比传统模型更好。性能接近时优先简单模型，但已有记录规则要求 KEEP 的分数必须严格提高。
-- 固定实验协议内比较候选。合成或缩减折数的调试结果不参与冠军排名。真实本机结果仅标为 `LOCAL_EXPERIMENTAL`。
+- **唯一可编辑文件**：**仅允许修改 `src/research/train.py`**。特征工程、模型架构、超参数、损失函数与优化策略由 Agent 全权自主决定。
+- **严禁篡改评价环境**：严禁修改 `src/research/prepare.py`、外部评价逻辑、数据加载器、标签空间、验证折划分或种子；不得擅自引入外部未声明的三方重量级依赖。
+- **防止统计量泄露**：所有特征提取器（如 TF-IDF 词表）、标量变换及分类器拟合必须在各训练折内部完成，严禁接触验证折或折外信息。
+- **摒弃复杂盲目崇拜**：不过度假设深层神经网络一定超越传统轻量模型。在指标相当时优先选择紧凑可维护的模型；晋级（KEEP）必须以可复现的验证集分数严格提升为硬性前提。
+- **证据分级透明**：本机训练生成的结果标注为 `LOCAL_EXPERIMENTAL`，不作为独立认证的科研定论或临床结论。
 
-## Run
+## 3. 标准评估运行命令
 
-每轮使用新输出路径，固定如下正式评价命令：
+每轮实验递增指定输出路径，通过外部独立评价器打分：
 
 ```bash
 export PYTHONPATH=src
@@ -30,24 +36,37 @@ python -m research.prepare \
   --folds 4 --repeats 2 --seed 20261104 --budget 300
 ```
 
-将 `<tag>` 替换为研究目录；后续使用 `round-001.json` 等。评分由 `prepare.py` 计算，不采纳候选自己报告的指标。
+> [!NOTE]
+> 最终指标由 `prepare.py` 在候选子进程外部计算并产出，候选代码自报指标不予采纳。首轮必须运行原始未经修改的 `train.py` 以沉淀基准分数（基线参考值约为 0.3199）。
 
-## Experiment loop
+## 4. 实验迭代闭环流程
 
-**持续执行，直到用户停止。没有总时长或总轮数限制。**
+持续自治循环执行，直到用尽规划预算或收到用户停止指令：
 
-1. 查看当前 champion、Git HEAD、历史结果和上轮失败原因，提出一个可验证的假设。
-2. 只修改 `train.py`，提交 Git commit，运行完整固定评价，保存日志和逐折结果。
-3. 用 `python -m research.prepare record` 将本轮 commit、macro-F1、假设和 KEEP、REVERT 或 CRASH 写入 `results.tsv`。
-4. **KEEP**：得分严格超过 champion，且复杂度值得接受。**REVERT**：未改善或不值得保留，重置到 champion。**CRASH**：超时、报错或结果无效，检查日志，最多修复两次，否则回退。CRASH 不产生有效分数。
-5. 根据本轮结果选择下一项实验，不提前排定全部实验，不逐轮向用户请示。
+1. **提出假设**：分析当前 Champion、历史胜负记录与误差分布，形成单一清晰且可证伪的改进假设。
+2. **编码与提交**：仅编辑 `src/research/train.py`，完成修改后执行 `git commit`。
+3. **运行统一评价**：执行上述评测命令，捕获各折详细评分与日志。
+4. **判定决策**：
+   - **KEEP**：macro-F1 严格高于 Champion，且引入的复杂度具有可接受的产出比。
+   - **REVERT**：指标未改善或发生负向退化，执行 `git reset --hard <champion_sha>` 回滚代码。
+   - **CRASH**：发生执行异常或运行超时，查看日志并允许就地修补最多 2 次；若仍未恢复则果断回滚，该轮指标视作失效。
+5. **记录决策**：
+   ```bash
+   python -m research.prepare record \
+     --results runs/<tag>/results.tsv \
+     --result runs/<tag>/round-xxx.json \
+     --commit <sha> \
+     --decision KEEP|REVERT|CRASH \
+     --description "<假设与改动摘要>"
+   ```
+6. **启动仪表盘**：
+   ```bash
+   ./solve.sh dashboard --run runs/<tag>
+   ```
 
-现有只读网页用于查看结果：
+## 5. 最终交付与交接 (Handoff)
 
-```bash
-./solve.sh dashboard --run runs/<tag>
-```
-
-## Handoff
-
-用户停止研究或要求交付时，保留最佳 commit、完整实验记录与必要的运行说明。模型保存与重载、推理验收、逐类分析和外部泛化验证在独立的交付任务中完成，不把它们加入每轮 KEEP/REVERT，也不重复使用历史 holdout。没有独立外部数据时，不宣称跨来源泛化已经验证。
+当达到实验终止条件或用户要求交付时：
+- 保留最佳 Champion Commit，并在交付总结中清晰列明演进历程与核心消融分析。
+- 模型持久化与工件化、推理部署验收、逐类准确率报告均通过标准交付模块承接（参见 [src/syndrome/delivery.py](../../src/syndrome/delivery.py)），不侵入单轮实验循环。
+- 未经独立异源真实数据验证前，坚守科学严谨性，不宣称跨机构或外部泛化有效性。
