@@ -20,9 +20,9 @@ import torch.nn.functional as F
 
 BUCKETS = 1 << 18
 MAX_NGRAM = 4
-DIM = 128
+DIM = 256
 BATCH = 256
-EPOCHS = 12
+EPOCHS = 60
 TIME_LIMIT = 210.0
 
 
