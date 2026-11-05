@@ -4,8 +4,8 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-001 假设：63 维生理特征比纯中位数基线含更多信息。所有预处理（缺失值
-中位数、标准化统计量、岭回归系数）都只在训练折内拟合。
+round-002 假设：全部 63 维特征在 274 人上过拟合；只保留人口学与人体测量
+9 维（mendeley.FEATURE_GROUPS 的前两组），岭系数与折内预处理保持不变。
 """
 
 from __future__ import annotations
@@ -43,6 +43,10 @@ def main() -> None:
 
     train_x, train_mask = matrix(rows)
     predict_x, predict_mask = matrix(inputs["rows"])
+    # 只用前 9 维（人口学 6 + 人体测量 3），降低容量
+    selected = slice(0, 9)
+    train_x, train_mask = train_x[:, selected], train_mask[:, selected]
+    predict_x, predict_mask = predict_x[:, selected], predict_mask[:, selected]
     y = np.array([row["scores"] for row in rows], dtype=float)
 
     # 折内拟合：中位数填补 + 标准化 + 缺失指示（统计量只来自训练折）
