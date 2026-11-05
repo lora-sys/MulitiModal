@@ -30,6 +30,15 @@ SAS_FILE = ZENODO_DIR / "CCMQ SAS code.sas"
 TEST_DATA = ZENODO_DIR / "TEST_DATA.xlsx"
 has_zenodo = SAS_FILE.exists() and TEST_DATA.exists()
 
+# 两处 skipif 共用同一句话，避免各自漂移成不同的（也曾错误的）说法。
+# 实测：这两个引用文件在本机与开发机 acam-lab 上都不存在，所以这不是
+# "only on dev host"，而是引用体未缓存；可按 docs/evidence/registry.json
+# 记录的 md5 从 Zenodo record 4431679 重新获取后恢复此核对。
+ZENODO_SKIP_REASON = (
+    "Zenodo 4431679 引用文件未缓存（两台机器都缺）；"
+    "重新获取后可恢复 SAS/SPSS 字节级核对"
+)
+
 ALL_ONE = {i: 1 for i in range(1, 60)}
 ALL_FIVE = {i: 5 for i in range(1, 60)}
 
@@ -207,7 +216,7 @@ def parse_sas_subscales(text: str) -> dict[str, dict]:
     return parsed
 
 
-@pytest.mark.skipif(not has_zenodo, reason="Zenodo reference files only on dev host")
+@pytest.mark.skipif(not has_zenodo, reason=ZENODO_SKIP_REASON)
 def test_engine_matches_sas_source_bytes():
     parsed = parse_sas_subscales(SAS_FILE.read_text(errors="replace"))
     # SAS letters A..I correspond to the canonical order (A=gentleness, then
@@ -236,7 +245,7 @@ def load_test_data_rows() -> list[dict]:
     return out
 
 
-@pytest.mark.skipif(not has_zenodo, reason="Zenodo reference files only on dev host")
+@pytest.mark.skipif(not has_zenodo, reason=ZENODO_SKIP_REASON)
 def test_engine_scores_zenodo_reference_sample():
     rows = load_test_data_rows()
     assert len(rows) == 14  # reference sample size

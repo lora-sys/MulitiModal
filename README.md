@@ -115,4 +115,6 @@ python -m scripts.syndrome_service_demo
 - [docs/autoresearch-brief.md](docs/autoresearch-brief.md)：新实验立项必须填写的科研简报模板。
 - [docs/autoresearch-design.md](docs/autoresearch-design.md)：AutoResearch 架构设计理念与边界阐述。
 - [docs/trusted-evaluator.md](docs/trusted-evaluator.md)：独立可信评价环境部署契约。
+- [docs/design/physio-next-phase-plan.md](docs/design/physio-next-phase-plan.md)：按摩前生理预测模型下一阶段最小实施方案（`NOT_VALIDATED`，是设计不是结果）。
+- [docs/design/autoresearch-rsi-v1.md](docs/design/autoresearch-rsi-v1.md)：AutoResearch 自主循环的**历史设计**，其实现体已随 `5f543c4`/`37f4d11` 删除，只作沿革保留。
 - [docs/reports/](docs/reports/)：历史科研实验报告归档。
