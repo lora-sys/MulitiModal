@@ -1,4 +1,4 @@
-"""中医体质 AutoResearch 第二阶段研究程序（最小、独立、冻结）。
+# 中医体质 AutoResearch 第二阶段研究程序（最小、独立、冻结）
 
 在证候线 program.md 之后启动的第二条研究线。复用同一 Skill、Git
 KEEP/REVERT/CRASH 循环、results.tsv 契约与 `research.dashboard` 只读监控；
@@ -60,6 +60,31 @@ python -m research.constitution \
 ```bash
 ./solve.sh dashboard --run runs/constitution-v1
 ```
+
+## 第一轮交付（已冻结，不再调参）
+
+第一轮共 18 轮（6 KEEP / 12 REVERT / 0 CRASH），冻结冠军 commit
+`16c26582`（Huber 全局线性 + kNN 局部中位数的逐维软集成，9 维基础特征），
+折外 masked MAE 14.1437；结果见 `runs/constitution-v1/results.tsv`。
+
+交付入口（与证候线 `syndrome.delivery` 同构，数据/协议/工件独立）：
+
+```bash
+export PYTHONPATH=src
+python -m research.constitution_delivery deliver   # 最终训练 + 工件 + 验收
+python -m research.constitution_delivery verify    # 只核对，不训练
+```
+
+- 工件：`artifacts/constitution-v1-champion/`（model.joblib / labels.json /
+  registry_entry.json，带 sha256 清单与 provenance）；
+- 报告：`runs/constitution-delivery/v1/`（delivery-report.json /
+  per-dimension.json / verification.json）；
+- 八维推理：`ConstitutionInference`，只输出 8 个 PUBLISHED 维度，
+  **第 9 维平和质永远 ABSTAIN**，缺失/越界输入 ABSTAIN 或 OUT_OF_DOMAIN；
+- 逐维误差全部来自冻结 4 折 × 2 重复的折外预测，不是训练内自评；
+- 不使用历史 holdout、不宣称外部泛化或临床有效性。
+
+后续轮次若重启，必须新建 `autoresearch/<tag>` 分支，不得在主分支提交实验。
 
 ## 禁止事项
 
