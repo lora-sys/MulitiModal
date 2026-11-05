@@ -29,7 +29,7 @@ def main() -> None:
         TfidfVectorizer(analyzer="char", ngram_range=(1, 4), min_df=1,
                         binary=True, sublinear_tf=True),
         OneVsRestClassifier(LogisticRegression(
-            solver="liblinear", C=2.0, class_weight="balanced", max_iter=2000,
+            solver="liblinear", C=4.0, max_iter=2000,
             random_state=args.seed,
         )),
     )
