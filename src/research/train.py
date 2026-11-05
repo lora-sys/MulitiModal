@@ -32,7 +32,7 @@ def main() -> None:
     # "balanced", normalized so the mean weight stays 1 (comparable C).
     counts = Counter(labels)
     n, k = len(labels), len(counts)
-    raw = [(n / (k * counts[label])) ** 0.5 for label in labels]
+    raw = [(n / (k * counts[label])) ** 1.5 for label in labels]
     scale = n / sum(raw)
     sample_weight = [value * scale for value in raw]
 
