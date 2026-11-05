@@ -23,6 +23,11 @@ NOT_AVAILABLE = "NOT_AVAILABLE"
 NOT_APPLICABLE = "NOT_APPLICABLE"
 STATES = (VERIFIED, UNVERIFIED, NOT_VERIFIED, NOT_AVAILABLE, NOT_APPLICABLE)
 
+# A retrieved_files entry carrying this digest is a repository file: the git
+# blob is the evidence. Anything with a real digest lives outside Git
+# (data/, runs/, artifacts/ on the dev host) and is host-local by contract.
+TRACKED_IN_GIT = "TRACKED-IN-GIT"
+
 ENGINEERING = "GO_ENGINEERING"
 REAL_DATA_TRAINING = "GO_REAL_DATA_TRAINING"
 RESEARCH_CLAIMS = "GO_RESEARCH_CLAIMS"
@@ -134,6 +139,46 @@ class EvidenceRegistry:
                     blocks = ", ".join(claim.blocks)
                     line += f" (blocks: {blocks})"
                 lines.append(line)
+        return lines
+
+    def audit_references(self, root: str | Path | None = None) -> list[str]:
+        """Report evidence files that no longer resolve.
+
+        A `TRACKED-IN-GIT` reference is the git blob itself, so renaming or
+        deleting that file voids a VERIFIED claim silently — this already
+        happened once (`tests/runtime/test_autoresearch.py`, removed by
+        37f4d11 while `tcm-engineering-smoke` stayed VERIFIED). Such a path
+        must exist in the checkout; anything else is reported as a host-local
+        gap, because real data and run artifacts are git-ignored by design
+        and legitimately absent on a non-dev host.
+        """
+        base = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+        lines = []
+        for claim in self.claims.values():
+            for entry in claim.retrieved_files:
+                path = str(entry.get("path", ""))
+                if path.startswith("upstream:"):
+                    continue  # external repository, not checkable here
+                # Registry paths sometimes append an annotation, e.g.
+                # "Share data.xls (dev host, git-ignored)"; resolve the file,
+                # not the prose, or an existing file looks absent. Only strip
+                # when the path actually ends with that parenthesised note -
+                # a real filename may legitimately contain " (".
+                if path.endswith(")") and " (" in path:
+                    path = path[: path.rindex(" (")]
+                digest = entry.get("sha256") or entry.get("md5") or ""
+                if (base / path).exists():
+                    continue
+                if digest == TRACKED_IN_GIT:
+                    lines.append(
+                        f"MISSING-REPO-REFERENCE {claim.claim_id}: "
+                        f"{path} is cited as the evidence body but is not in "
+                        "the checkout"
+                    )
+                else:
+                    lines.append(
+                        f"host-local-absent {claim.claim_id}: {path} (git-ignored; dev host only)"
+                    )
         return lines
 
 

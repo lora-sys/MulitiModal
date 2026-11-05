@@ -6,7 +6,7 @@
 | claim_id | 来源 | 支持的事实 | 状态 | 缺口 / 阻塞 |
 | --- | --- | --- | --- | --- |
 | pdf-spec | 仓库内 PDF（SHA-256 29727dace…d781） | BPSI Eq.2 / EFRI Eq.3 / 双分支网络 Eq.4–9 的**设计意图** | VERIFIED | 结果为占位符；非实验证据 |
-| tcm-engineering-smoke | tests/（commits 65df01b…ca22434） | TCM 工程闭环（模型/训练/评估/推理/RSI harness）合成数据端到端可用 | VERIFIED | SMOKE_ONLY；不支撑任何科研/临床结论 |
+| tcm-engineering-smoke | tests/runtime（commits 65df01b…ca22434；原引用 test_autoresearch.py 已随 37f4d11 退役） | TCM 工程闭环（模型/训练/评估/推理）合成数据端到端可用 | VERIFIED | SMOKE_ONLY；不支撑任何科研/临床结论；bounded RSI harness 的主张随实现退役 |
 | physio-engineering-smoke | tests/runtime | 生理 V0 前向/损失/checkpoint 合成可用，During/Post 拒绝生效 | VERIFIED | SMOKE_ONLY；真实数据 NOT_AVAILABLE |
 | mendeley-dataset-files | data.mendeley.com/cxtph3tjsg/1（SHA 6206f432…，274 人 × 71 列，8 维评分零缺失） |  文件已下载并逐列审计；8/9 维 PUBLISHED 评分 + 独立特征 + CC BY 4.0；train_candidate（ZYYXH/T157-2009 条目数指纹验证） | VERIFIED | 映射已 FINGERPRINT_CROSS_CHECKED（#38）；论文定义表核验与 #38 规则一致性仍开放；第 9 维按规则 mask，永不伪造 |
 | tcm-label-rules-historical-verified | PMC10164641（ZYYXH/T157-2009 阈值）+ Zenodo SAS 字节交叉校验 + Mendeley 指纹 | 规则引擎与 SAS 源逐项一致；14 行参考样本双缺失策略可评分；30/40/60 阈值有据；列映射 FINGERPRINT_CROSS_CHECKED（论文定义表付费墙） | **VERIFIED**（2026-10-30） | 解除 GO_REAL_DATA_TRAINING(tcm) 阻塞；row 273 指纹异常 QC 挂起 |
@@ -29,3 +29,5 @@
 | physio_bpsi_efri | **GRANTED** | NOT_GRANTED（缺 physio-real-data、physio-label-rules-verified） | NOT_GRANTED（另缺 independent-reference-data） |
 
 负例保障（tests/evidence）：无哈希/访问日期的 claim 不能标 VERIFIED；NOT_VERIFIED/NOT_AVAILABLE 必须写明缺口或阻塞；把数据 claim 伪标 VERIFIED 之前会被构造器拒绝——任何"来源错误/缺标准原文/标签不匹配"情况都只能停在 NOT_GRANTED。
+
+引用可核对性（2026-11-05 增补）：`sha256` 记为 `TRACKED-IN-GIT` 的 `retrieved_files` 条目，其证据本体就是仓库里的 git blob，因此该文件一旦被重命名或删除，VERIFIED 主张会静默失去实现体。此事已实际发生过一次：`37f4d11` 随 bounded RSI harness 删除 `tests/runtime/test_autoresearch.py`，而 `tcm-engineering-smoke` 仍保持 VERIFIED 且无人察觉。现由 `EvidenceRegistry.audit_references()` 与 `tests/evidence/test_evidence_registry.py::test_repo_tracked_references_resolve` 机械拦截：仓库内引用不存在即判缺陷；`data/`、`runs/`、`artifacts/` 等按约定 git-ignored 的条目只报主机缺口，不计缺陷。任何删除 `tests/**`、`src/**` 的改动若牵动被引用文件，必须同步核对 `registry.json` 并保留原始裁决文字与退役归属说明。

@@ -8,6 +8,8 @@ from evidence.registry import (
     ENGINEERING,
     REAL_DATA_TRAINING,
     RESEARCH_CLAIMS,
+    TRACKED_IN_GIT,
+    VERIFIED,
     EvidenceClaim,
     EvidenceRegistry,
     evaluate_gates,
@@ -149,3 +151,80 @@ def test_gate_cannot_be_promoted_without_evidence(registry):
 def test_unknown_model_gate_rejected(registry):
     with pytest.raises(ValueError, match="unknown model"):
         evaluate_gates(registry, "gpt-9")
+
+
+def _claim(path: str, digest: str) -> EvidenceClaim:
+    return EvidenceClaim(
+        claim_id="c",
+        primary_url="https://example.com",
+        exact_supported_claim="x",
+        verification_state=VERIFIED,
+        access_date="2026-11-05",
+        retrieved_files=({"path": path, "sha256": digest},),
+    )
+
+
+def test_repo_tracked_references_resolve(registry):
+    """A TRACKED-IN-GIT entry means the git blob is the evidence itself, so
+    deleting or renaming that file silently voids a VERIFIED claim. This
+    already happened once: 37f4d11 removed
+    tests/runtime/test_autoresearch.py while tcm-engineering-smoke stayed
+    VERIFIED. No registry entry may cite a repository path that is gone."""
+    defects = [
+        line for line in registry.audit_references() if line.startswith("MISSING-REPO-REFERENCE")
+    ]
+    assert defects == []
+
+
+def test_engineering_smoke_claims_cite_existing_evidence(registry):
+    """Both smoke claims gate GO_ENGINEERING, so their evidence body must be
+    readable on any host that has the checkout."""
+    for claim_id in ("tcm-engineering-smoke", "physio-engineering-smoke"):
+        claim = registry.claims[claim_id]
+        assert claim.retrieved_files, claim_id
+        for entry in claim.retrieved_files:
+            assert (REGISTRY_PATH.parents[2] / entry["path"]).is_file(), (
+                claim_id,
+                entry["path"],
+            )
+
+
+def test_missing_repo_reference_is_reported_as_defect(tmp_path):
+    lines = EvidenceRegistry([_claim("tests/removed_suite.py", TRACKED_IN_GIT)]).audit_references(
+        root=tmp_path
+    )
+    assert lines == [
+        "MISSING-REPO-REFERENCE c: tests/removed_suite.py is cited as the "
+        "evidence body but is not in the checkout"
+    ]
+
+
+def test_host_local_gap_is_not_reported_as_repo_defect(tmp_path):
+    """Real data and run artifacts are git-ignored by design (#47), so a
+    missing one is a host gap, never a broken evidence reference."""
+    lines = EvidenceRegistry([_claim("data/local/share.xls", "6206f432b683f8a7")]).audit_references(
+        root=tmp_path
+    )
+    assert lines == ["host-local-absent c: data/local/share.xls (git-ignored; dev host only)"]
+    assert not any(line.startswith("MISSING-REPO-REFERENCE") for line in lines)
+
+
+def test_annotated_reference_path_still_resolves(tmp_path):
+    """Regression: registry entries append "(dev host, git-ignored)" to the
+    path, which made an existing file read as absent."""
+    (tmp_path / "data" / "local").mkdir(parents=True)
+    (tmp_path / "data" / "local" / "share.xls").write_bytes(b"x")
+    claim = _claim("data/local/share.xls (dev host, git-ignored)", "6206f432b683f8a7")
+    assert EvidenceRegistry([claim]).audit_references(root=tmp_path) == []
+
+
+def test_parenthesis_in_real_filename_is_not_read_as_annotation(tmp_path):
+    """A path containing " (" but not ending in that paren is a real file;
+    truncating it would raise a false MISSING-REPO-REFERENCE defect."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "foo (old).py").write_text("")
+    lines = EvidenceRegistry([_claim("tests/foo (old).py",
+                                     TRACKED_IN_GIT)]).audit_references(
+        root=tmp_path
+    )
+    assert lines == []
