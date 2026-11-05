@@ -1,5 +1,7 @@
 """Evidence registry and GO-gate tests (#47)."""
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -239,6 +241,49 @@ def test_partially_resolvable_claim_is_not_called_unresolvable(tmp_path):
     assert [line.split(":")[0] for line in registry.audit_references(root=tmp_path)] == [
         "host-local-absent c"
     ]
+
+
+def test_tracked_reference_with_a_real_digest_is_a_defect(tmp_path):
+    """Scope comes from Git, not from the digest field.
+
+    `pdf-spec` cites the tracked framework PDF with a real SHA-256. Treating
+    "has a digest" as "lives outside Git" would downgrade its deletion to a host
+    gap and let the guard pass while a VERIFIED repository claim lost its body.
+    """
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("需要 git 才能构造 tracked-but-deleted 场景")
+    ref = "docs/source/reference.pdf"
+    (tmp_path / "docs" / "source").mkdir(parents=True)
+    (tmp_path / ref).write_bytes(b"pdf")
+    for cmd in (
+        ("init", "-q"),
+        ("config", "user.email", "t@example.com"),
+        ("config", "user.name", "t"),
+        ("add", ref),
+        ("commit", "-qm", "add reference"),
+    ):
+        subprocess.run(
+            (git, "-C", str(tmp_path), *cmd), check=True, capture_output=True
+        )
+    (tmp_path / ref).unlink()  # tracked in the index, gone from the checkout
+
+    lines = EvidenceRegistry(
+        [_claim(ref, "29727daced33cc95506f580ea542f4bd")]
+    ).audit_references(root=tmp_path)
+    assert lines[0].startswith("MISSING-REPO-REFERENCE"), lines
+
+
+def test_untracked_reference_with_a_real_digest_stays_a_host_gap(tmp_path):
+    """Same digest, nothing in Git: calling that a repository defect would make
+    every non-dev host look broken."""
+    lines = EvidenceRegistry(
+        [_claim("data/local/share.xls", "6206f432b683f8a7")]
+    ).audit_references(root=tmp_path)
+    assert lines[0] == (
+        "host-local-absent c: data/local/share.xls (git-ignored; not present "
+        "on this host)"
+    )
 
 
 def test_v8_real_training_claim_keeps_a_git_reference(registry):

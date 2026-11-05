@@ -13,6 +13,7 @@ claims being VERIFIED.
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -143,18 +144,22 @@ class EvidenceRegistry:
     def audit_references(self, root: str | Path | None = None) -> list[str]:
         """Report evidence files that no longer resolve.
 
-        A `TRACKED-IN-GIT` reference is the git blob itself, so renaming or
-        deleting that file voids a VERIFIED claim silently — this already
-        happened once (`tests/runtime/test_autoresearch.py`, removed by
-        37f4d11 while `tcm-engineering-smoke` stayed VERIFIED). Such a path
-        must exist in the checkout. Anything else lives outside Git (data/,
-        runs/, artifacts/) and is reported as a gap, not a defect — but
-        absence says nothing about which host should hold it: 2026-11-05 found
-        two such claims missing on the dev host as well. A claim whose
-        references are ALL unresolvable is called out separately, because that
-        claim cannot be re-verified on this checkout at all.
+        A reference's scope is decided by version control, not by the digest
+        field: a path tracked in Git is the evidence body itself, so renaming
+        or deleting it voids a VERIFIED claim silently. That already happened
+        once (`tests/runtime/test_autoresearch.py`, removed by 37f4d11 while
+        `tcm-engineering-smoke` stayed VERIFIED). Trusting the digest instead
+        would miss `pdf-spec`, which cites the tracked
+        `docs/source/pre-massage-fatigue-prediction-framework.pdf` with a real
+        SHA-256. Tracked paths must exist in the checkout; untracked ones live
+        outside Git (data/, runs/, artifacts/) and are reported as a gap, not a
+        defect - but absence says nothing about which host should hold them:
+        2026-11-05 found two such claims missing on the dev host as well. A
+        claim whose references are ALL unresolvable is called out separately,
+        because that claim cannot be re-verified on this checkout at all.
         """
         base = Path(root) if root is not None else Path(__file__).resolve().parents[2]
+        tracked = self._tracked_paths(base)
         lines = []
         for claim in self.claims.values():
             resolved = 0
@@ -177,7 +182,10 @@ class EvidenceRegistry:
                     resolved += 1
                     continue
                 absent += 1
-                if digest == TRACKED_IN_GIT:
+                in_repo = digest == TRACKED_IN_GIT or (
+                    tracked is not None and path in tracked
+                )
+                if in_repo:
                     lines.append(
                         f"MISSING-REPO-REFERENCE {claim.claim_id}: "
                         f"{path} is cited as the evidence body but is not in "
@@ -196,11 +204,30 @@ class EvidenceRegistry:
                 )
         return lines
 
+    @staticmethod
+    def _tracked_paths(root: Path) -> frozenset[str] | None:
+        """Paths under version control at `root`, or None when Git is unusable.
+
+        Used only to classify a missing reference. None falls back to the
+        `TRACKED-IN-GIT` sentinel, so the audit still works on an export with
+        no Git metadata.
+        """
+        try:
+            out = subprocess.run(
+                ("git", "-C", str(root), "ls-files", "-z"),
+                capture_output=True,
+                check=True,
+            ).stdout
+        except (OSError, subprocess.CalledProcessError):
+            return None
+        return frozenset(p.decode() for p in out.split(b"\0") if p)
+
 
 # Gate requirements: a gate is GRANTED only when every listed claim is
 # VERIFIED in the registry. GO_ENGINEERING is derived from engineering
 # smoke claims only; the higher gates require real-data evidence, so a
-# smoke score can never promote them (#47 hard rule 8).
+# smoke score can never promote them (#47：三级门禁独立判定，见 AGENTS.md
+# 第 2.3 节「证据分级声明」)。
 GATE_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
     "tcm_constitution": {
         ENGINEERING: ("tcm-engineering-smoke",),
