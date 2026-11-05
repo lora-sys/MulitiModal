@@ -3,7 +3,8 @@
 只使用 train / dev 两个 subject partition：
 - 基线（多数类 Dummy、TF-IDF char 1–3 + LR）与 BERT 均在 train partition 拟合；
 - 模型选择 / 阈值选择只用 dev partition；
-- test partition 本入口一概不读——最终解锁测试由主线按 AGENTS.md 硬规则 11 执行。
+- test partition 本入口一概不读——最终解锁测试由主线按 AGENTS.md 第 2 节
+  「受试者级物理隔离与防泄露」（证候线 holdout 解锁预算 1/1 已耗尽）执行。
 
 依赖 #53 冻结契约的 data.tcm_sd（惰性导入，便于在 D1 落位前收集其余模块）。
 报告写入 runs/（git-ignored）。CLI：

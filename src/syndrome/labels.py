@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
-# 冻结的标签词表版本（与 src/data/tcm_sd.py 的 LABEL_TAXONOMY_ID 一致，见 test_labels.py）
+# 冻结的标签词表版本；`src/data/tcm_sd.py:23` 持有同一字面量，本值由
+# tests/syndrome/test_labels.py:21 钉住（两处均为常量，无跨模块引用）
 LABEL_TAXONOMY_ID = "tcm-sd-syndrome-vocab-v1"
 
-# 证据状态显式化（#53 Scope 2 / AGENTS.md 硬规则 7）
+# 证据状态显式化（#53 Scope 2 / AGENTS.md 第 2 节「真实性与不猜测」「证据分级声明」）
 STATUS_OK = "OK"
 STATUS_UNCERTAIN = "UNCERTAIN"
 STATUS_ABSTAIN = "ABSTAIN"
