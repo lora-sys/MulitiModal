@@ -4,11 +4,10 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-017 假设（由冠军逐维分析驱动）：冠军软集成 8/8 折、7/8 维改善，唯一
-例外是气虚（+0.04），说明该维度缺乏可用信号。round-013 的硬三选一被内折噪声
-拖累（14.1944），故改为平滑收缩：把 Huber/kNN 以固定 0.5 混合，再由训练折内
-5 折 CV 为每维在「中位数常值 ↔ 混合集成」之间挑 gamma（含 0 与 1 两端），
-让无信号维度平滑退回常值。
+round-012 假设（由模型对比驱动）：Huber 全局线性（14.1773）与 kNN 局部中位数
+（14.2081）都优于基线，且归纳偏置互补。在**训练折内部**做 5 折 CV，为每一维
+在两个模型的逐维 MAE 之间挑选混合权重 alpha；所有统计量、k、权重与拟合都
+只使用训练折数据，验证折标签从不参与。
 """
 
 from __future__ import annotations
@@ -116,26 +115,21 @@ def choose_k(features, y, seed: int) -> int:
     return min(K_GRID, key=lambda k: (losses[k], K_GRID.index(k)))
 
 
-GAMMA_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
-
-
-def choose_gammas(x, mask, y, seed: int) -> np.ndarray:
-    """训练折内 5 折 CV：逐维挑选 median<-ensemble 收缩权重。"""
+def choose_alphas(x, mask, y, seed: int) -> np.ndarray:
+    """训练折内 5 折 CV：逐维挑选 huber<-knn 混合权重。"""
     n = len(y)
     order = np.random.default_rng(seed).permutation(n)
     parts = np.array_split(order, INNER_FOLDS)
-    losses = np.zeros((len(GAMMA_GRID), y.shape[1]))
+    losses = np.zeros((len(ALPHA_GRID), y.shape[1]))
     for part in parts:
         keep = np.ones(n, dtype=bool)
         keep[part] = False
         state = fit_both_with_y(x[keep], mask[keep], y[keep], seed)
         huber, knn = predict_both(state, x[part], mask[part])
-        ensemble = 0.5 * huber + 0.5 * knn
-        median = np.broadcast_to(np.median(y[keep], axis=0), y[part].shape)
-        for index, gamma in enumerate(GAMMA_GRID):
-            blended = gamma * ensemble + (1.0 - gamma) * median
+        for index, alpha in enumerate(ALPHA_GRID):
+            blended = alpha * huber + (1.0 - alpha) * knn
             losses[index] += np.abs(blended - y[part]).sum(axis=0)
-    return np.array([GAMMA_GRID[int(np.argmin(losses[:, j]))] for j in range(y.shape[1])])
+    return np.array([ALPHA_GRID[int(np.argmin(losses[:, j]))] for j in range(y.shape[1])])
 
 
 def main() -> None:
@@ -160,12 +154,10 @@ def main() -> None:
     predict_x, predict_mask = predict_x[:, keep], predict_mask[:, keep]
     y = np.array([row["scores"] for row in rows], dtype=float)
 
-    gammas = choose_gammas(train_x, train_mask, y, args.seed)
+    alphas = choose_alphas(train_x, train_mask, y, args.seed)
     state = fit_both_with_y(train_x, train_mask, y, args.seed)
     huber, knn = predict_both(state, predict_x, predict_mask)
-    ensemble = 0.5 * huber + 0.5 * knn
-    median = np.broadcast_to(np.median(y, axis=0), (len(predict_x), n_dims))
-    output = gammas * ensemble + (1.0 - gammas) * median
+    output = alphas * huber + (1.0 - alphas) * knn
     Path(args.output).write_text(json.dumps(output.tolist()), encoding="utf-8")
 
 
