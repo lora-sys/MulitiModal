@@ -4,10 +4,10 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-012 假设（由模型对比驱动）：Huber 全局线性（14.1773）与 kNN 局部中位数
-（14.2081）都优于基线，且归纳偏置互补。在**训练折内部**做 5 折 CV，为每一维
-在两个模型的逐维 MAE 之间挑选混合权重 alpha；所有统计量、k、权重与拟合都
-只使用训练折数据，验证折标签从不参与。
+round-013 假设（由逐维分析驱动）：round-012 的混合集成（14.1437）仍对所有
+维度使用特征；但逐维分析显示气虚/血瘀/特禀几乎无改善、阳虚甚至略退，说明部分
+维度缺乏可用信号。改为在训练折内 5 折 CV 中，逐维从「中位数常值 / Huber /
+kNN」三者里直接挑选 MAE 最小者，让无信号维度安全退回常值。
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ RIDGE = 100.0
 IRLS_STEPS = 6
 INNER_FOLDS = 5
 K_GRID = (5, 10, 20, 30, 40, 60)
-ALPHA_GRID = (0.0, 0.25, 0.5, 0.75, 1.0)
+
 
 
 def matrix(records: list[dict]) -> tuple[np.ndarray, np.ndarray]:
@@ -115,21 +115,26 @@ def choose_k(features, y, seed: int) -> int:
     return min(K_GRID, key=lambda k: (losses[k], K_GRID.index(k)))
 
 
-def choose_alphas(x, mask, y, seed: int) -> np.ndarray:
-    """训练折内 5 折 CV：逐维挑选 huber<-knn 混合权重。"""
+def choose_sources(x, mask, y, seed: int) -> list[str]:
+    """训练折内 5 折 CV：逐维从 median / huber / knn 中挑 MAE 最小者。"""
+    names = ("median", "huber", "knn")
     n = len(y)
     order = np.random.default_rng(seed).permutation(n)
     parts = np.array_split(order, INNER_FOLDS)
-    losses = np.zeros((len(ALPHA_GRID), y.shape[1]))
+    losses = {name: np.zeros(y.shape[1]) for name in names}
     for part in parts:
         keep = np.ones(n, dtype=bool)
         keep[part] = False
         state = fit_both_with_y(x[keep], mask[keep], y[keep], seed)
         huber, knn = predict_both(state, x[part], mask[part])
-        for index, alpha in enumerate(ALPHA_GRID):
-            blended = alpha * huber + (1.0 - alpha) * knn
-            losses[index] += np.abs(blended - y[part]).sum(axis=0)
-    return np.array([ALPHA_GRID[int(np.argmin(losses[:, j]))] for j in range(y.shape[1])])
+        median = np.broadcast_to(np.median(y[keep], axis=0), y[part].shape)
+        for name, pred in (("median", median), ("huber", huber), ("knn", knn)):
+            losses[name] += np.abs(pred - y[part]).sum(axis=0)
+    chosen = []
+    for j in range(y.shape[1]):
+        best = min(names, key=lambda name: (losses[name][j], names.index(name)))
+        chosen.append(best)
+    return chosen
 
 
 def main() -> None:
@@ -154,10 +159,13 @@ def main() -> None:
     predict_x, predict_mask = predict_x[:, keep], predict_mask[:, keep]
     y = np.array([row["scores"] for row in rows], dtype=float)
 
-    alphas = choose_alphas(train_x, train_mask, y, args.seed)
+    chosen = choose_sources(train_x, train_mask, y, args.seed)
     state = fit_both_with_y(train_x, train_mask, y, args.seed)
     huber, knn = predict_both(state, predict_x, predict_mask)
-    output = alphas * huber + (1.0 - alphas) * knn
+    n_rows = len(predict_x)
+    median = np.broadcast_to(np.median(y, axis=0), (n_rows, n_dims))
+    sources = {"median": median, "huber": huber, "knn": knn}
+    output = np.column_stack([sources[name][:, j] for j, name in enumerate(chosen)])
     Path(args.output).write_text(json.dumps(output.tolist()), encoding="utf-8")
 
 
