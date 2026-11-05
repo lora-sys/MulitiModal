@@ -17,7 +17,6 @@ from .checkpoint import (
     save_training_checkpoint,
 )
 from .evaluation import METRIC_VERSION, Evaluator
-from .manifest import RunManifestStore
 from .protocols import TASK_BUILDERS, train_candidate, trusted_score
 from .tcm_eval import (
     EVAL_METRIC_VERSION,
@@ -58,5 +57,4 @@ __all__ = [
     "make_synthetic_tcm_manifest",
     "TCM_OUTPUT_SCHEMA_VERSION",
     "TCMPredictor",
-    "RunManifestStore",
 ]

@@ -356,8 +356,3 @@ class SyndromeInference:
             if results[i] is None:
                 results[i] = self.predict_one(t, fields[i])
         return results  # type: ignore[return-value]
-
-
-def save_threshold(threshold_info: dict[str, float], path: str) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(threshold_info, fh, ensure_ascii=False, indent=2)

@@ -14,7 +14,6 @@ order — through the single audited SOURCE_COLUMN_MAPPING below.
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -264,39 +263,3 @@ def load_mendeley_scores(path: str | Path) -> list[SubjectRecord]:
             )
         )
     return records
-
-
-def records_to_json(records: list[SubjectRecord]) -> str:
-    """Serialize records for a trimmed training-subprocess input file.
-
-    The training worker's only data inputs are files the frozen driver wrote:
-    a pruned manifest plus the records for exactly its own rows (F-08) — the
-    full-set workbook path never enters the subprocess's config.
-    """
-    return json.dumps(
-        [
-            {
-                "subject_index": r.subject_index,
-                "features": r.features,
-                "scores": r.scores,
-                "score_mask": r.score_mask,
-                "provenance": r.provenance,
-            }
-            for r in records
-        ],
-        ensure_ascii=False,
-    )
-
-
-def records_from_json(text: str) -> list[SubjectRecord]:
-    payload = json.loads(text)
-    return [
-        SubjectRecord(
-            subject_index=item["subject_index"],
-            features={k: list(v) for k, v in item["features"].items()},
-            scores=list(item["scores"]),
-            score_mask=list(item["score_mask"]),
-            provenance=dict(item.get("provenance", {})),
-        )
-        for item in payload
-    ]

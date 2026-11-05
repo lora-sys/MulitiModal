@@ -383,8 +383,8 @@ def fold_manifest(
     """
     data = json.loads(json.dumps(manifest))
     data.pop("manifest_sha256", None)
-    # the frozen split seed is part of the worker's selection-manifest
-    # contract; the fold coordinates never change it
+    # Keep the frozen split seed in the selection manifest. Fold coordinates
+    # do not change the original seed.
     data["split"] = {
         "seed": data["split"]["seed"],
         "train": list(train_ids),
