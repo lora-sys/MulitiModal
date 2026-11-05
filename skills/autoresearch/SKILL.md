@@ -11,8 +11,8 @@ description: Run, resume or monitor consecutive model research experiments with 
    - 证候线（TCM-SD 148 类）：`skills/autoresearch/program.md`。
    - 体质线（274 人八维评分）：`skills/autoresearch/program-constitution.md`。
 2. 两条研究线互相独立，数据、标签、划分、指标、候选文件与冻结评价协议不得混用。证候线循环只允许修改 `src/research/train.py`；体质线循环只允许修改 `src/research/constitution_train.py`。两条线都禁止在轮次中修改各自的评价器、真实数据、标签、划分、指标和历史 holdout。
-3. 使用本机 Python、CPU/GPU 运行，不要求 Docker、sandbox、独立服务或常驻工作队列。用 Git 管理候选，用 `runs/<tag>/results.tsv` 记录决策。
-4. 第一次运行必须先复现 TF-IDF + LR 基线。之后每轮读上轮证据，提出单个可检验假设，修改候选、提交、用同一协议评估、KEEP 或 REVERT。失败不得晋级，结果不得事后挑选。
+3. 使用本机 Python、CPU/GPU 运行，不要求 Docker、sandbox、独立服务或常驻工作队列。每条研究线必须在独立的 `autoresearch/<tag>` 分支上进行，不把实验轮次提交到主分支；用 Git 管理候选，用 `runs/<tag>/results.tsv` 记录决策。
+4. 第一次运行必须先复现当前研究线的基线：证候线是 char 1–3 gram TF-IDF + LR（macro-F1），体质线是八维训练折中位数回归（masked MAE）。之后每轮读上轮证据，提出单个可检验假设，修改候选、提交、用同一协议评估、KEEP 或 REVERT。失败不得晋级，结果不得事后挑选。
 5. 使用 `./solve.sh dashboard --run runs/<tag>` 打开现有只读监控。网页只读取状态与实验记录，不控制训练。
 6. 开始真实数据实验前先确认本机入口已经完成适配，且通过用户分组、冻结哈希、无 holdout 和评估一致性测试。若入口仍仅允许合成数据，不可假装已开始真实训练。
 7. 当前本机实验标记 `LOCAL_EXPERIMENTAL`。不宣称具有独立防篡改、外部泛化、诊断或临床有效性。
