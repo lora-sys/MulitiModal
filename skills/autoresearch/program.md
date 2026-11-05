@@ -1,38 +1,24 @@
-# AutoResearch program
+# AutoResearch: TCM-SD
 
-本文件规定 Coding Agent 如何连续开展研究。参考 karpathy/autoresearch 的原则：固定实验、单文件修改、真实运行、逐轮保留或回退。它不是基础设施改造任务，也不负责替研究者修改目标。
-
-## 研究目标与阶段
-
-最终项目目标是建立用于按摩椅的生理健康预测模型，先完成中医分类研究，再研究原始 PDF 的按摩前生理预测。各阶段独立训练和评价，不得混用输入、标签和分数。
-
-当前任务是 TCM-SD 中文短症状主诉的 148 类证候分类。使用已经冻结的 protocol v2 开发选择集，主指标为全部 148 类的 macro-F1，越高越好；既有字符 1–3 gram TF-IDF + LR 是必须先复现的强基线，历史八折均值约为 0.319921。这是旧实验的参考值，不是新实验的预设成绩。
-
-后续独立任务包括九种中医体质预测，以及 PDF 所述按摩前 Body、Physio 两路输入、BPSI 状态指数和 EFRI 预期响应。生理模型训练期可用按摩中 EEG 和按摩后测量构造目标，实际推理只能用按摩前信息。当前 TCM-SD 数据不能充当 BPSI、EFRI 或完整九体质的真实标签。切换任务时必须另行冻结输入、标签、评价器和指标，不得静默重用证候的评价口径。
+让 Coding Agent 参考 [karpathy/autoresearch](https://github.com/karpathy/autoresearch) 自主改进中医证候分类模型。当前只研究 TCM-SD 的 148 类中文短主诉分类，主指标为 macro-F1，越高越好。其他中医体质和 PDF 生理预测任务另行研究。
 
 ## Setup
 
-1. 在仓库最新版建立专用分支 `autoresearch/<tag>`，保持已有主分支干净。检查 `AGENTS.md`、`skills/autoresearch/SKILL.md`、本文件、`src/research/prepare.py` 和 `src/research/train.py`。
-2. 确认开发机 Python 环境、CPU/GPU、依赖和可用内存。训练直接在本机执行；不要求 Docker、sandbox、独立服务、数据库或额外 Agent 进程。避免无界并发。
-3. 检查 `runs/sd-v2/short/selection_manifest.json`、`selection_records.json`，对照 `prepare.py` 中冻结 SHA-256。使用原始 protocol v2 的用户分组、分层和折内单向精确文本去重。若文件、哈希、许可或标签对应不上，停止该轮并报告，不准重建假数据代替。
-4. 对正式比较固定 4 folds × 2 repeats、148 类 macro-F1、折分组规则、seed、依赖环境和每折训练预算。可以先用合成数据或两折试运行检查工程，但这类结果不得与正式八折基线比较。
-5. 创建忽略 Git 的 `runs/<tag>/`，保存 `results.tsv`、日志、`status.json`、各轮 JSON 和交付模型。数据与模型权重不得提交 Git。
-6. 正式研究开始前，先在未修改 `train.py` 的状态下运行真实 TCM-SD 基线。指标由 `prepare.py` 根据模型对验证文本的预测计算，不接受候选自报分数。
-7. 本机研究结果标记 `LOCAL_EXPERIMENTAL`。这代表受试者分组开发实验，不代表独立防篡改验证、外部泛化或临床有效性。
+1. 阅读 `AGENTS.md`、`skills/autoresearch/SKILL.md`、`src/research/prepare.py` 和 `src/research/train.py`。新建 `autoresearch/<tag>` 分支或独立 worktree。
+2. 核查本机真实 TCM-SD 开发选择集及冻结哈希：`runs/sd-v2/short/selection_manifest.json`、`selection_records.json`。固定 protocol v2 的受试者分组、折内单向文本去重、148 类 macro-F1、4 折 × 2 次重复和 seed。禁止使用已耗尽解锁预算的历史 holdout。
+3. 训练使用开发机 Python 和实际可用的 CPU/GPU，不使用 Docker。**每折最多 5 分钟墙钟时间**，即 `--budget 300`。一轮包含 8 次训练，最多约 40 分钟加评估开销。当前实现是超时上限，模型提前完成就提前结束，并非强制训练满 5 分钟。
+4. 在 Git 忽略目录 `runs/<tag>/` 保存 `results.tsv`、`round-*.json`、日志和 `status.json`。第一轮运行原样 `train.py` 建立基线；历史约 0.3199 仅供对照，不能代替本轮真实评分。
 
-## 允许修改与禁止事项
+## Rules
 
-- 每轮只修改 `src/research/train.py`。可改变特征表示、模型架构、损失、优化器、训练策略与超参数。不能预先假定神经网络必然好于线性模型。
-- `prepare.py`、数据、受试者映射、折分组、预处理拟合边界、148 类标签顺序、评价指标、实验预算和历史测试数据保持冻结。不得修改这些内容换取更高分数。
-- 只能在训练折拟合词表、TF-IDF、标准化器、特征选择和模型；验证折只能用于评分。不能用 dev/CV 结果反复调整最终 holdout。
-- 历史 TCM-SD holdout 解锁预算 1/1、体质线 2/2，均已用尽。禁止读取、再解锁、重新划分后伪装成新测试集，或把历史 holdout 结果用作候选选择。
-- 真实 TCM-SD 许可为 CC BY-NC-SA 4.0，研究成果未经另行授权不得作为商业按摩椅模型交付。
-- 不安装或升级依赖以制造不公平比较。确需新模型权重或依赖时，先明确许可证、版本、资源和公平预算，并启动新的可比较实验组。
-- 保留现有只读 `dashboard.py`，不让网页修改模型或干预 KEEP/REVERT。
+- **只允许修改 `src/research/train.py`**。模型、特征、超参数、损失函数和训练策略由 Agent 自主决定。
+- **不得修改 `prepare.py`、评价器、数据、标签、划分、seed 或训练预算**。不额外安装依赖；训练折之外的数据不能用于拟合。
+- 不假设神经网络比传统模型更好。性能接近时优先简单模型，但已有记录规则要求 KEEP 的分数必须严格提高。
+- 固定实验协议内比较候选。合成或缩减折数的调试结果不参与冠军排名。真实本机结果仅标为 `LOCAL_EXPERIMENTAL`。
 
-## 实验命令
+## Run
 
-基础设施改造完成后，固定评价入口应支持下列形式。若入口不存在或仍只支持 `--synthetic`，先完成基础设施改造并运行测试，绝不能谎称已开展真实训练。
+每轮使用新输出路径，固定如下正式评价命令：
 
 ```bash
 export PYTHONPATH=src
@@ -41,33 +27,27 @@ python -m research.prepare \
   --dataset runs/sd-v2/short/selection_records.json \
   --candidate src/research/train.py \
   --out runs/<tag>/round-000.json \
-  --folds 4 --repeats 2 --budget <fixed_seconds>
+  --folds 4 --repeats 2 --seed 20261104 --budget 300
 ```
 
-`<fixed_seconds>` 是每折固定的训练上限，首次基线前按现有算力和模型选定，并写入实验记录。所有候选使用相同协议、种子方案和预算。对于 CPU 线性模型与 GPU 神经模型，应同时记录实际训练时间和设备信息，避免把硬件变化当成算法改进。
+将 `<tag>` 替换为研究目录；后续使用 `round-001.json` 等。评分由 `prepare.py` 计算，不采纳候选自己报告的指标。
 
-查看报告的结果文件和日志，不靠解析随意打印的候选文本判断分数；输出应包含 `macro_f1`、fold scores、标准差、训练耗时、失败状态、数据哈希和候选 commit。监控网页使用现有入口：
+## Experiment loop
+
+**持续执行，直到用户停止。没有总时长或总轮数限制。**
+
+1. 查看当前 champion、Git HEAD、历史结果和上轮失败原因，提出一个可验证的假设。
+2. 只修改 `train.py`，提交 Git commit，运行完整固定评价，保存日志和逐折结果。
+3. 用 `python -m research.prepare record` 将本轮 commit、macro-F1、假设和 KEEP、REVERT 或 CRASH 写入 `results.tsv`。
+4. **KEEP**：得分严格超过 champion，且复杂度值得接受。**REVERT**：未改善或不值得保留，重置到 champion。**CRASH**：超时、报错或结果无效，检查日志，最多修复两次，否则回退。CRASH 不产生有效分数。
+5. 根据本轮结果选择下一项实验，不提前排定全部实验，不逐轮向用户请示。
+
+现有只读网页用于查看结果：
 
 ```bash
 ./solve.sh dashboard --run runs/<tag>
 ```
 
-## 逐轮研究循环
+## Handoff
 
-在研究者给定的总轮数或时间预算内持续进行；除预算用尽、用户叫停或数据协议失效外，不逐轮请求批准。
-
-1. 读取 Git HEAD、最新 champion、`results.tsv`、上一轮逐折结果和失败原因。
-2. 根据证据提出一个可验证的假设，说明要修改什么、为何可能提升 macro-F1、预期怎样证明假设不成立。优先排查类别长尾、输入信息量、训练不足、过拟合和错误预测；不要机械穷举参数。
-3. 保存 champion commit，只改 `train.py`，检查 diff 并提交候选 commit。
-4. 用同一套固定开发评价运行候选。把标准输出和错误保存到本轮日志；训练期间更新 `status.json`，供 Dashboard 展示状态、fold、进度和超时。
-5. 如果没有完整评分或发生超时、OOM、异常、非有限分数，记录 `CRASH` 及原因。明显的代码错误最多修复两次；仍失败则回退。失败不能当成 0 分，也不能成为冠军。
-6. 如候选指标明确改善，且不是由协议漂移、极少数折偶然波动或不可接受的复杂度增加造成，可 `KEEP`；否则 `REVERT`。差异接近折间波动时先复验，不把严格大于的微小差值直接称为可靠进步。比较规则在研究开始前固定，不能看到结果后调整。
-7. 每轮追加 `results.tsv`，包含 commit、假设、主指标、折分数、训练时间、设备、决定和失败原因；存证后推进或重置 Git 到 champion。不得把本地运行目录提交仓库。
-8. 读取本轮证据后再提出下一轮假设。不能预先批量写好所有实验，冒充自主研究。
-
-## 停止、交付与下一阶段
-
-- 用户停止、预算达到上限、评估协议失效或环境不可用时停止。Coding Agent 进程结束不等于任务仍在后台运行；下一次从 Git 和 `results.tsv` 校验状态后继续。
-- 保存最佳源码 commit、可重新加载的模型工件、训练配置、完整实验结果、数据哈希、环境版本、Dashboard 截图、失败分析和下一步建议。模型重载前后预测必须一致。
-- 新的真实 TCM-SD 研究必须先复现基线，再做至少三轮逐轮自主实验。正式比较只使用 4×2 开发 CV，不碰历史 holdout；最终结论只限开发集。
-- 只有当前证候阶段完成并通过验收后，才切换体质或 PDF 生理任务。切换前建立新的研究协议，确保预测目标与可用数据确实一致。
+用户停止研究或要求交付时，保留最佳 commit、完整实验记录与必要的运行说明。模型保存与重载、推理验收、逐类分析和外部泛化验证在独立的交付任务中完成，不把它们加入每轮 KEEP/REVERT，也不重复使用历史 holdout。没有独立外部数据时，不宣称跨来源泛化已经验证。
