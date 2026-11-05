@@ -144,22 +144,23 @@ class EvidenceRegistry:
     def audit_references(self, root: str | Path | None = None) -> list[str]:
         """Report evidence files that no longer resolve.
 
-        A reference's scope is decided by version control, not by the digest
-        field: a path tracked in Git is the evidence body itself, so renaming
-        or deleting it voids a VERIFIED claim silently. That already happened
+        A reference's scope is decided by the repository's own ignore rules, not
+        by the digest field: anything not declared to live outside Git is the
+        evidence body itself, so renaming or deleting it voids a VERIFIED claim
+        silently. That already happened
         once (`tests/runtime/test_autoresearch.py`, removed by 37f4d11 while
         `tcm-engineering-smoke` stayed VERIFIED). Trusting the digest instead
         would miss `pdf-spec`, which cites the tracked
         `docs/source/pre-massage-fatigue-prediction-framework.pdf` with a real
-        SHA-256. Tracked paths must exist in the checkout; untracked ones live
-        outside Git (data/, runs/, artifacts/) and are reported as a gap, not a
-        defect - but absence says nothing about which host should hold them:
-        2026-11-05 found two such claims missing on the dev host as well. A
-        claim whose references are ALL unresolvable is called out separately,
-        because that claim cannot be re-verified on this checkout at all.
+        SHA-256, and reading the Git index would miss it again once its deletion
+        is committed. Repository paths must exist in the checkout; ignored ones
+        (data/, runs/, artifacts/) are reported as a gap, not a defect - but
+        absence says nothing about which host should hold them: 2026-11-05 found
+        two such claims missing on the dev host as well. A claim whose
+        references are ALL unresolvable is called out separately, because that
+        claim cannot be re-verified on this checkout at all.
         """
         base = Path(root) if root is not None else Path(__file__).resolve().parents[2]
-        tracked = self._tracked_paths(base)
         lines = []
         for claim in self.claims.values():
             resolved = 0
@@ -182,9 +183,8 @@ class EvidenceRegistry:
                     resolved += 1
                     continue
                 absent += 1
-                in_repo = digest == TRACKED_IN_GIT or (
-                    tracked is not None and path in tracked
-                )
+                host_local = self._is_host_local(base, path)
+                in_repo = digest == TRACKED_IN_GIT if host_local is None else not host_local
                 if in_repo:
                     lines.append(
                         f"MISSING-REPO-REFERENCE {claim.claim_id}: "
@@ -205,22 +205,31 @@ class EvidenceRegistry:
         return lines
 
     @staticmethod
-    def _tracked_paths(root: Path) -> frozenset[str] | None:
-        """Paths under version control at `root`, or None when Git is unusable.
+    def _is_host_local(root: Path, path: str) -> bool | None:
+        """Whether `path` is declared to live outside Git, or None if unknown.
 
-        Used only to classify a missing reference. None falls back to the
-        `TRACKED-IN-GIT` sentinel, so the audit still works on an export with
-        no Git metadata.
+        Scope must not come from the index: `git ls-files` lists cached entries
+        only, so once a deletion is committed the evidence path disappears from
+        it and a repository reference would be downgraded to a host gap - the
+        same silent loss this audit exists to catch, one step later.
+        `.gitignore` is the durable, committed statement of what lives outside
+        the repo (data/, runs/, artifacts/), so it decides scope here.
+
+        None means Git could not answer (no repository, or no Git); the caller
+        then falls back to the `TRACKED-IN-GIT` sentinel.
         """
         try:
-            out = subprocess.run(
-                ("git", "-C", str(root), "ls-files", "-z"),
+            result = subprocess.run(
+                ("git", "-C", str(root), "check-ignore", "-q", "--", path),
                 capture_output=True,
-                check=True,
-            ).stdout
-        except (OSError, subprocess.CalledProcessError):
+            )
+        except OSError:
             return None
-        return frozenset(p.decode() for p in out.split(b"\0") if p)
+        if result.returncode == 0:
+            return True
+        if result.returncode == 1:
+            return False
+        return None
 
 
 # Gate requirements: a gate is GRANTED only when every listed claim is
