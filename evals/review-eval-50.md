@@ -17,14 +17,16 @@ Pi），经主流程逐条核验后确认为真实问题的条目。此清单是
 > 仍可运行。本文件自此是**人工核对用的规范清单**，不再是自动门禁；条目的
 > 「不得重写既有条目」约束保持不变，任何条目只有在对应回归被重新固化为 pytest
 > 用例后才恢复机械可验证，届时应在该条目「验证」列追加新执行体而不替换原文。
-> 另：本清单为 #50 冻结基准，其中多个条目的修复体本来就住在被同一提交删除的
-> 报告/检查脚本里，而不只是验证函数丢失：E01 的 `exclude_subjects_from_manifest`
-> 现在 `src/data/real_split.py:211` **零调用**（仅 L280 有一句文字提及）；E02 的
-> `n_undefined_f1` 仅存在于已退役的 `src/runtime/tcm_eval.py:113,142,372,424`；
-> E06 `_fixed_training`、E16 `metric_params`/`champion_provenance`、E23
+> 另：本清单为 #50 冻结基准，其中多个条目的修复体不再存在于仓库里（不只是验证
+> 函数丢失），分两类：（一）实现体仍在本仓、但已无调用方——E01 的
+> `exclude_subjects_from_manifest` 现在 `src/data/real_split.py:211` **零调用**
+> （仅 L280 有一句文字提及），E02 的 `n_undefined_f1` 仅存在于已退役的
+> `src/runtime/tcm_eval.py:113,142,372,424`；（二）实现体随被删脚本一起消失——E06
+> `_fixed_training`、E16 `metric_params`/`champion_provenance`、E23
 > `apply_config_patch`、E28 `assert_champion_matches_manifest`、E41 `_worker_env`、
-> E46 `score_failed` 在现仓 `src`+`tests` 中已无任何出现，它们原先分别位于
+> E46 `score_failed` 在现仓 `src`+`tests` 中已无任何出现，它们原先位于
 > `scripts/review_eval.py` 与 `scripts/tcm_real_report.py`（`git show 75b3cd9^` 可查）。
+> 两类都不能靠重跑 `review_eval.py` 复核。
 > 这些条目仍作为历史裁决保留，但其行为已在仓库内不可验证；删除或重写它们需要
 > 单独授权。
 

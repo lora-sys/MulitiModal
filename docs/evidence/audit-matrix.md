@@ -34,7 +34,7 @@
 
 ## 引用可核对性实测（2026-11-05，双主机）
 
-由 `EvidenceRegistry.audit_references()` 实测，非人工转述。两台机器指同一 `feature/clean-slate` 提交：本机 macOS（Python 3.13，无 torch/transformers/xlrd）与开发机 `acam-lab`（Python 3.12，torch 2.13.0 / transformers 5.13.1 / xlrd 2.0.2 / accelerate 1.13.0 均已装）。
+由 `EvidenceRegistry.audit_references()` 实测，非人工转述。两台机器指同一 `feature/clean-slate` 提交：本机 macOS（Python 3.13.12，无 torch / transformers / xlrd）与开发机 `acam-lab`（Python 3.12.3，实测 `torch 2.15.0`、`transformers 5.22.1`、`accelerate 1.15.0`、`xlrd 2.0.2`、`joblib 1.6.0`、`scikit-learn 1.9.1`、`numpy 2.5.4`；`openpyxl` 未装）。`requirements-dev.txt:6` 记录的 "acam-lab venv 实装 5.22.1 / 1.15.0" 与实测一致。
 
 | claim | 引用类别 | 本机 | acam-lab | 结论 |
 | --- | --- | --- | --- | --- |
