@@ -4,9 +4,9 @@
 目录、``python -I`` 之下，看不到仓库、冻结清单或验证标签。平和质完全未观测，
 输出必须是 (n, 8)，绝不预测第 9 维。
 
-round-015 假设（由特征组消融驱动）：round-009 脉波、round-006 舌象在单 Huber
-下均无增益，但尚未在冠军软集成下测试经络电导组（9:21，12 维）。在 9 维基础上
-加入该组，检验 kNN 的局部距离能否从经络信号获益，其余配置不变。
+round-016 假设（结构性）：冠军软集成里 kNN 的距离在 18 维 design 上计算，
+其中一半是缺失指示位；52 个缺失单元的指示可能主导邻域选择而非真实生理相似度。
+改为只用 9 个实测标准化特征计算 kNN 距离，Huber 的 design（含缺失指示）不变。
 """
 
 from __future__ import annotations
@@ -83,15 +83,20 @@ def fit_both_with_y(x, mask, y, seed: int):
     stats = fit_stats(x, mask)
     features = design(x, mask, stats)
     coefficients, center = huber_fit(features, y)
-    k = choose_k(features, y, seed)
+    # kNN 距离只用实测标准化特征，不含缺失指示位
+    distance_train = features[:, :x.shape[1]]
+    k = choose_k(distance_train, y, seed)
     return {"stats": stats, "coefficients": coefficients, "center": center,
-            "train_features": features, "train_y": y, "k": k}
+            "train_features": distance_train, "train_y": y, "k": k,
+            "n_observed": x.shape[1]}
 
 
 def predict_both(state, x, mask):
     features = design(x, mask, state["stats"])
     huber = features @ state["coefficients"] + state["center"]
-    knn = knn_predict(state["train_features"], state["train_y"], features, state["k"])
+    distance_features = features[:, :state["n_observed"]]
+    knn = knn_predict(state["train_features"], state["train_y"],
+                      distance_features, state["k"])
     return huber, knn
 
 
@@ -148,7 +153,7 @@ def main() -> None:
 
     train_x, train_mask = matrix(rows)
     predict_x, predict_mask = matrix(inputs["rows"])
-    keep = list(range(0, 9)) + list(range(9, 21))  # 基础 9 维 + 经络 12 维
+    keep = slice(0, 9)  # 冠军特征子集：人口学 6 + 人体测量 3
     train_x, train_mask = train_x[:, keep], train_mask[:, keep]
     predict_x, predict_mask = predict_x[:, keep], predict_mask[:, keep]
     y = np.array([row["scores"] for row in rows], dtype=float)
