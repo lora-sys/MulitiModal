@@ -1,8 +1,8 @@
-"""#45 AutoResearch protocol: train_candidate / trusted_score.
+"""Runtime training and scoring protocols.
 
-These two functions are the stable surface the AutoResearch harness (#45)
-calls instead of touching Trainer internals. Deterministic under a fixed
-seed. Two data modes:
+`train_candidate` and `trusted_score` are the public API exported by
+`runtime`. Synthetic fixtures are smoke-only. The optional real-data path
+requires a frozen manifest and audited dataset:
 
 - synthetic (default): SMOKE_ONLY fixtures, engineering smoke only.
 - real (#50): batches from a frozen real-data manifest (subject-disjoint
@@ -87,187 +87,6 @@ def _train_real(config: dict) -> dict:
     }
 
 
-def cross_val_candidate(
-    config: dict, folds: int = 4, split_seed: int = 0, repeats: int = 1
-) -> dict:
-    """Subject-level repeated k-fold score over the SELECTION POOL (train+dev).
-
-    Why: a single 41-subject dev split cannot rank candidates — the spread
-    between different splits of the same config (dev macro-F1 0.145 vs holdout
-    0.345 in v7) dwarfs the spread between candidates. Each fold trains on the
-    pool minus the fold and scores the held-out fold with the same trusted
-    evaluator, and the harness compares the MEAN against a noise margin.
-
-    `repeats` re-partitions the same pool with a different shuffle and averages
-    over R x K folds: the per-fold spread stays what it is, but the spread of
-    the mean falls as 1/sqrt(n), which is the quantity a KEEP decision actually
-    rests on. One repeat (the default) is the single-partition behaviour.
-
-    Two properties are structural, not conventions:
-    - folds are drawn from train + dev only, so the holdout cannot be selected on;
-    - each fold's manifest has its scaler refit on that fold's train rows and an
-      EMPTY holdout partition (see data.real_split.fold_manifest).
-    """
-    import random
-
-    import torch
-
-    from data.real_split import fold_manifest
-
-    from .real_data import (
-        RealBatchProvider,
-        build_real_model,
-        manifest_from_path,
-        real_eval_manifest,
-    )
-    from .tcm_eval import TCMTrustedEvaluator
-
-    if repeats < 1 or folds < 2:
-        raise ValueError(f"repeats={repeats} and folds={folds} must be >= 1 and >= 2")
-    manifest = manifest_from_path(config["data"]["manifest_path"])
-    records = _load_records(config["data"]["dataset_path"])
-    pool = list(manifest["split"]["train"]) + list(manifest["split"]["dev"])
-    if len(pool) < folds * 4:
-        raise ValueError(f"selection pool of {len(pool)} subjects is too small for {folds} folds")
-
-    trainer_kwargs = dict(config.get("trainer", {}))
-    for forbidden in ("early_stop_patience", "restore_best"):
-        if trainer_kwargs.get(forbidden) is not None:
-            raise ValueError(
-                f"real-data training forbids trainer.{forbidden}: a validation "
-                "fold must never steer fitting"
-            )
-    batch_size = config.get("train_provider", {}).get("batch_size", 32)
-    per_fold: list[float | None] = []
-    fold_sizes: list[int] = []
-    for repeat in range(repeats):
-        # each repeat draws a fresh partition of the same pool; averaging over
-        # R x K folds is what makes a small effect visible above fold noise
-        shuffled = sorted(pool)
-        random.Random(split_seed + repeat).shuffle(shuffled)
-        fold_of = {s: i % folds for i, s in enumerate(shuffled)}
-        for f in range(folds):
-            train_ids = [s for s in shuffled if fold_of[s] != f]
-            dev_ids = [s for s in shuffled if fold_of[s] == f]
-            fold_sizes.append(len(dev_ids))
-            # the scaler is refit on THIS fold's train rows: reusing the
-            # parent manifest's statistics would put validation-fold feature
-            # values into the training inputs of the model that scores them
-            fold = fold_manifest(
-                manifest, records, train_ids, dev_ids,
-                notes=f"selection fold {f} of repeat {repeat}",
-            ).data
-            # the fold manifest prunes subject_row_by_id to train∪dev; the
-            # records handed to the providers must be pruned the same way or
-            # every subject's scores — holdout rows included — stay reachable
-            # from provider.records_by_row
-            fold_rows = set(fold["subject_row_by_id"].values())
-            fold_records = [r for r in records if r.subject_index in fold_rows]
-            torch.manual_seed(trainer_kwargs.get("seed", 0))
-            model = build_real_model(fold, config.get("model", {}))
-            trainer = Trainer(model, TrainerConfig(**trainer_kwargs))
-            provider = RealBatchProvider(fold, fold_records, "train", batch_size=batch_size)
-            trainer.fit(provider)  # no eval provider: nothing may steer fitting
-            val = RealBatchProvider(fold, fold_records, "dev", batch_size=64)
-            evaluator = TCMTrustedEvaluator(real_eval_manifest(fold))
-            per_fold.append(
-                evaluator.evaluate(model, val, partition="dev").primary_value
-            )
-
-    scored = [v for v in per_fold if v is not None]
-    if not scored:
-        raise ValueError("no fold produced a scoreable primary metric")
-    mean = sum(scored) / len(scored)
-    variance = sum((v - mean) ** 2 for v in scored) / len(scored)
-    std = variance ** 0.5
-    return {
-        "primary_value": mean,
-        # spread of one fold's score: what the chart draws error bars from
-        "primary_std": std,
-        # spread of the MEAN: the only quantity a KEEP decision compares, so
-        # the noise margin is derived from this, not from `primary_std`
-        "primary_sem": std / (len(scored) ** 0.5),
-        "folds": per_fold,
-        "fold_sizes": fold_sizes,
-        "repeats": repeats,
-        "n_folds": len(scored),
-        "selection": "repeated_group_kfold" if repeats > 1 else "group_kfold",
-    }
-
-
-def refit_champion(config: dict, selection: dict | None = None) -> dict:
-    """Fit the selected configuration on the whole SELECTION POOL (train+dev).
-
-    The deliverable model: every row that took part in the cross-validated
-    selection is used for the final fit, and the frozen holdout is never
-    read here (it is unlocked once, by the report). The checkpoint records
-    the frozen manifest it descends from, so a report can verify the
-    binding instead of trusting the directory name.
-    """
-    import torch
-
-    from data.real_split import pool_manifest
-
-    from .real_data import RealBatchProvider, build_real_model, manifest_from_path
-
-    data_cfg = dict(config["data"])
-    manifest = manifest_from_path(data_cfg["manifest_path"])
-    records = _load_records(data_cfg["dataset_path"])
-    pool = pool_manifest(
-        manifest, records,
-        notes="final refit on the AutoResearch selection pool (train+dev)",
-    )
-    trainer_kwargs = dict(config.get("trainer", {}))
-    for forbidden in ("early_stop_patience", "restore_best"):
-        if trainer_kwargs.get(forbidden) is not None:
-            raise ValueError(
-                f"refit forbids trainer.{forbidden}: there is no validation "
-                "partition left to steer fitting"
-            )
-    trainer_cfg = TrainerConfig(**trainer_kwargs)
-    torch.manual_seed(trainer_cfg.seed)
-    model = build_real_model(pool.data, config.get("model", {}))
-    trainer = Trainer(model, trainer_cfg)
-    batch_size = config.get("train_provider", {}).get("batch_size", 32)
-    # the pool manifest prunes subject_row_by_id to the pool; the records must
-    # be pruned the same way — agent-authored fitting code must not be able to
-    # reach holdout scores through provider.records_by_row
-    pool_rows = set(pool.data["subject_row_by_id"].values())
-    pool_records = [r for r in records if r.subject_index in pool_rows]
-    provider = RealBatchProvider(pool.data, pool_records, "train", batch_size=batch_size)
-    report = trainer.fit(provider)
-    artifact_dir = trainer.save_checkpoint(
-        Path(config.get("out_dir", "runs/autoresearch/final")),
-        smoke_only=False,
-        extra_state={
-            "manifest_sha256": pool.data["manifest_sha256"],
-            "selection_parent_manifest_sha256": manifest["manifest_sha256"],
-            "dataset_sha256": manifest["dataset_sha256"],
-            "label_version": manifest["label_version"],
-            "train_batch_size": batch_size,
-            "refit_partition": "train+dev",
-            "refit_rows": len(pool.data["split"]["train"]),
-            "selection": selection or {},
-        },
-    )
-    return {
-        "artifact_dir": str(artifact_dir),
-        "model_type": model.model_type,
-        "epochs_run": report.epochs_run,
-        "smoke_only": False,
-        "data_mode": "real",
-        "manifest_sha256": pool.data["manifest_sha256"],
-        "selection_parent_manifest_sha256": manifest["manifest_sha256"],
-        "dataset_sha256": manifest["dataset_sha256"],
-        "label_version": manifest["label_version"],
-        "refit_partition": "train+dev",
-        "refit_rows": len(pool.data["split"]["train"]),
-        # pool_manifest no longer carries a holdout partition (F-05): the
-        # untouched count comes from the frozen parent the pool derives from
-        "holdout_rows_untouched": len(manifest["split"]["holdout"]),
-    }
-
-
 def _load_records(dataset_path: str) -> list:
     from data.mendeley import load_mendeley_scores
 
@@ -289,8 +108,7 @@ def train_candidate(config: dict) -> dict:
 
     model_cfg = dict(config.get("model", {}))
     trainer_cfg = TrainerConfig(**config.get("trainer", {}))
-    # Seed before model construction: the worker runs in a fresh process, so
-    # identical configs must produce identical inits (controlled comparison).
+    # Seed before model construction so identical configs use identical inits.
     torch.manual_seed(trainer_cfg.seed)
     train_cfg = dict(config.get("train_provider", {}))
     eval_cfg = dict(config.get("eval_provider", {}))
@@ -326,8 +144,8 @@ def trusted_score(artifact_dir: str | Path, seed: int = 1234) -> dict:
     model, state, metadata = load_training_checkpoint(artifact_dir)
     if not state.get("smoke_only", False):
         raise ValueError(
-            "trusted_score evaluates synthetic fixtures only; a real-data "
-            "checkpoint must go through the worker's real-data scoring path"
+            "trusted_score evaluates synthetic fixtures only; "
+            "real-data checkpoints are not supported by synthetic trusted_score"
         )
     task = "tcm" if metadata["model_type"].startswith("tcm") else "physio"
     provider = SyntheticBatchProvider(

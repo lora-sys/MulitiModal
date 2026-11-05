@@ -17,7 +17,6 @@ from runtime.real_data import (
 )
 from runtime.tcm_eval import TCMTrustedEvaluator
 from runtime.trainer import Trainer, TrainerConfig
-from runtime.worker import _score_real
 
 pytestmark = pytest.mark.synthetic
 
@@ -162,29 +161,6 @@ def test_evaluator_fails_closed_when_no_label_is_observable(tmp_path):
     assert report.subject_mae is None
     assert report.subject_rmse is None
     assert any("NOT_COMPUTABLE" in entry for entry in report.not_computable)
-
-
-def test_score_real_refuses_smoke_only_checkpoint(tmp_path):
-    from core.models import default_tcm_model
-
-    model, _ = default_tcm_model(hidden_dim=8, fusion_dim=8)
-    artifact = save_training_checkpoint(model, {}, tmp_path / "smoke", smoke_only=True)
-    m, path = manifest_file(tmp_path)
-    with pytest.raises(ValueError, match="SMOKE_ONLY"):
-        _score_real(str(artifact), str(path), "unused.xls")
-
-
-def test_score_real_refuses_foreign_manifest(tmp_path):
-    m, path = manifest_file(tmp_path)
-    model = build_real_model(m, {})
-    state = {"epoch": 1, "global_step": 1, "best_epoch": None,
-             "best_eval_loss": None, "optimizer": {}, "trainer_config": {},
-             "torch_rng_state": torch.get_rng_state(),
-             "manifest_sha256": "not-this-manifest"}
-    artifact = save_training_checkpoint(model, state, tmp_path / "real",
-                                        smoke_only=False)
-    with pytest.raises(ValueError, match="different real-data manifest"):
-        _score_real(str(artifact), str(path), "unused.xls")
 
 
 def test_real_training_refuses_dev_steering_trainer_keys(tmp_path):

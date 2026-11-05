@@ -18,15 +18,9 @@ Skill 描述通用方法；任务各自提供数据与评价代码。候选执�
 
 [设计说明](docs/autoresearch-design.md) 解释评价边界、证据和当前未实现的能力。
 
-## 从合成示例开始
-
-[线性回归示例](examples/linear_research/README.md) 是与本项目任务无关的最小迁移演示：固定合成数据和平均绝对误差，先运行均值基线，再尝试线性拟合。它使用一个可修改训练文件、容器运行器和同一监控页。示例为 `SMOKE_ONLY`，只验证流程。
-
-在 Linux 上启用用户 systemd、项目 Python 环境并准备本地 `multimodal-research-worker:2.7.0-cpu` Docker 镜像后，按示例说明创建专用 Git worktree 与 run 目录。`./solve.sh dashboard --run <run>` 在本机启动只读监控；本地结果记录未独立认证。
-
 ## 本项目的研究适配
 
-[证候任务说明](docs/autoresearch-tcm-sd.md) 记录当前数据、指标、运行命令和证据边界。新入口目前只允许运行内置合成数据；候选容器的定向检查不等于可信评价器已独立于提案 Agent，真实数据入口保持关闭（`AGENT_ISOLATION_UNVERIFIED`）。体质和证候 holdout 的解锁预算已用尽，不得用于候选选择。
+[证候任务说明](docs/autoresearch-tcm-sd.md) 记录当前数据、指标、运行命令和证据边界。候选代码目前由本机 Python 子进程运行在临时目录中；这不构成 OS 或容器级隔离，也没有阻断网络。真实研究仍受 `AGENT_ISOLATION_UNVERIFIED` 限制，不能把本地结果当作可信科研评分。体质和证候 holdout 的解锁预算已用尽，不得用于候选选择。
 
 [历史研究报告](docs/reports/) 保留原有结论与局限。报告引用的旧脚本和运行方式可在重写前的 Git 提交 `afe7580` 查阅；新入口不直接运行旧命令。
 
