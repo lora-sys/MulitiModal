@@ -31,6 +31,7 @@ import statistics
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +86,11 @@ REQUIRED_REPORT_KEYS = (
     "acceptance", "artifact", "inference", "per_dimension", "robustness",
     "unverified_generalization",
 )
+
+
+def _balanced_abstain() -> dict:
+    return {"dim": "balanced", "status": "ABSTAIN", "value": None,
+            "reason": "dimension unobserved in source data; never fabricated"}
 
 
 class ConstitutionPredictor:
@@ -160,47 +166,73 @@ class ConstitutionInference:
             "calibrated": False,
             "evidence": EVIDENCE,
         }
-        status = self._validate(row)
+        status, reason = self._validate(row)
         if status != "OK":
-            return {**base, "status": status, "scores": [],
-                    "balanced": {"dim": "balanced", "status": "ABSTAIN", "value": None,
-                                 "reason": "dimension unobserved in source data; never fabricated"}}
-        scores = self.predictor.predict([row])[0].tolist()
+            return self._reject(base, status, reason)
+        try:
+            # Overflow in the Huber/kNN arithmetic must become a rejection, not
+            # a crash or a fabricated out-of-scale score.
+            with np.errstate(all="ignore"):
+                scores = self.predictor.predict([row])[0].tolist()
+        except (ValueError, FloatingPointError, OverflowError) as exc:
+            return self._reject(
+                base, "OUT_OF_DOMAIN",
+                f"模型未能产生有限输出（{type(exc).__name__}），输入超出可判定域",
+            )
+        if not all(math.isfinite(v) and 0.0 <= v <= 100.0 for v in scores):
+            return self._reject(
+                base, "OUT_OF_DOMAIN",
+                "预测分数超出 0–100 已发布量表范围，拒绝输出以免误导",
+            )
         return {
             **base, "status": "OK",
             "scores": [{"dim": dim, "value": float(value), "calibrated": False}
                        for dim, value in zip(self.predictor.dims, scores, strict=True)],
-            "balanced": {"dim": "balanced", "status": "ABSTAIN", "value": None,
-                         "reason": "dimension unobserved in source data; never fabricated"},
+            "balanced": _balanced_abstain(),
             "missing_information": [
                 f"feature {i}" for i, observed in enumerate(row["feature_mask"])
                 if not observed
-            ][:8],
+            ],
         }
 
     @staticmethod
-    def _validate(row: dict | None) -> str:
-        if not row or "features" not in row:
-            return "ABSTAIN"
+    def _reject(base: dict, status: str, reason: str) -> dict:
+        return {**base, "status": status, "scores": [], "reason": reason,
+                "balanced": _balanced_abstain()}
+
+    @staticmethod
+    def _validate(row: dict | None) -> tuple[str, str]:
+        if row is None:
+            return "ABSTAIN", "未提供身体信息"
+        if not isinstance(row, Mapping):
+            return "OUT_OF_DOMAIN", f"输入类型 {type(row).__name__} 不是身体信息记录"
         features = row.get("features")
         mask = row.get("feature_mask")
+        if features is None and mask is None:
+            return "ABSTAIN", "未提供身体特征与观测掩码"
         if not isinstance(features, list) or not isinstance(mask, list) \
                 or len(features) != 63 or len(mask) != 63:
-            return "OUT_OF_DOMAIN"
+            return "OUT_OF_DOMAIN", "身体特征必须是 63 维列表"
         if not all(isinstance(observed, bool) for observed in mask):
-            return "OUT_OF_DOMAIN"
+            return "OUT_OF_DOMAIN", "feature_mask 必须是布尔值"
         if not any(mask):
-            return "ABSTAIN"
+            return "ABSTAIN", "所有身体特征均缺失"
+        if not any(mask[FEATURE_KEEP]):
+            return "ABSTAIN", "模型所需的 9 项基础特征全部缺失，拒绝凭空推断"
         for value, observed in zip(features, mask, strict=True):
             if observed and (value is None or isinstance(value, bool)
                              or not isinstance(value, (int, float))
                              or not math.isfinite(value)):
-                return "OUT_OF_DOMAIN"
+                return "OUT_OF_DOMAIN", "已观测特征必须是有限数值"
             if not observed and value is not None:
-                return "OUT_OF_DOMAIN"
-        return "OK"
+                return "OUT_OF_DOMAIN", "缺失特征不得携带数值（禁止补零）"
+        return "OK", ""
 
     def predict_batch(self, rows: list[dict | None]) -> list[dict]:
+        if rows is None:
+            return [self.predict_one(None)]
+        if not isinstance(rows, (list, tuple)):
+            return [self.predict_one(rows)]
         return [self.predict_one(row) for row in rows]
 
 
@@ -224,6 +256,15 @@ def save_artifact(predictor, artifact_dir: Path, provenance: dict) -> dict:
     """保存工件 + registry（hash 清单）；返回 registry entry。"""
     import joblib
 
+    # `python -m research.constitution_delivery deliver` used to define this
+    # class in __main__, so joblib wrote an unloadable __main__ reference.
+    # Refuse to emit such an artifact instead of silently breaking every
+    # independent process (the CLI entry point now imports this module).
+    if type(predictor).__module__ == "__main__":
+        raise ValueError(
+            "artifact must be saved from the importable "
+            "research.constitution_delivery module"
+        )
     artifact_dir.mkdir(parents=True, exist_ok=True)
     model_path = artifact_dir / "model.joblib"
     labels_path = artifact_dir / "labels.json"
@@ -697,4 +738,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Delegate through the importable module so the pickled class resolves to
+    # research.constitution_delivery.ConstitutionPredictor in any process.
+    import research.constitution_delivery as _entry  # noqa: PLC0415
+
+    raise SystemExit(_entry.main())

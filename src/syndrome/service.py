@@ -50,7 +50,9 @@ from syndrome.feedback import (
     _parse_timestamp as _parse_request_timestamp,
 )
 from syndrome.inference import ProbabilisticPredictor, SyndromeInference
-from syndrome.labels import LABEL_TAXONOMY_ID, STATUS_ABSTAIN, LabelSpace
+from syndrome.labels import (
+    LABEL_TAXONOMY_ID, STATUS_ABSTAIN, STATUS_OUT_OF_DOMAIN, LabelSpace,
+)
 
 SERVICE_SCHEMA_VERSION = "tcm-service-schema-v1"
 BACKEND_ARTIFACT_SCHEMA = "tcm-service-backend-v1"
@@ -367,6 +369,10 @@ class ModelRegistry:
         self.default_model_id: str | None = None
 
     def register(self, spec: BackendSpec, default: bool = False) -> None:
+        if spec is None:
+            raise ValueError(
+                "backend spec must not be None: artifact directory missing or unreadable"
+            )
         if not spec.model_id:
             raise ValueError("backend model_id must not be empty")
         if spec.taxonomy_version != LABEL_TAXONOMY_ID:
@@ -552,6 +558,17 @@ class SyndromeService:
             raise TypeError("analyze_symptoms expects a SymptomAnalysisRequest")
         if request.schema_version != SERVICE_SCHEMA_VERSION:
             raise ValueError(f"unsupported schema_version: {request.schema_version!r}")
+        # from_dict validates types, but direct dataclass construction does not.
+        # Reject bad input explicitly instead of crashing inside the inference path.
+        if not isinstance(request.symptom_text, str) or (
+                request.fields is not None and not isinstance(request.fields, Mapping)):
+            return SymptomAnalysisResponse(
+                status=STATUS_OUT_OF_DOMAIN,
+                message="请求字段类型非法，不作证候判断（OUT_OF_DOMAIN）",
+                model_id=request.model_id or "",
+                backend_availability=BACKEND_NOT_AVAILABLE,
+                provenance=dict(self._base_provenance),
+            )
         spec = self.registry.get(request.model_id)
         if spec is None:
             return SymptomAnalysisResponse(

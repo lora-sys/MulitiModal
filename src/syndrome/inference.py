@@ -306,9 +306,22 @@ class SyndromeInference:
             result.status = STATUS_OK
         return result
 
+    def _invalid_input_result(
+        self, fields: Mapping[str, object] | None, detail: str
+    ) -> InferenceResult:
+        """类型/结构非法输入：明确 OUT_OF_DOMAIN，不抛异常、不给候选。"""
+        result = self._base_result("", None if not isinstance(fields, Mapping) else fields)
+        result.status = STATUS_OUT_OF_DOMAIN
+        result.message = f"{detail}，不作证候判断（OUT_OF_DOMAIN）"
+        return result
+
     def predict_one(
         self, text: str, fields: Mapping[str, object] | None = None
     ) -> InferenceResult:
+        if text is not None and not isinstance(text, str):
+            return self._invalid_input_result(fields, f"症状文本类型 {type(text).__name__} 非法")
+        if fields is not None and not isinstance(fields, Mapping):
+            return self._invalid_input_result(None, f"字段类型 {type(fields).__name__} 非法")
         text = (text or "").strip()
 
         if not has_any_information(text):
@@ -331,16 +344,22 @@ class SyndromeInference:
     def predict_batch(
         self, texts: Sequence[str], fields: Sequence[Mapping[str, object] | None] | None = None
     ) -> list[InferenceResult]:
+        if texts is None or not isinstance(texts, (list, tuple)):
+            texts = [texts]
         fields = list(fields) if fields is not None else [None] * len(texts)
         if len(fields) != len(texts):
             raise ValueError(f"length mismatch: {len(texts)} texts vs {len(fields)} field sets")
-        clean = [(t or "").strip() for t in texts]
+        # 非字符串元素不进入批量前向：直接标记为 OUT_OF_DOMAIN，避免 .strip()/正则崩溃。
+        invalid = {i for i, t in enumerate(texts)
+                   if t is not None and not isinstance(t, str)}
+        clean = [t.strip() if isinstance(t, str) else "" for t in texts]
         # 可判定样本的 probabilities 一次批量请求（GPU 批量前向）；
         # ABSTAIN / OUT_OF_DOMAIN 是逐样本前置分支，不消耗模型调用。
         decidable = [
             i
             for i, (t, f) in enumerate(zip(clean, fields, strict=False))
-            if has_any_information(t) and not is_out_of_domain(t, self.label_space)[0]
+            if i not in invalid and has_any_information(t)
+            and not is_out_of_domain(t, self.label_space)[0]
         ]
         results: list[InferenceResult | None] = [None] * len(texts)
         if decidable:
@@ -353,5 +372,8 @@ class SyndromeInference:
                 results[i] = self._decide(clean[i], fields[i], probs[row])
         for i, t in enumerate(clean):
             if results[i] is None:
-                results[i] = self.predict_one(t, fields[i])
+                results[i] = (
+                    self._invalid_input_result(fields[i], f"症状文本类型 {type(texts[i]).__name__} 非法")
+                    if i in invalid else self.predict_one(t, fields[i])
+                )
         return results  # type: ignore[return-value]

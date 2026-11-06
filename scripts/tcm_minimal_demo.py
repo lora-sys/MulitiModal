@@ -13,19 +13,17 @@
   不是概率、置信度、诊断或临床判断；#54 生理→证候配对验证仍为 BLOCKED。
 - 实时生理数值不能推断体质或证候：没有配对训练证据时明确 ABSTAIN。
 - 本演示不训练、不调参、不改冠军、不读历史 holdout；不改冻结评价协议。
-- 体质工件当初以 `python -m ... deliver` 保存，类被 pickle 到 `__main__`；
-  独立进程加载需注入别名。此处如实说明，不重训工件。
+- 体质工件由 `research.constitution_delivery` 的 importable 类重存，
+  独立进程可直接 `load_artifact`，无需 `__main__` 别名 shim。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from collections.abc import Mapping
 from pathlib import Path
 
-import research.constitution_delivery as cd
 from research.constitution_delivery import ConstitutionInference, load_artifact
 from syndrome.service import (
     ModelRegistry,
@@ -54,18 +52,22 @@ def _body_record(index: int) -> dict:
     }
 
 
-def _load_constitution_artifact(artifact_dir: Path):
-    """工件类 pickle 到 __main__，加载前注入别名；不重训工件。"""
-    sys.modules["__main__"].ConstitutionPredictor = cd.ConstitutionPredictor
-    return load_artifact(artifact_dir)
-
-
 def constitution_estimate(body: Mapping | None,
                           artifact_dir: Path = CONSTITUTION_ARTIFACT) -> dict:
-    """身体信息 → 八维体质研究性估计；无效输入 ABSTAIN。"""
+    """身体信息 → 八维体质研究性估计；无效输入 / 工件不可用明确拒判。"""
     if body is None:
-        return {"status": "ABSTAIN", "scores": [], "balanced": "ABSTAIN"}
-    predictor, entry, labels = _load_constitution_artifact(artifact_dir)
+        return {"status": "ABSTAIN", "scores": [], "balanced": "ABSTAIN",
+                "reason": "未提供身体信息", "backend_availability": "NOT_EVALUATED"}
+    if not isinstance(body, Mapping):
+        return {"status": "OUT_OF_DOMAIN", "scores": [], "balanced": "ABSTAIN",
+                "reason": f"输入类型 {type(body).__name__} 不是身体信息记录",
+                "backend_availability": "NOT_EVALUATED"}
+    try:
+        predictor, entry, labels = load_artifact(artifact_dir)
+    except (OSError, ValueError, AttributeError, KeyError) as exc:
+        return {"status": "ABSTAIN", "scores": [], "balanced": "ABSTAIN",
+                "reason": f"体质工件不可用（{type(exc).__name__}）",
+                "backend_availability": "NOT_AVAILABLE"}
     response = ConstitutionInference(predictor, entry["provenance"]).predict_one(dict(body))
     scores = [
         {"dim": s["dim"], "value": round(s["value"], 2), "calibrated": False}
@@ -80,15 +82,31 @@ def constitution_estimate(body: Mapping | None,
         "evidence": response["evidence"],
         "label_tier": "PUBLISHED",
         "champion_cv_masked_mae": entry["provenance"]["champion_selection_masked_mae"],
+        "reason": response.get("reason", ""),
+        "backend_availability": "AVAILABLE",
         "note": RESEARCH_NOTE,
     }
 
 
 def syndrome_candidates(text: str | None, artifact_dir: str = SYNDROME_ARTIFACT) -> dict:
-    """中文症状文字 → 证候候选（未校准，非诊断）。空/越界输入拒判。"""
+    """中文症状文字 → 证候候选（未校准，非诊断）。空/越界/工件不可用均明确拒判。"""
     if not text:
-        return {"status": "ABSTAIN", "candidates": [], "note": RESEARCH_NOTE}
-    spec = tfidf_logreg_spec(artifact_dir)
+        return {"status": "ABSTAIN", "candidates": [],
+                "backend_availability": "NOT_EVALUATED", "note": RESEARCH_NOTE}
+    if not isinstance(text, str):
+        return {"status": "OUT_OF_DOMAIN", "candidates": [],
+                "reason": f"症状文本类型 {type(text).__name__} 非法",
+                "backend_availability": "NOT_EVALUATED", "note": RESEARCH_NOTE}
+    try:
+        spec = tfidf_logreg_spec(artifact_dir)
+    except (ValueError, OSError) as exc:
+        return {"status": "ABSTAIN", "candidates": [],
+                "reason": f"证候工件损坏（{type(exc).__name__}）",
+                "backend_availability": "NOT_AVAILABLE", "note": RESEARCH_NOTE}
+    if spec is None:
+        return {"status": "ABSTAIN", "candidates": [],
+                "reason": "证候工件目录缺失，后端未注册",
+                "backend_availability": "NOT_AVAILABLE", "note": RESEARCH_NOTE}
     registry = ModelRegistry()
     registry.register(spec, default=True)
     response = SyndromeService(registry=registry).analyze_symptoms(
@@ -98,7 +116,9 @@ def syndrome_candidates(text: str | None, artifact_dir: str = SYNDROME_ARTIFACT)
         {"label": c["label"], "score": round(c["score"], 4), "calibrated": False}
         for c in response["candidates"]
     ]
-    return {"status": response["status"], "candidates": candidates, "note": RESEARCH_NOTE}
+    return {"status": response["status"], "candidates": candidates,
+            "backend_availability": response["backend_availability"],
+            "note": RESEARCH_NOTE}
 
 
 def physiology_only(measurements: Mapping | None) -> dict:
