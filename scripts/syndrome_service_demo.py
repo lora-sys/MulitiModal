@@ -1,6 +1,6 @@
-"""#58 双模式中医健康接口演示（无真实设备、无真实数据）。
+"""双模式中医健康接口演示（症状分析与实时知识，无真实设备、无真实数据）。
 
-运行（acam-lab，PYTHONPATH=src）：
+运行（acam-lab 或本地开发机，PYTHONPATH=src）：
 
     python -m scripts.syndrome_service_demo \
         [--artifact-dir runs/syndrome-service/tfidf-logreg-default]
@@ -33,8 +33,8 @@ LICENSE_BANNER = """
 许可与边界（AGENTS.md / 模型卡 tcm-sd-syndrome-v1）：
 - 本演示为科研原型；输出不是诊断，不构成任何临床/疗效声明；
 - 症状模式默认后端与派生知识基于 TCM-SD（CC BY-NC-SA 4.0，仅限非商业科研）；
-  商业使用需独立许可与医疗内容审核门槛，#54 实际配对验证仍为 BLOCKED；
-- 实时知识模式不调用证候分类器，不从生理数值推断个人证候（#53/#58 契约）。
+  商业使用需独立许可与医疗内容审核门槛，生理→证候配对验证仍为 BLOCKED（缺乏真实配对数据）；
+  实时知识模式不调用证候分类器，不从生理数值推断个人证候（严格安全护栏）。
 """
 
 # 演示主题知识：显式 SYNTHETIC_MOCK 占位，非真实医学内容，无许可授予。

@@ -1,4 +1,4 @@
-"""realtime_feedback 接口（#53 Scope 2 / #58 实时知识模式基座）。
+"""realtime_feedback 接口（实时知识模式基座）。
 
 只接收未来生理模块的**结构化测量摘要**（source/metric/value/unit/timestamp/
 quality），返回实测回执（MEASURED）与有出处的**非诊断性主题知识**（KNOWLEDGE），
@@ -9,8 +9,8 @@ quality），返回实测回执（MEASURED）与有出处的**非诊断性主题
   本模块也不 import 任何推理/训练模块（tests 有 AST 结构性断言）；
 - 返回结果的 syndrome_judgment 恒为 None；
 - 知识检索是**主题级**的：设备指标名 → 一般健康主题（METRIC_TOPICS），与测量
-  数值和个人无关。旧版 METRIC_KEYWORDS 按心率等指标关键词检索**证候条目**
-  （如心率→「心悸/脉」），会被误读为个人证候关联，已按 #58 移除；
+  数值和个人无关。旧版按心率等指标关键词检索**证候条目**
+  （如心率→「心悸/脉」），会被误读为个人证候关联，已彻底移除；
 - 知识条目必须带 source / license / version；出处缺失的条目 fail-closed 排除，
   绝不输出无来源知识，也绝不生成处方或疗效承诺；
 - 质量异常 / 越界 / 未知指标 / 缺值 / 时间戳回退的测量只留实测回执（MEASURED
@@ -23,9 +23,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
-ABSTAIN_REASON = "realtime_feedback 不作证候判断：生理测量不用于证候分类（#53/#58 契约）"
+ABSTAIN_REASON = "realtime_feedback 不作证候判断：生理测量不用于证候分类（严格防越界契约）"
 
-# 来源分区标签（#58：MEASURED / PREDICTED / KNOWLEDGE 严格分离）。
+# 来源分区标签（MEASURED / PREDICTED / KNOWLEDGE 严格分离）。
 SOURCE_MEASURED = "MEASURED"
 SOURCE_KNOWLEDGE = "KNOWLEDGE"
 

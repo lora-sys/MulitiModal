@@ -46,15 +46,25 @@
 ### 1. 证候分类研究线 (Syndrome Track)
 - **数据规格**：TCM-SD 数据集，54,152 例中文症状主诉，148 类证候分类，数据许可为 CC BY-NC-SA 4.0（非商用）。
 - **基线与交付**：protocol-v2 下字符 1~4 gram TF-IDF + LogisticRegression 的 148 类 `macro-F1` 约为 0.3199，优于同等条件下的复杂神经方案，作为交付候选。
-- **服务接口**：[src/syndrome/service.py](src/syndrome/service.py) 提供双模式（症状分析与实时非诊断知识）安全产品契约，支持 fail-closed 拒判保护与工件哈希校验。
+- **交付工件与接口**：
+  - 持久化工件：`artifacts/sd-v2-ar1-champion/`（模型权重、标签定义、阈值绑定与 sha256 清单）；
+  - 交付验收入口：[src/syndrome/delivery.py](src/syndrome/delivery.py)；
+  - 只读价值复核：[src/syndrome/value_review.py](src/syndrome/value_review.py)（Top-k、置信度阈值、长尾逐类 F1 与置信区间审计）；
+  - 服务产品契约：[src/syndrome/service.py](src/syndrome/service.py) 提供双模式（症状分析与实时非诊断知识）安全产品契约，支持 fail-closed 拒判保护与工件哈希校验。
 
 ### 2. 体质多维回归研究线 (Constitution Track)
 - **数据规格**：Mendeley `Share data.xls`，274 名真实受试者，8 个已观测维度连续评分（依据 ZYYXH/T157-2009 标准，0~100 分）。
-- **已交付 Champion**：第一轮 18 轮探索已顺利冻结并交付（Commit `16c26582`，Huber 线性与 kNN 局部中位数的逐维自适应软集成，选用 9 维基础特征），折外 `masked MAE` 达到 **14.1437**。
+- **已交付 Champion**：第一轮 18 轮探索已顺利冻结并交付（Commit `16c26582`，Huber 线性与 kNN 局部中位数的逐维自适应软集成，选用 9 维基础特征），折外 `masked MAE` 达到 **14.1437**（复核实测 14.1444，较均值基线降低 0.3530，95% CI `[-0.6087, -0.0870]`）。
+- **9 维基础特征**：性别 (gender)、年龄 (age)、文化程度 (education)、职业类别 (occupation)、慢性病史 (chronic dz)、手术史 (surgery hx)、身高 (BH)、体重 (BW)、BMI；均为基础客观指标，无需量表问卷。
 - **交付工件与接口**：
   - 持久化工件：`artifacts/constitution-v1-champion/`（模型权重、标签定义、带 sha256 清单的 `registry_entry.json`）；
-  - 交付验收入口：[src/research/constitution_delivery.py](src/research/constitution_delivery.py)（`deliver` 训练并固化工件，`verify` 快速只读审计）。
+  - 交付验收入口：[src/research/constitution_delivery.py](src/research/constitution_delivery.py)（`deliver` 训练并固化工件，`verify` 快速只读审计）；
+  - 只读价值复核：[src/research/constitution_value_review.py](src/research/constitution_value_review.py)（训练折均值基线对比、配对差值、逐维显著性与 Bootstrap CI 审计）。
 
 ### 3. 生理状态与实时知识研究线 (Physiology Track)
 - **业务定位**：面向按摩椅前置生理指标（心率、血氧、皮温、HRV 等）的健康主题知识检索；
 - **防越界护栏**：实时知识模式绝不从生理数值推断中医证候或体质，严格切断生理数值与疾病/证候的伪造关联；当前未配对真值数据状态为 `BLOCKED`。
+
+### 4. 辅助验收与演示工具
+- **双轨最小演示入口**：[scripts/tcm_minimal_demo.py](scripts/tcm_minimal_demo.py)（加载真实工件与冻结特征，体验端到端推理、异常拒判与生理防越界护栏）；
+- **实际输入场景鲁棒性套件**：[scripts/tcm_input_scenarios.py](scripts/tcm_input_scenarios.py)（覆盖日常口语表达、特征全缺/部分缺、极端合理值与矛盾症状 4 类场景；仅做鲁棒性检查，显式标为 `SMOKE_ONLY`，严禁产出准确率）。

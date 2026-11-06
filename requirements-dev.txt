@@ -1,31 +1,16 @@
-# 仓库脚手架（#51）统一开发依赖；XGBoost 等可选依赖由 #30 决定是否引入
+# 基础测试与代码质量
 pytest>=8
 ruff>=0.6
+
+# 科学计算与经典机器学习（交付冠军线核心依赖）
 numpy>=1.26
 scikit-learn>=1.5
-# 表格读写与模型序列化——三个包都被已入库代码直接 import，但均未声明：
-#   xlrd     src/data/mendeley.py:187（读 Share data.xls）与 tests/data/test_datasets.py:172
-#   joblib   src/syndrome/{service,delivery,baselines}.py 与 src/research/constitution_delivery.py
-#   openpyxl tests/labels/test_ccmq60.py:223（读 CCMQ TEST_DATA.xlsx）
-# 实测（本机 macOS venv）：xlrd 于 2026-11-05 22:11 装上前，
-# tests/data/test_datasets.py 与 tests/labels/test_published_silver.py 共 4 例因
-# ModuleNotFoundError 失败；装上 xlrd 2.0.2 后这两个文件 16 例全绿。
-# joblib 1.6.0 与 openpyxl 3.1.5 本机已存在，所以它们的缺失尚未表现为失败；
-# 而 acam-lab 实测有 joblib 1.6.0、无 openpyxl——那条 openpyxl 用例目前因
-# Zenodo 引用文件两台都缺而始终 skip（见 docs/evidence/registry.json），声明它是
-# 为了引用恢复后不再多一个缺件理由。开发机不安装任何依赖。
-xlrd>=2.0
-openpyxl>=3.1
 joblib>=1.3
-# #53 证候模型 BERT 训练/推理（acam-lab 实测 transformers 5.22.1）
+
+# 数据源表格读取
+xlrd>=2.0       # Mendeley 数据集 Share data.xls 解析
+openpyxl>=3.1   # CCMQ 问卷及附表 Excel 解析
+
+# 神经文本模型（用于 BERT 对比实验）
+# 神经栈（torch/transformers）主要在专用训练机上训练与验收；本地未安装时对应神经测试用例自动跳过
 transformers>=4.40
-# accelerate 不再声明：全仓没有任何 `import accelerate`，#53 路径只用
-# AutoTokenizer / AutoModelForSequenceClassification.from_pretrained(本地目录)
-# 加自写训练循环；隐式需要它的是 HF Trainer 或 device_map，两者都不在这里
-# （`src/runtime/trainer.py` 是本仓自写的 torch 循环，与 HF 无关）。
-# acam-lab 仍装着 1.15.0，去掉声明不影响该机；本机不装 transformers 时
-# tests/syndrome/test_bert_model.py 已按仓库惯例报 skip。
-# torch 不列入本文件：神经栈（src/core、src/runtime、syndrome/bert_model）只在
-# 开发机 acam-lab（实测 torch 2.15.0）上训练与验收；本机无 torch 时
-# tests/core 与 tests/runtime 现在报 skip 而不是 collection error。
-# 两条交付冠军线（TF-IDF+LR、Huber/kNN）只需上面的 numpy/scikit-learn/joblib。

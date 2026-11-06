@@ -56,45 +56,96 @@
 - **任务目标**：根据患者的中文短主诉文本，预测 148 类中医证候类别。
 - **数据与许可**：TCM-SD 数据集（54,152 例病历），采用 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) 许可，严格限于非商业科研使用。
 - **评价协议与基线**：protocol-v2，受试者分组，折内单向文本去重，4 折 × 2 次重复验证。基线为字符 1~4 gram TF-IDF + LogisticRegression（148 类 `macro-F1` 约为 0.3199）。
+- **实测预测价值与能力边界**（详见 [2026-11-06 复核报告](docs/reports/2026-11-06-inference-value-review.md)）：
+  - 验证集 Top-1 / Top-3 / Top-5 命中率分别达 **61.3% / 84.3% / 90.2%**，`macro-F1` 为 0.3202（95% bootstrap CI `[0.2702, 0.3251]`）；
+  - 存在显著长尾稀疏性（148 类中 55 类在 dev 集中 F1 为 0）；
+  - 内置置信度阈值机制，决策覆盖率约 90.1%，拒判率约 9.9%，对抗异常输入（乱码、无关问答）100% 触发拒判防护。
 - **可编辑候选**：`src/research/train.py`
+- **交付工件与入口**：`artifacts/sd-v2-ar1-champion/`（由 [src/syndrome/delivery.py](src/syndrome/delivery.py) 训练并验收）。
 - **详细程序契约**：[skills/autoresearch/program.md](skills/autoresearch/program.md)
 - **任务背景说明**：[docs/autoresearch-tcm-sd.md](docs/autoresearch-tcm-sd.md)
 
 ### 2. 体质研究线 (Constitution Regression Track)
-- **任务目标**：基于人口学特征与基础人体测量特征，预测受试者的 8 维中医偏颇体质连续得分（0~100 分，依据 ZYYXH/T157-2009 行业标准）。
-- **数据源与特征**：Mendeley 数据集（274 名真实受试者，9 维基础特征）。
+- **任务目标**：基于人口学与基础人体测量特征，预测受试者的 8 维中医偏颇体质连续得分（0~100 分，依据 ZYYXH/T157-2009 行业标准）。
+- **数据源与特征**：Mendeley 数据集（274 名真实受试者）。模型选用 **9 维基础特征**：性别 (gender)、年龄 (age)、文化程度 (education)、职业类别 (occupation)、慢性病史 (chronic dz)、手术史 (surgery hx)、身高 (BH)、体重 (BW)、BMI；均为非侵入客观指标，无需填写问卷量表。
 - **平和质安全拒判**：第 9 维平和质在源数据中完全未观测（0/274），模型输出形状锁定为 `(n, 8)`，在推理端恒定返回 `ABSTAIN`，严禁补零、猜测或伪造。
 - **评价指标**：`constitution/masked_mae`（8 维平均绝对误差，越低越好）。
-- **首轮已交付成果**：完成 18 轮自动迭代，产出并冻结冠军模型 `16c26582`（Huber 鲁棒线性与 kNN 局部中位数的逐维自适应软集成，折外 masked MAE 达到 **14.1437**）。
+- **首轮已交付成果与实测价值**（详见 [2026-11-06 复核报告](docs/reports/2026-11-06-inference-value-review.md)）：
+  - 产出并冻结冠军模型 `16c26582`（Huber 鲁棒线性与 kNN 局部中位数的逐维自适应软集成）；
+  - 折外 masked MAE 为 **14.1444**，相较训练折均值基线（14.4974）降低 0.3530（95% bootstrap CI `[-0.6087, -0.0870]`），8 折全部正向改善；
+  - 局限性：相对改善幅度较小（约 2.4%），逐维仅 4/8 维（阴虚、痰湿、气郁、特禀）置信区间严格排除 0，属于开发集内部折外探索性证据，不可外推至临床。
 - **可编辑候选**：`src/research/constitution_train.py`
+- **交付工件与入口**：`artifacts/constitution-v1-champion/`（由 [src/research/constitution_delivery.py](src/research/constitution_delivery.py) 交付验收）。
 - **详细程序契约**：[skills/autoresearch/program-constitution.md](skills/autoresearch/program-constitution.md)
 
 ---
 
 ## 快速上手与操作指南
 
-### 1. 启动只读监控仪表盘
-查看任意研究线迭代过程与折外表现：
+### 1. 运行测试套件
+```bash
+pytest -q
+```
+> [!NOTE]
+> 仓库采用分层依赖设计，若本地未安装 `torch` / `transformers`，相关神经栈测试会自动安全跳过（例如 `365 passed, 16 skipped`），经典机器学习交付线完全不受影响。
+
+### 2. 运行双轨最小演示（推荐体验入口）
+加载真实冻结工件与受试者特征，体验全链路端到端预测与安全拒判行为：
+```bash
+# 双轨综合演示（体质预测 + 默认主诉证候分析）
+python -m scripts.tcm_minimal_demo
+
+# 自定义主诉文本输入
+python -m scripts.tcm_minimal_demo --symptom "反复胸闷隐痛3年余，加重伴憋喘1周"
+
+# 仅生理测量输入（触发防越界安全护栏，严格拒判，不伪造证候/体质关联）
+python -m scripts.tcm_minimal_demo --physiology-only
+```
+
+### 3. 运行双模式服务演示
+体验症状分析（SYMPTOM_ANALYSIS）与实时非诊断性健康知识（REALTIME_KNOWLEDGE）双模式接口：
+```bash
+python -m scripts.syndrome_service_demo
+```
+
+### 4. 运行预测价值复核与实际输入场景测试
+对模型进行完全只读的价值审计（不训练、不读 holdout）与极端/日常输入鲁棒性测试：
+```bash
+# 体质模型与基线对比、Bootstrap 置信区间审计
+python -m research.constitution_value_review
+
+# 证候模型 Top-k、长尾逐类 F1 与置信度阈值审计
+python -m syndrome.value_review
+
+# 日常表达、缺值、极端合理值与矛盾症状输入鲁棒性评测（SMOKE_ONLY）
+python -m scripts.tcm_input_scenarios
+```
+
+### 5. 冠军模型验证与交付验收
+一键完成冠军模型的拟合、工件打包与哈希完整性校验：
+```bash
+# 体质线冠军交付验收
+python -m research.constitution_delivery deliver   # 拟合并生成持久化工件
+python -m research.constitution_delivery verify    # 只读模式校验哈希与边界
+
+# 证候线冠军交付验收
+python -m syndrome.delivery \
+    --repo . --raw-dir data/local/tcm-sd \
+    --manifest data/local/tcm-sd/protocol-v2/short/selection_manifest.json \
+    --dataset data/local/tcm-sd/protocol-v2/short/selection_records.json \
+    --results runs/ar1/results.tsv \
+    --artifact-dir artifacts/sd-v2-ar1-champion \
+    --report-dir runs/delivery/ar1
+```
+
+### 6. 启动只读监控仪表盘
+可视化查看任意 AutoResearch 研究线迭代过程与折外表现：
 ```bash
 # 监控体质线实验
 ./solve.sh dashboard --run runs/constitution-v1
 
 # 监控证候线实验
 ./solve.sh dashboard --run runs/<tag>
-```
-
-### 2. 体质冠军模型验证与交付验收
-一键完成第一轮体质冠军模型的全量拟合、工件打包与自动化鲁棒性验收：
-```bash
-export PYTHONPATH=src
-python -m research.constitution_delivery deliver   # 拟合并生成持久化工件与校验清单
-python -m research.constitution_delivery verify    # 纯校验模式：验证哈希完整性与推理边界
-```
-生成的持久化工件位于 `artifacts/constitution-v1-champion/`，包含 `model.joblib`、`labels.json` 以及带 sha256 清单和完整 provenance 的 `registry_entry.json`。
-
-### 3. 运行双模式服务演示
-```bash
-python -m scripts.syndrome_service_demo
 ```
 
 ---
@@ -111,10 +162,12 @@ python -m scripts.syndrome_service_demo
 ## 项目文档导航
 
 - [AGENTS.md](AGENTS.md)：面向 Coding Agent 的全局工程规范、硬性红线与项目事实手册。
+- [docs/reports/2026-11-06-inference-value-review.md](docs/reports/2026-11-06-inference-value-review.md)：**2026-11-06 最新复核报告**，详尽记录推理正确性、预测价值与实际输入场景鲁棒性评测结果。
+- [docs/models/tcm-sd-syndrome-v1-card.md](docs/models/tcm-sd-syndrome-v1-card.md)：证候分类模型卡（Model Card）。
 - [skills/autoresearch/SKILL.md](skills/autoresearch/SKILL.md)：AutoResearch 技能的标准定义与交互契约。
 - [docs/autoresearch-brief.md](docs/autoresearch-brief.md)：新实验立项必须填写的科研简报模板。
 - [docs/autoresearch-design.md](docs/autoresearch-design.md)：AutoResearch 架构设计理念与边界阐述。
 - [docs/trusted-evaluator.md](docs/trusted-evaluator.md)：独立可信评价环境部署契约。
 - [docs/design/physio-next-phase-plan.md](docs/design/physio-next-phase-plan.md)：按摩前生理预测模型下一阶段最小实施方案（`NOT_VALIDATED`，是设计不是结果）。
-- [docs/design/autoresearch-rsi-v1.md](docs/design/autoresearch-rsi-v1.md)：AutoResearch 自主循环的**历史设计**，其实现体已随 `5f543c4`/`37f4d11` 删除，只作沿革保留。
+- [docs/design/autoresearch-rsi-v1.md](docs/design/autoresearch-rsi-v1.md)：AutoResearch 自主循环的历史设计，仅作沿革参考。
 - [docs/reports/](docs/reports/)：历史科研实验报告归档。

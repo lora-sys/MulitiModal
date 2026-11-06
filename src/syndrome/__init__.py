@@ -1,8 +1,8 @@
-"""TCM-SD 中文证候倾向模型（#53 阶段 1 / #58 双模式产品接口）。
+"""TCM-SD 中文证候倾向模型与统一双模式产品接口。
 
 标签：单标签 148 证型（norm_syndrome，taxonomy tcm-sd-syndrome-vocab-v1）。
 接口：单条/批量推理（ABSTAIN/OUT_OF_DOMAIN 拒判）+ realtime_feedback 主题知识
-+ #58 统一双模式服务契约（service.py：症状分析 / 实时知识）。
++ 统一双模式服务契约（service.py：症状分析 / 实时知识）。
 边界：生理数值不进入证候分类；真实数据与工件不入 Git；synthetic 结果不表述
 科研/临床有效性；商业使用需独立许可（见 service.py 模块注释）。
 """

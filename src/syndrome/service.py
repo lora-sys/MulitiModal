@@ -1,4 +1,4 @@
-"""#58 双模式统一产品服务契约（症状分析 / 实时中医知识）。
+"""双模式统一产品服务契约（症状分析 / 实时中医知识）。
 
 在 syndrome.inference（症状 → 证候倾向）与 syndrome.feedback（测量 → 主题知识）
 之上扩展统一请求/响应 schema；不重写训练循环，不另建并行推理基础设施。
@@ -15,9 +15,9 @@
   上训练，派生知识同许可；**商业使用需要独立许可与医疗内容审核门槛**，本接口
   不授予任何商业部署权；
 - 输出为证候**倾向**候选，不是诊断；分数未经校准，不得当作可信度解释；
-- 实时知识模式不从生理数值推断证候（#54 未来阶段，当前不解锁）。
+- 实时知识模式不从生理数值推断证候（未来研究阶段，缺乏真实配对数据前保持严格隔离）。
 
-阈值出处：推理工件与 dev 选择清单严格绑定（#56 协议）。本服务只**透传**
+阈值出处：推理工件与 dev 选择清单严格绑定（protocol-v2 协议）。本服务只**透传**
 threshold / threshold_scope / selection 绑定字段（见响应 provenance），绝不
 重选或绕过阈值；scope 缺失时显式标记 UNVERIFIED。
 
@@ -51,7 +51,10 @@ from syndrome.feedback import (
 )
 from syndrome.inference import ProbabilisticPredictor, SyndromeInference
 from syndrome.labels import (
-    LABEL_TAXONOMY_ID, STATUS_ABSTAIN, STATUS_OUT_OF_DOMAIN, LabelSpace,
+    LABEL_TAXONOMY_ID,
+    STATUS_ABSTAIN,
+    STATUS_OUT_OF_DOMAIN,
+    LabelSpace,
 )
 
 SERVICE_SCHEMA_VERSION = "tcm-service-schema-v1"
@@ -531,7 +534,7 @@ def _load_tfidf_logreg(directory: Path, entry: dict) -> LoadedBackend:
 
 
 class SyndromeService:
-    """#58 统一双模式服务。症状模式走 registry 后端；实时知识模式结构性不接触
+    """统一双模式服务。症状模式走 registry 后端；实时知识模式结构性不接触
     任何后端（不加载、不调用），生理数据在类型层面无法进入证候分类器。"""
 
     def __init__(
@@ -689,7 +692,7 @@ class SyndromeService:
             notes=list(feedback.notes),
             knowledge_availability=knowledge_available,
             message=(
-                "实测指标摘要与非诊断性主题知识；无个人证候判断（#53/#58 契约）"
+                "实测指标摘要与非诊断性主题知识；无个人证候判断（安全防越界契约）"
             ),
             provenance={
                 **self._base_provenance,
