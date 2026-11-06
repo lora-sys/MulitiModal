@@ -11,11 +11,14 @@ from types import SimpleNamespace
 import pytest
 
 from research.prepare import (
+    EVENT_LOG_NAME,
     EVIDENCE_LOCAL,
     EVIDENCE_SMOKE,
     append_history,
     evaluate,
     fold_inputs,
+    history_evidence,
+    resolved_evidence,
     run_candidate,
     score_predictions,
     selection_fold_ids,
@@ -497,3 +500,178 @@ def test_atomic_history_and_result_boundaries(tmp_path):
     with pytest.raises(FileExistsError):
         write_new_atomic(link, b"third")
     assert result.read_bytes() == b"first"
+
+
+# --- 任务 01：CRASH 证据等级、事件链与幂等回归契约 ----------------------------
+
+def _git_candidate(tmp_path):
+    """A real commit for record_main's committed_source() binding."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "config", "user.name", "Synthetic"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "synthetic@example.invalid"],
+                   cwd=repo, check=True)
+    target = repo / "src/research/train.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("# synthetic candidate\n")
+    subprocess.run(["git", "add", "src/research/train.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "synthetic candidate"], cwd=repo, check=True)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    return repo, commit
+
+
+def _event(tmp_path, **overrides):
+    from research.prepare import EVENT_SCHEMA, event_id_for
+
+    results = tmp_path / "results.tsv"
+    event = {
+        "schema_version": EVENT_SCHEMA,
+        "candidate_id": "round-001", "attempt": 1, "commit": "a" * 40,
+        "decision": "CRASH", "evidence": EVIDENCE_LOCAL,
+        "metric": "syndrome/macro_f1", "value": None, "protocol_sha256": "",
+        "description": "timeout", "repair_of": None, "result_path": None,
+        "log_path": None, "results_path": str(results),
+    }
+    event.update(overrides)
+    if "event_id" not in overrides:
+        event["event_id"] = event_id_for(
+            results=Path(event["results_path"]), candidate_id=event["candidate_id"],
+            attempt=event["attempt"], commit=event["commit"], decision=event["decision"],
+            description=event["description"], value=event["value"],
+            evidence=event["evidence"], repair_of=event["repair_of"])
+    return event
+
+
+def test_local_crash_keeps_its_evidence_level_and_records_a_linked_retry(tmp_path):
+    """回归：CRASH 曾被强制写成 SMOKE_ONLY，因而在 LOCAL_EXPERIMENTAL
+    轮次之后连记录都写不进去。现在崩溃、修复重试分别可追溯且不覆盖。"""
+    import csv
+    import io
+
+    from research.prepare import EVENT_LOG_NAME, record_main
+
+    repo, commit = _git_candidate(tmp_path)
+    results = tmp_path / "results.tsv"
+    append_history(results, commit="a" * 40, metric="syndrome/macro_f1", value=0.31,
+                   direction="maximize", decision="KEEP", description="baseline",
+                   protocol="b" * 64, evidence=EVIDENCE_LOCAL)
+    crash = ["--repo", str(repo), "--results", str(results), "--commit", commit,
+             "--decision", "CRASH", "--description", "round-001 crash: timeout",
+             "--candidate-id", "round-001", "--attempt", "1",
+             "--log", str(tmp_path / "round-001.log")]
+    assert record_main(crash) == 0
+    rows = list(csv.DictReader(io.StringIO(results.read_text()), delimiter="\t"))
+    assert rows[-1]["decision"] == "CRASH"
+    assert rows[-1]["evidence"] == EVIDENCE_LOCAL
+    assert rows[-1]["value"] == ""
+
+    event_log = tmp_path / EVENT_LOG_NAME
+    events = [json.loads(line) for line in event_log.read_text().splitlines()]
+    assert len(events) == 1
+    assert events[0]["decision"] == "CRASH"
+    assert events[0]["evidence"] == EVIDENCE_LOCAL
+    assert events[0]["candidate_id"] == "round-001"
+    assert events[0]["attempt"] == 1
+    assert events[0]["value"] is None
+    assert events[0]["log_path"].endswith("round-001.log")
+
+    # 同一条记录命令重放：results.tsv 与事件日志都不产生重复。
+    assert record_main(crash) == 0
+    assert len(results.read_text().splitlines()) == 3
+    assert len(event_log.read_text().splitlines()) == 1
+
+    # 同一候选的修复重试：独立事件，通过 repair_of 显式链接，不覆盖崩溃事件。
+    retry = ["--repo", str(repo), "--results", str(results), "--commit", commit,
+             "--decision", "CRASH", "--description", "round-001 retry 2: timeout",
+             "--candidate-id", "round-001", "--attempt", "2",
+             "--repair-of", events[0]["event_id"]]
+    assert record_main(retry) == 0
+    events = [json.loads(line) for line in event_log.read_text().splitlines()]
+    assert len(events) == 2
+    assert events[0]["event_id"] != events[1]["event_id"]
+    assert events[1]["repair_of"] == events[0]["event_id"]
+    assert events[1]["attempt"] == 2
+    assert len(results.read_text().splitlines()) == 4
+
+
+def test_keep_revert_crash_all_record_and_retry_after_crash_is_allowed(tmp_path):
+    """三个决策都可记录；同一 commit 的崩溃之后允许修复重试落一条有分数的决策。"""
+    import csv
+    import io
+
+    path = tmp_path / "results.tsv"
+    common = {"metric": "syndrome/macro_f1", "direction": "maximize",
+              "protocol": "b" * 64, "evidence": EVIDENCE_LOCAL}
+    append_history(path, commit="a" * 40, value=0.31, decision="KEEP",
+                   description="baseline", **common)
+    append_history(path, commit="b" * 40, value=0.29, decision="REVERT",
+                   description="worse", **common)
+    append_history(path, commit="c" * 40, value=None, decision="CRASH",
+                   description="timeout", protocol="", **{k: v for k, v in common.items()
+                                                           if k != "protocol"})
+    rows = list(csv.DictReader(io.StringIO(path.read_text()), delimiter="\t"))
+    assert [row["decision"] for row in rows] == ["KEEP", "REVERT", "CRASH"]
+    assert history_evidence(path) == EVIDENCE_LOCAL
+    assert resolved_evidence(path, None, None) == EVIDENCE_LOCAL
+    assert resolved_evidence(path, None, EVIDENCE_SMOKE) == EVIDENCE_SMOKE
+
+    before = path.read_bytes()
+    append_history(path, commit="c" * 40, value=None, decision="CRASH",
+                   description="timeout", protocol="",
+                   **{k: v for k, v in common.items() if k != "protocol"})
+    assert path.read_bytes() == before  # 精确重复写入是 no-op
+
+    append_history(path, commit="c" * 40, value=0.30, decision="REVERT",
+                   description="retry after crash", **common)
+    rows = list(csv.DictReader(io.StringIO(path.read_text()), delimiter="\t"))
+    assert [row["decision"] for row in rows] == ["KEEP", "REVERT", "CRASH", "REVERT"]
+    assert rows[0]["value"] == "0.31" and rows[2]["value"] == ""
+    with pytest.raises(ValueError, match="already recorded with a scored decision"):
+        append_history(path, commit="c" * 40, value=0.32, decision="KEEP",
+                       description="second scored decision", **common)
+
+
+def test_event_log_is_append_only_and_idempotent(tmp_path):
+    """event_id 冲突保护、损坏日志拒绝、三种决策均可作为事件写入。"""
+    from research.prepare import EVENT_SCHEMA, EVIDENCE_SMOKE, append_event
+
+    path = tmp_path / EVENT_LOG_NAME
+    event = _event(tmp_path)
+    assert append_event(path, event) is True
+    assert append_event(path, event) is False
+    assert len(path.read_text().splitlines()) == 1
+    with pytest.raises(ValueError, match="already used by a different event"):
+        append_event(path, {**event, "description": "a different event"})
+    intact = path.read_text()
+    path.write_text(intact.rstrip("\n") + "partial")
+    with pytest.raises(ValueError, match="incomplete final event"):
+        append_event(path, event)
+    path.write_text(intact)
+    assert append_event(path, _event(tmp_path, candidate_id="round-002",
+                                     decision="KEEP", value=0.33)) is True
+    assert append_event(path, _event(tmp_path, candidate_id="round-003",
+                                     decision="REVERT", value=0.30)) is True
+    assert append_event(path, _event(tmp_path, candidate_id="round-004",
+                                     evidence=EVIDENCE_SMOKE)) is True
+    events = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [e["decision"] for e in events] == ["CRASH", "KEEP", "REVERT", "CRASH"]
+    assert all(e["schema_version"] == EVENT_SCHEMA for e in events)
+    with pytest.raises(ValueError, match="invalid audit event"):
+        append_event(path, {**event, "evidence": "CLINICAL_PROVEN"})
+
+
+def test_constitution_record_crash_writes_local_experimental_event(tmp_path):
+    """体质线本就未误用 SMOKE_ONLY；现在同样产出可关联的审计事件。"""
+    from research.constitution import record_main
+
+    results = tmp_path / "results.tsv"
+    args = ["--repo", str(tmp_path), "--results", str(results), "--commit", "d" * 40,
+            "--decision", "CRASH", "--description", "timeout",
+            "--candidate-id", "round-001", "--attempt", "1"]
+    assert record_main(args) == 0
+    assert EVIDENCE_LOCAL in results.read_text()
+    events = [json.loads(line) for line in (tmp_path / EVENT_LOG_NAME).read_text().splitlines()]
+    assert len(events) == 1
+    assert events[0]["evidence"] == EVIDENCE_LOCAL
+    assert events[0]["metric"] == "constitution/masked_mae"

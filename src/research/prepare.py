@@ -38,6 +38,19 @@ EVIDENCE_SMOKE = "SMOKE_ONLY"
 FIELDS = ("commit", "metric", "value", "direction", "decision", "description",
           "peak_vram_mb", "protocol_sha256", "evidence", "promotion")
 
+#: results.tsv stays the frozen decision history. Crashes and repair retries are
+#: additionally recorded as immutable, append-only events in events.jsonl.
+EVENT_SCHEMA = "autoresearch-event-v1"
+EVENT_LOG_NAME = "events.jsonl"
+EVENT_DECISIONS = ("KEEP", "REVERT", "CRASH")
+MAX_EVENT_LOG_BYTES = 4 * 1024 * 1024
+EVENT_KEYS = ("schema_version", "event_id", "candidate_id", "attempt", "commit",
+              "decision", "evidence", "metric", "value", "protocol_sha256",
+              "description", "repair_of", "result_path", "log_path", "results_path")
+EVENT_IDENTITY_KEYS = ("schema_version", "event_id", "candidate_id", "attempt",
+                       "commit", "decision", "evidence", "metric", "value",
+                       "description", "repair_of")
+
 
 def score_predictions(labels: list[int], predictions: list[int], n_classes: int) -> float:
     """Score class IDs outside the candidate process with the frozen metric."""
@@ -751,6 +764,151 @@ def write_new_atomic(path: Path, payload: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def history_evidence(path: Path) -> str | None:
+    """Evidence level already used by this run (a crash has no result file)."""
+    try:
+        contents = read_regular(path, 2 * 1024 * 1024).decode("utf-8")
+    except FileNotFoundError:
+        return None
+    rows = list(csv.DictReader(io.StringIO(contents), delimiter="\t", strict=True))
+    levels = {row.get("evidence") for row in rows if row.get("evidence")}
+    if len(levels) > 1:
+        raise ValueError("results file mixes evidence levels")
+    return next(iter(levels), None)
+
+
+def resolved_evidence(results: Path, result: dict | None, explicit: str | None) -> str:
+    """A failed LOCAL_EXPERIMENTAL attempt keeps its original evidence level."""
+    if explicit:
+        return explicit
+    if isinstance(result, dict) and result.get("evidence") in (EVIDENCE_LOCAL, EVIDENCE_SMOKE):
+        return str(result["evidence"])
+    return str(history_evidence(results) or EVIDENCE_LOCAL)
+
+
+def event_id_for(*, results: Path, candidate_id: str, attempt: int, commit: str,
+                 decision: str, description: str, value: float | None, evidence: str,
+                 repair_of: str | None) -> str:
+    """Stable idempotency key: the same record command produces the same event."""
+    identity = json.dumps(
+        [str(results), candidate_id, attempt, commit, decision, description,
+         value, evidence, repair_of],
+        ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def append_event(path: Path, event: dict) -> bool:
+    """Append one immutable audit event; an identical event_id is a no-op."""
+    if not isinstance(event, dict) or any(key not in event for key in EVENT_KEYS):
+        raise ValueError("audit event is missing required fields")
+    repair_of = event["repair_of"]
+    if (event["schema_version"] != EVENT_SCHEMA
+            or not re.fullmatch(r"[0-9a-f]{64}", str(event["event_id"]))
+            or not str(event["candidate_id"])
+            or isinstance(event["attempt"], bool) or not isinstance(event["attempt"], int)
+            or event["attempt"] < 1
+            or event["decision"] not in EVENT_DECISIONS
+            or event["evidence"] not in (EVIDENCE_LOCAL, EVIDENCE_SMOKE)
+            or (repair_of is not None
+                and not re.fullmatch(r"[0-9a-f]{64}", str(repair_of)))
+            or not str(event["description"]).strip() or len(str(event["description"])) > 400):
+        raise ValueError("invalid audit event")
+    value = event["value"]
+    if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                              or not math.isfinite(value)):
+        raise ValueError("audit event has an invalid score")
+    canonical = {key: event[key] for key in EVENT_KEYS}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.parent / ("." + path.name + ".lock")
+    with open_regular(lock_path) as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            contents = read_regular(path, MAX_EVENT_LOG_BYTES).decode("utf-8")
+        except FileNotFoundError:
+            contents = ""
+        if contents and not contents.endswith("\n"):
+            raise ValueError("event log has an incomplete final event")
+        existing = []
+        for line in contents.splitlines():
+            if not line.strip():
+                continue
+            try:
+                prior = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError("event log contains an invalid JSON line") from exc
+            if not isinstance(prior, dict):
+                raise ValueError("event log contains a non-object event")
+            existing.append(prior)
+        for prior in existing:
+            if prior.get("event_id") != canonical["event_id"]:
+                continue
+            if any(prior.get(key) != canonical[key] for key in EVENT_IDENTITY_KEYS):
+                raise ValueError("event_id is already used by a different event")
+            return False
+        payload = (contents + json.dumps(canonical, ensure_ascii=False, sort_keys=True,
+                                         allow_nan=False) + "\n").encode("utf-8")
+        if len(payload) > MAX_EVENT_LOG_BYTES:
+            raise ValueError("event log exceeds the size limit")
+        temporary = path.parent / (".event-" + uuid.uuid4().hex)
+        try:
+            with temporary.open("xb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    return True
+
+
+def add_event_arguments(parser: argparse.ArgumentParser) -> None:
+    """Shared CLI for the append-only crash / repair audit log."""
+    parser.add_argument("--candidate-id", default=None,
+                        help="round id shared by a crash and its repair retries")
+    parser.add_argument("--attempt", type=int, default=1,
+                        help="1 for the first attempt, 2+ for a repair retry")
+    parser.add_argument("--repair-of", default=None,
+                        help="event_id of the crash this attempt repairs")
+    parser.add_argument("--event-id", default=None,
+                        help="explicit idempotency key (default: hash of the event identity)")
+    parser.add_argument("--event-log", type=Path, default=None,
+                        help="append-only JSONL log (default: events.jsonl beside results.tsv)")
+    parser.add_argument("--log", type=Path, default=None,
+                        help="optional round log path recorded with the event")
+    parser.add_argument("--evidence", choices=(EVIDENCE_LOCAL, EVIDENCE_SMOKE), default=None,
+                        help="evidence level for a crash without a result file")
+
+
+def record_event(args: argparse.Namespace, results: Path, *, metric: str,
+                 value: float | None, protocol: str, evidence: str, decision: str,
+                 commit: str, description: str) -> bool:
+    """Record KEEP / REVERT / CRASH as one event, linked to its repair chain."""
+    candidate_id = args.candidate_id or commit
+    event_id = args.event_id or event_id_for(
+        results=results, candidate_id=candidate_id, attempt=args.attempt, commit=commit,
+        decision=decision, description=description, value=value, evidence=evidence,
+        repair_of=args.repair_of)
+    event = {
+        "schema_version": EVENT_SCHEMA,
+        "event_id": event_id,
+        "candidate_id": candidate_id,
+        "attempt": args.attempt,
+        "commit": commit,
+        "decision": decision,
+        "evidence": evidence,
+        "metric": metric,
+        "value": value,
+        "protocol_sha256": protocol,
+        "description": description,
+        "repair_of": args.repair_of,
+        "result_path": str(args.result) if getattr(args, "result", None) else None,
+        "log_path": str(args.log) if getattr(args, "log", None) else None,
+        "results_path": str(results),
+    }
+    event_log = Path(args.event_log) if args.event_log else results.parent / EVENT_LOG_NAME
+    return append_event(event_log, event)
+
+
 def append_history(path: Path, *, commit: str, metric: str, value: float | None,
                    direction: str, decision: str, description: str,
                    protocol: str, evidence: str, peak_vram: str = "NOT_AVAILABLE",
@@ -804,8 +962,17 @@ def append_history(path: Path, *, commit: str, metric: str, value: float | None,
         if any((row.get("metric"), row.get("direction"), row.get("evidence"), row.get("promotion"))
                != (metric, direction, evidence, promotion) for row in existing):
             raise ValueError("result metadata differs from this run's earlier results")
-        if any(row.get("commit") == commit for row in existing):
-            raise ValueError("candidate commit is already recorded")
+        new_row = dict(zip(FIELDS, (commit, metric, "" if value is None else str(value),
+                                   direction, decision, description, peak_vram, protocol,
+                                   evidence, promotion), strict=True))
+        # Repeating an identical record command must not create a second event.
+        if any(row == new_row for row in existing):
+            return
+        same_commit = [row for row in existing if row.get("commit") == commit]
+        if same_commit and any(row.get("decision") != "CRASH" for row in same_commit):
+            raise ValueError("candidate commit is already recorded with a scored decision")
+        # Earlier rows for this commit are unscored crashes: the repair retry is a
+        # distinct append-only event and must never overwrite them.
         if decision == "KEEP" and promotion == "strict":
             previous = [float(row["value"]) for row in existing
                         if row.get("decision") == "KEEP" and row.get("value")]
@@ -816,9 +983,7 @@ def append_history(path: Path, *, commit: str, metric: str, value: float | None,
         writer = csv.DictWriter(output, fieldnames=FIELDS, delimiter="\t", lineterminator="\n")
         writer.writeheader()
         writer.writerows(existing)
-        writer.writerow(dict(zip(FIELDS, (commit, metric, "" if value is None else value, direction,
-                                         decision, description, peak_vram, protocol, evidence,
-                                         promotion), strict=True)))
+        writer.writerow(new_row)
         payload = output.getvalue().encode("utf-8")
         if len(payload) > 2 * 1024 * 1024:
             raise ValueError("results file exceeds the size limit")
@@ -834,32 +999,44 @@ def append_history(path: Path, *, commit: str, metric: str, value: float | None,
 
 
 def record_main(argv: list[str]) -> int:
-    """Append a result to the human-readable experiment history."""
+    """Append one decision to results.tsv and one immutable event to events.jsonl."""
     parser = argparse.ArgumentParser(description=record_main.__doc__)
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--results", required=True, type=Path)
     parser.add_argument("--commit", required=True)
-    parser.add_argument("--decision", required=True, choices=("KEEP", "REVERT", "CRASH"))
+    parser.add_argument("--decision", required=True, choices=EVENT_DECISIONS)
     parser.add_argument("--description", required=True)
     parser.add_argument("--result", type=Path)
+    add_event_arguments(parser)
     args = parser.parse_args(argv)
     candidate = committed_source(args.repo, args.commit, "src/research/train.py")
-    score = ""
+    score: float | None = None
     peak_vram = "NOT_AVAILABLE"
     protocol = ""
+    result_payload = None
+    if args.result is not None:
+        try:
+            result_payload = json.loads(read_regular(args.result, 1024 * 1024))
+        except (OSError, ValueError):
+            # A crash often leaves no result file; its audit event is still recorded.
+            result_payload = None
+    evidence = resolved_evidence(args.results, result_payload, args.evidence)
     if args.decision != "CRASH":
-        if args.result is None:
-            parser.error("a scored decision requires --result")
-        result = json.loads(read_regular(args.result, 1024 * 1024))
+        if not isinstance(result_payload, dict):
+            parser.error("a scored decision requires a readable --result")
+        result = result_payload
         if result.get("candidate_sha256") != hashlib.sha256(candidate).hexdigest():
             raise ValueError("result does not match the committed training file")
         score = result["macro_f1"]
         peak_vram = result.get("peak_vram_mb", "NOT_AVAILABLE")
         if isinstance(score, bool) or not isinstance(score, (float, int)) or not 0 <= score <= 1:
             raise ValueError("result has an invalid macro-F1")
-        evidence = result.get("evidence")
-        if evidence not in (EVIDENCE_SMOKE, EVIDENCE_LOCAL):
+        if result.get("evidence") not in (EVIDENCE_SMOKE, EVIDENCE_LOCAL):
             raise ValueError(f"result evidence must be {EVIDENCE_SMOKE} or {EVIDENCE_LOCAL}")
+        if args.evidence is not None and args.evidence != result["evidence"]:
+            raise ValueError("--evidence conflicts with the result evidence")
+        # A scored round's own result file is authoritative for the evidence level.
+        evidence = result["evidence"]
         if (result.get("metric") != "syndrome/macro_f1"
                 or result.get("metric_version") != "tcm-sd-eval-v3"
                 or result.get("direction") != "maximize"):
@@ -921,12 +1098,13 @@ def record_main(argv: list[str]) -> int:
         ).encode()).hexdigest()
     append_history(
         args.results, commit=args.commit, metric="syndrome/macro_f1",
-        value=None if args.decision == "CRASH" else score, direction="maximize",
-        decision=args.decision, description=args.description, protocol=protocol,
-        evidence=EVIDENCE_LOCAL if args.decision != "CRASH" and evidence == EVIDENCE_LOCAL
-        else EVIDENCE_SMOKE,
+        value=score, direction="maximize", decision=args.decision,
+        description=args.description, protocol=protocol, evidence=evidence,
         peak_vram=peak_vram,
     )
+    record_event(args, args.results, metric="syndrome/macro_f1", value=score,
+                 protocol=protocol, evidence=evidence, decision=args.decision,
+                 commit=args.commit, description=args.description)
     return 0
 
 

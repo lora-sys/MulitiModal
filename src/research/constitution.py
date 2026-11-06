@@ -46,10 +46,12 @@ from research.constitution_data import (
     selection_fold_ids,
 )
 from research.prepare import (
-    EVIDENCE_LOCAL,
+    add_event_arguments,
     append_history,
     committed_source,
     local_device,
+    record_event,
+    resolved_evidence,
     run_candidate,
     write_new_atomic,
 )
@@ -258,10 +260,11 @@ def record_main(argv: list[str]) -> int:
                         choices=("KEEP", "REVERT", "CRASH"))
     parser.add_argument("--description", required=True)
     parser.add_argument("--result", type=Path)
+    add_event_arguments(parser)
     args = parser.parse_args(argv)
     value = None
     protocol = ""
-    evidence = EVIDENCE_LOCAL
+    evidence = resolved_evidence(args.results, None, args.evidence)
     peak_vram = "NOT_AVAILABLE"
     if args.decision != "CRASH":
         if args.result is None:
@@ -277,6 +280,9 @@ def record_main(argv: list[str]) -> int:
                    direction=DIRECTION, decision=args.decision,
                    description=args.description, protocol=protocol,
                    evidence=evidence, peak_vram=peak_vram, promotion=PROMOTION)
+    record_event(args, args.results, metric=METRIC, value=value, protocol=protocol,
+                 evidence=evidence, decision=args.decision, commit=args.commit,
+                 description=args.description)
     return 0
 
 
