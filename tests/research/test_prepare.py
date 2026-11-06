@@ -502,8 +502,6 @@ def test_atomic_history_and_result_boundaries(tmp_path):
     assert result.read_bytes() == b"first"
 
 
-# --- 任务 01：CRASH 证据等级、事件链与幂等回归契约 ----------------------------
-
 def _git_candidate(tmp_path):
     """A real commit for record_main's committed_source() binding."""
     repo = tmp_path / "repo"
@@ -576,12 +574,10 @@ def test_local_crash_keeps_its_evidence_level_and_records_a_linked_retry(tmp_pat
     assert events[0]["value"] is None
     assert events[0]["log_path"].endswith("round-001.log")
 
-    # 同一条记录命令重放：results.tsv 与事件日志都不产生重复。
     assert record_main(crash) == 0
     assert len(results.read_text().splitlines()) == 3
     assert len(event_log.read_text().splitlines()) == 1
 
-    # 同一候选的修复重试：独立事件，通过 repair_of 显式链接，不覆盖崩溃事件。
     retry = ["--repo", str(repo), "--results", str(results), "--commit", commit,
              "--decision", "CRASH", "--description", "round-001 retry 2: timeout",
              "--candidate-id", "round-001", "--attempt", "2",

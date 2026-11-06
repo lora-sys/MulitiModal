@@ -58,7 +58,6 @@ def test_zero_f1_reasons_distinguish_no_samples_from_prediction_failure():
     (_, _, _, _, _, _, _, rows) = _fixture()
     zeros = [row for row in rows if row["f1"] == 0.0]
     assert {row["syndrome"] for row in zeros} == {"C", "E", "F"}
-    # E/F：没有 dev 样本，macro-F1 的 148 类分母仍计入这些类。
     for name in ("E", "F"):
         row = next(r for r in zeros if r["syndrome"] == name)
         assert row["evidence_status"] == "NO_DEV_SAMPLES"
@@ -66,13 +65,11 @@ def test_zero_f1_reasons_distinguish_no_samples_from_prediction_failure():
         assert "denominator" not in row["zero_f1_reason"] or "分母" in row["zero_f1_reason"]
         assert row["top3_hit_rate"] is None
         assert row["rejection_rate"] is None
-    # C：有 dev 样本但预测失败，且训练集也没有样本；模型曾预测过但无一正确。
     failed = next(r for r in zeros if r["syndrome"] == "C")
     assert failed["dev_support"] == 1 and failed["tp"] == 0 and failed["fn"] == 1
     assert failed["train_support"] == 0
     assert "训练集无该类样本" in failed["zero_f1_reason"]
     assert "曾把该类预测为 Top-1 共 1 次" in failed["zero_f1_reason"]
-    # Top-1 全错但真值仍进入 Top-3：Top-3 命中率与 F1 必须分开报告。
     assert failed["top3_hit_rate"] == 1.0
     assert failed["evidence_status"] == "LOW_SAMPLE_INSUFFICIENT"
     assert "低样本证据不足" in failed["zero_f1_reason"]

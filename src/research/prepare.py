@@ -38,8 +38,6 @@ EVIDENCE_SMOKE = "SMOKE_ONLY"
 FIELDS = ("commit", "metric", "value", "direction", "decision", "description",
           "peak_vram_mb", "protocol_sha256", "evidence", "promotion")
 
-#: results.tsv stays the frozen decision history. Crashes and repair retries are
-#: additionally recorded as immutable, append-only events in events.jsonl.
 EVENT_SCHEMA = "autoresearch-event-v1"
 EVENT_LOG_NAME = "events.jsonl"
 EVENT_DECISIONS = ("KEEP", "REVERT", "CRASH")
@@ -965,14 +963,11 @@ def append_history(path: Path, *, commit: str, metric: str, value: float | None,
         new_row = dict(zip(FIELDS, (commit, metric, "" if value is None else str(value),
                                    direction, decision, description, peak_vram, protocol,
                                    evidence, promotion), strict=True))
-        # Repeating an identical record command must not create a second event.
         if any(row == new_row for row in existing):
             return
         same_commit = [row for row in existing if row.get("commit") == commit]
         if same_commit and any(row.get("decision") != "CRASH" for row in same_commit):
             raise ValueError("candidate commit is already recorded with a scored decision")
-        # Earlier rows for this commit are unscored crashes: the repair retry is a
-        # distinct append-only event and must never overwrite them.
         if decision == "KEEP" and promotion == "strict":
             previous = [float(row["value"]) for row in existing
                         if row.get("decision") == "KEEP" and row.get("value")]
@@ -1018,7 +1013,6 @@ def record_main(argv: list[str]) -> int:
         try:
             result_payload = json.loads(read_regular(args.result, 1024 * 1024))
         except (OSError, ValueError):
-            # A crash often leaves no result file; its audit event is still recorded.
             result_payload = None
     evidence = resolved_evidence(args.results, result_payload, args.evidence)
     if args.decision != "CRASH":
@@ -1035,7 +1029,6 @@ def record_main(argv: list[str]) -> int:
             raise ValueError(f"result evidence must be {EVIDENCE_SMOKE} or {EVIDENCE_LOCAL}")
         if args.evidence is not None and args.evidence != result["evidence"]:
             raise ValueError("--evidence conflicts with the result evidence")
-        # A scored round's own result file is authoritative for the evidence level.
         evidence = result["evidence"]
         if (result.get("metric") != "syndrome/macro_f1"
                 or result.get("metric_version") != "tcm-sd-eval-v3"

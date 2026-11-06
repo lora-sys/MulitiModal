@@ -404,7 +404,6 @@ def audit(manifest_path: Path, dataset_path: Path, raw_dir: Path,
     confusion = build_confusion(dev_labels, dev_pred, N_CLASSES)
     rows = class_rows(dev_labels, dev_pred, dev_scores, split["train_labels"],
                       labels, statuses, confusion)
-    # 逐类 P/R/F1 必须与使用中的冻结 metrics 实现逐值一致。
     for row, official in zip(rows, per_class, strict=True):
         if (row["syndrome"] != official["label"] or row["dev_support"] != official["support"]
                 or row["precision"] != official["precision"]
