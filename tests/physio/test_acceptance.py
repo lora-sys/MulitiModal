@@ -17,7 +17,7 @@ pytestmark = pytest.mark.synthetic
 def test_acceptance_all_checks_pass():
     report = run_acceptance()
     assert report["status"] == "PASS"
-    assert report["passed"] == report["total"] == 13
+    assert report["passed"] == report["total"] == 16
     assert {check["issue"] for check in report["checks"]} == {
         "#95",
         "#96",
@@ -25,6 +25,7 @@ def test_acceptance_all_checks_pass():
         "#98",
         "#99",
         "#100",
+        "#102",
     }
     assert all(check["passed"] for check in report["checks"])
 

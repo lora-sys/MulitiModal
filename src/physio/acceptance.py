@@ -783,6 +783,136 @@ def _evaluation_gate() -> CheckResult:
         )
 
 
+def _real_export_mapping_gate(repo_root: Path) -> CheckResult:
+    """#102: the declared real-export mapping rebuilds labels and refuses guesswork."""
+    try:
+        from physio.real_export import (
+            IDENTITY_SHARED as REAL_IDENTITY_SHARED,
+        )
+        from physio.real_export import (
+            RealExportError,
+            import_real_export,
+            session_labels,
+        )
+
+        raw = (
+            repo_root
+            / "tests"
+            / "fixtures"
+            / "physio-legacy-sessions-synthetic.csv"
+        )
+        sessions = import_real_export(raw)
+        first = sessions[0]
+        labels = session_labels(first)
+        again = session_labels(first)
+
+        assert len(sessions) == 5
+        assert first.identity_trust == REAL_IDENTITY_SHARED
+        assert labels.values.get("y_pri") is None
+        assert "y_pri" not in labels.values
+        assert labels.values["y_delta_sbp"] == -5.0
+        assert labels.values["y_delta_vendor_health"] == -2.0
+        assert labels.values == again.values
+        assert session_labels(sessions[1]).mask["y_delta_sbp"] is False
+
+        missing = repo_root / "tests" / "fixtures" / "absent-real-export.csv"
+        refused = False
+        try:
+            import_real_export(missing)
+        except RealExportError:
+            refused = True
+        assert refused
+
+        return CheckResult(
+            "real_export_mapping",
+            "#102",
+            True,
+            "long-table import rebuilds y_delta labels deterministically; shared account "
+            "identity is never trusted; an absent export is refused",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            "real_export_mapping", "#102", False, f"{type(exc).__name__}: {exc}"
+        )
+
+
+def _real_data_audit_gate(repo_root: Path) -> CheckResult:
+    """#102: every reference field is match, explained or unrecoverable."""
+    try:
+        from physio.real_data_audit import (
+            STATUS_VERIFIED,
+            VERDICT_MISMATCH,
+            audit_real_export,
+            load_reference_rows,
+        )
+        from physio.real_export import import_real_export
+
+        fixtures = repo_root / "tests" / "fixtures"
+        sessions = import_real_export(fixtures / "physio-legacy-sessions-synthetic.csv")
+        audit = audit_real_export(
+            sessions,
+            load_reference_rows(fixtures / "physio-legacy-reference-synthetic.csv"),
+            load_reference_rows(fixtures / "physio-legacy-qc-synthetic.csv"),
+        )
+        counts = audit.verdict_counts()
+        assert audit.status == STATUS_VERIFIED
+        assert counts[VERDICT_MISMATCH] == 0
+        assert counts["match"] > 0 and counts["explained"] > 0 and counts["not_recoverable"] > 0
+        assert all(check.verdict == "match" for check in audit.qc_cross_checks)
+
+        tampered = [dict(row) for row in load_reference_rows(
+            fixtures / "physio-legacy-reference-synthetic.csv"
+        )]
+        tampered[0]["y_delta_sbp"] = "-99"
+        failed = audit_real_export(sessions, tampered)
+        assert failed.status == "FAILED"
+        assert failed.passed is False
+
+        return CheckResult(
+            "real_data_audit",
+            "#102",
+            True,
+            "reference training set and quality report are rebuilt from raw records; a "
+            "tampered reference value fails the audit instead of being repaired",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult("real_data_audit", "#102", False, f"{type(exc).__name__}: {exc}")
+
+
+def _real_training_gate(repo_root: Path) -> CheckResult:
+    """#102: the real-data pipeline runs and never upgrades the evidence level."""
+    try:
+        from physio.real_export import import_real_export
+        from physio.real_training import (
+            STATUS_INSUFFICIENT,
+            run_real_pre_experiment,
+        )
+
+        sessions = import_real_export(
+            repo_root / "tests" / "fixtures" / "physio-legacy-sessions-synthetic.csv"
+        )
+        report = run_real_pre_experiment(sessions)
+        assert report.evaluation_status == STATUS_INSUFFICIENT
+        assert report.status == STATUS_INSUFFICIENT
+        assert report.identity_trust == "SHARED_ACCOUNT_UNKNOWN"
+        assert report.model_mae["train_fold_mean"] is not None
+        assert report.model_mae["ridge"] is not None
+        assert len(report.folds) == 5
+        assert all(fold.n_train == 4 and fold.n_test == 1 for fold in report.folds)
+
+        return CheckResult(
+            "real_training_pipeline",
+            "#102",
+            True,
+            "leave-one-subject-out folds, fold-internal imputation and scaling run on real "
+            "rows; evaluation stays INSUFFICIENT_EVIDENCE and no performance claim is made",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            "real_training_pipeline", "#102", False, f"{type(exc).__name__}: {exc}"
+        )
+
+
 def run_acceptance(repo_root: str | Path | None = None) -> dict[str, Any]:
     """Run all synthetic engineering acceptance checks and return one report."""
     root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
@@ -800,6 +930,9 @@ def run_acceptance(repo_root: str | Path | None = None) -> dict[str, Any]:
         _dataset_label_gate(),
         _training_refusal_gate(),
         _evaluation_gate(),
+        _real_export_mapping_gate(root),
+        _real_data_audit_gate(root),
+        _real_training_gate(root),
     ]
     passed = sum(1 for check in checks if check.passed)
     report = {
@@ -814,6 +947,8 @@ def run_acceptance(repo_root: str | Path | None = None) -> dict[str, Any]:
         "checks": [check.to_dict() for check in checks],
         "limitations": [
             "synthetic fixtures only; no real device, subject or paired label data",
+            "the real 94-field export audit runs on the private data/local/ extract and is "
+            "never committed",
             "no model performance, efficacy or clinical claim",
             "device control remains NOT_CONNECTED",
             "GO gates are independent and are not derived from these checks",

@@ -46,7 +46,7 @@ def _session(count: int):
 def test_demo_reaches_acceptance_pass():
     report = demo.run()
     assert report["acceptance"]["status"] == "PASS"
-    assert report["acceptance"]["passed"] == report["acceptance"]["total"] == 13
+    assert report["acceptance"]["passed"] == report["acceptance"]["total"] == 16
     assert report["inference"]["status"] == STATUS_NOT_AVAILABLE
     assert report["recommendation"]["control_command"] is None
 

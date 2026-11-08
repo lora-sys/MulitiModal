@@ -1,0 +1,463 @@
+"""Real-data pipeline pre-experiment (#102).
+
+Five de-identified sessions cannot support any performance or clinical claim.
+This module therefore answers engineering questions only: does the whole path —
+subject-level folds, fold-internal imputation, fold-internal scaling, masked-loss
+training, checkpoint reload and prediction — run end to end on real rows, and how
+do the three declared models rank on those rows?
+
+Every number here is a local pipeline regression. ``evaluate_regression`` is the
+authority on status and returns ``INSUFFICIENT_EVIDENCE`` for this sample size.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
+from pathlib import Path
+
+import numpy as np
+
+from .dataset import (
+    IDENTITY_SHARED,
+    DatasetError,
+    FeatureRow,
+    FoldImputer,
+    IdentityTrustError,
+    make_subject_folds,
+)
+from .evaluation import STATUS_EVALUATED, STATUS_INSUFFICIENT, evaluate_regression
+from .preprocessing import WindowScaler
+from .real_export import RealSession, session_feature_row, session_labels
+from .training import (
+    TrainingConfig,
+    TrainingRefused,
+    TrainingUnavailable,
+    assert_trainable,
+    predict_masked,
+    train_realtime_smoke,
+)
+
+REAL_TRAINING_SCHEMA_VERSION = "physio-real-training-v1"
+
+#: Declared smoke configuration for the real-data pipeline regression. It is the
+#: default ``TrainingConfig``; nothing is relaxed to make the path look better.
+CONFIG = TrainingConfig()
+
+TARGET_POST_STATE = "post_state"
+TARGET_DELTA_FATIGUE = "delta_vendor_fatigue"
+TARGET_MODES: tuple[str, ...] = (TARGET_POST_STATE, TARGET_DELTA_FATIGUE)
+
+MODEL_MEAN = "train_fold_mean"
+MODEL_RIDGE = "ridge"
+MODEL_NEURAL = "realtime_mlp"
+MODELS: tuple[str, ...] = (MODEL_MEAN, MODEL_RIDGE, MODEL_NEURAL)
+
+RIDGE_LAMBDA = 1.0
+FOLD_SEED = 20261108
+
+NEURAL_UNAVAILABLE = "torch_unavailable"
+NEURAL_COMPLETED = "completed"
+NEURAL_REFUSED = "refused"
+
+
+class RealTrainingError(ValueError):
+    """Raised when the real pre-experiment cannot be set up honestly."""
+
+
+@dataclass(frozen=True)
+class FoldResult:
+    """One leave-one-subject-out fold with every model's error."""
+
+    fold: int
+    train_subjects: tuple[str, ...]
+    test_subjects: tuple[str, ...]
+    n_train: int
+    n_test: int
+    predictions: dict[str, tuple[float, ...]]
+    targets: tuple[float, ...]
+    mae: dict[str, float | None]
+    final_loss: float | None = None
+    neural_status: str = NEURAL_UNAVAILABLE
+    refusal: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "fold": self.fold,
+            "train_subjects": list(self.train_subjects),
+            "test_subjects": list(self.test_subjects),
+            "n_train": self.n_train,
+            "n_test": self.n_test,
+            "targets": list(self.targets),
+            "predictions": {name: list(values) for name, values in self.predictions.items()},
+            "mae": dict(self.mae),
+            "final_loss": self.final_loss,
+            "neural_status": self.neural_status,
+            "refusal": self.refusal,
+        }
+
+
+@dataclass(frozen=True)
+class RealTrainingReport:
+    """The complete pre-experiment result. Status is never upgraded here."""
+
+    schema: str
+    status: str
+    reason: str
+    target: str
+    feature_names: tuple[str, ...]
+    n_sessions: int
+    n_subjects: int
+    n_members: int
+    identity_trust: str
+    folds: tuple[FoldResult, ...]
+    model_mae: dict[str, float | None]
+    neural_status: str
+    imputed_features: tuple[str, ...]
+    feature_missing_counts: dict[str, int]
+    evaluation_status: str
+    evaluation_metrics: dict[str, float | None] = dataclass_field(default_factory=dict)
+    notes: tuple[str, ...] = ()
+
+    @property
+    def passed(self) -> bool:
+        return self.status != "FAILED"
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema": self.schema,
+            "status": self.status,
+            "reason": self.reason,
+            "target": self.target,
+            "feature_names": list(self.feature_names),
+            "n_sessions": self.n_sessions,
+            "n_subjects": self.n_subjects,
+            "n_members": self.n_members,
+            "identity_trust": self.identity_trust,
+            "model_mae": dict(self.model_mae),
+            "neural_status": self.neural_status,
+            "imputed_features": list(self.imputed_features),
+            "feature_missing_counts": dict(self.feature_missing_counts),
+            "evaluation_status": self.evaluation_status,
+            "evaluation_metrics": dict(self.evaluation_metrics),
+            "folds": [fold.to_dict() for fold in self.folds],
+            "notes": list(self.notes),
+        }
+
+
+def build_targets(
+    sessions: Sequence[RealSession], target: str = TARGET_POST_STATE
+) -> tuple[float | None, ...]:
+    """Targets for the declared mode. Missing labels stay ``None``, never zero."""
+    if target == TARGET_POST_STATE:
+        from .real_export import session_post_state
+
+        return tuple(session_post_state(session) for session in sessions)
+    if target == TARGET_DELTA_FATIGUE:
+        return tuple(
+            session_labels(session).values.get("y_delta_vendor_fatigue") for session in sessions
+        )
+    raise RealTrainingError(f"unknown target mode {target!r}")
+
+
+def _fit_scaler(rows: Sequence[FeatureRow]) -> WindowScaler:
+    """Fold-internal standardizer over observed, valid entries only."""
+    if not rows:
+        raise RealTrainingError("cannot fit a scaler without training rows")
+    names = rows[0].feature_names
+    size = len(names)
+    sums = [0.0] * size
+    squares = [0.0] * size
+    counts = [0] * size
+    for row in rows:
+        if row.feature_names != names:
+            raise RealTrainingError("training rows do not share one feature contract")
+        for index, (value, valid) in enumerate(zip(row.values, row.valid_mask, strict=True)):
+            if not valid:
+                continue
+            number = float(value)
+            if not math.isfinite(number):
+                raise RealTrainingError("training row contains a non-finite value")
+            sums[index] += number
+            squares[index] += number * number
+            counts[index] += 1
+    means: list[float] = []
+    stds: list[float] = []
+    for index in range(size):
+        if counts[index] == 0:
+            means.append(0.0)
+            stds.append(1.0)
+            continue
+        mean = sums[index] / counts[index]
+        variance = max(squares[index] / counts[index] - mean * mean, 0.0)
+        std = math.sqrt(variance)
+        means.append(mean)
+        stds.append(std if std >= 1e-8 else 1.0)
+    return WindowScaler(
+        feature_names=names,
+        mean=tuple(means),
+        std=tuple(stds),
+        observed_counts=tuple(counts),
+    )
+
+
+def _scaled_row(row: FeatureRow, scaler: WindowScaler) -> FeatureRow:
+    if row.feature_names != scaler.feature_names:
+        raise RealTrainingError("row does not share the scaler feature contract")
+    values = [
+        float(value) if valid else 0.0
+        for value, valid in zip(row.values, row.valid_mask, strict=True)
+    ]
+    return FeatureRow(
+        feature_names=row.feature_names,
+        values=tuple(values),
+        observed_mask=row.observed_mask,
+        valid_mask=row.valid_mask,
+        imputed_mask=row.imputed_mask,
+        imputation=row.imputation,
+        subject_ref=row.subject_ref,
+        session_id=row.session_id,
+        cutoff=row.cutoff,
+    )
+
+
+def _dense(rows: Sequence[FeatureRow]) -> np.ndarray:
+    return np.asarray(
+        [
+            [
+                float(value) if valid else 0.0
+                for value, valid in zip(row.values, row.valid_mask, strict=True)
+            ]
+            for row in rows
+        ],
+        dtype=float,
+    )
+
+
+def _ridge_predict(
+    train_rows: Sequence[FeatureRow],
+    train_targets: Sequence[float],
+    test_rows: Sequence[FeatureRow],
+) -> tuple[float, ...]:
+    features = _dense(train_rows)
+    labels = np.asarray(train_targets, dtype=float)
+    centered = features - features.mean(axis=0)
+    target_mean = float(labels.mean())
+    penalty = RIDGE_LAMBDA * np.eye(centered.shape[1])
+    weights, *_ = np.linalg.lstsq(
+        centered.T @ centered + penalty, centered.T @ (labels - target_mean), rcond=None
+    )
+    test = _dense(test_rows)
+    predictions = test - features.mean(axis=0)
+    return tuple(float(value) for value in predictions @ weights + target_mean)
+
+
+def _mae(predictions: Sequence[float], targets: Sequence[float]) -> float:
+    if not targets:
+        return float("nan")
+    return float(np.mean(np.abs(np.asarray(predictions) - np.asarray(targets))))
+
+
+def run_real_pre_experiment(
+    sessions: Sequence[RealSession],
+    *,
+    target: str = TARGET_POST_STATE,
+    n_folds: int | None = None,
+    out_dir: str | Path | None = None,
+    notes: Sequence[str] = (),
+) -> RealTrainingReport:
+    """Run the declared leave-one-subject-out pipeline regression on real rows."""
+    if not sessions:
+        raise RealTrainingError("pre-experiment requires at least one session")
+    if target not in TARGET_MODES:
+        raise RealTrainingError(f"unknown target mode {target!r}")
+
+    rows = [session_feature_row(session) for session in sessions]
+    targets = list(build_targets(sessions, target))
+    feature_names = rows[0].feature_names
+    for row in rows:
+        if row.feature_names != feature_names:
+            raise RealTrainingError("sessions do not share one feature contract")
+
+    subjects = [session.subject_ref for session in sessions]
+    members = sorted({session.member_ref for session in sessions})
+    labeled = [index for index, value in enumerate(targets) if value is not None]
+    if not labeled:
+        raise RealTrainingError("no labelled session; the pipeline cannot start")
+
+    distinct_subjects = sorted(set(subjects))
+    requested = n_folds or len(distinct_subjects)
+    try:
+        folds = make_subject_folds(
+            subjects,
+            n_folds=requested,
+            seed=FOLD_SEED,
+            identity_trust=IDENTITY_SHARED,
+            allow_untrusted=True,
+        )
+    except (DatasetError, IdentityTrustError) as exc:
+        raise RealTrainingError(f"subject-level folds refused: {exc}") from exc
+
+    fold_results: list[FoldResult] = []
+    for fold_index in range(folds.n_folds):
+        train_idx = [
+            index
+            for index in range(len(rows))
+            if folds.folds[subjects[index]] != fold_index and targets[index] is not None
+        ]
+        test_idx = [
+            index
+            for index in range(len(rows))
+            if folds.folds[subjects[index]] == fold_index and targets[index] is not None
+        ]
+        if not train_idx or not test_idx:
+            continue
+        imputer = FoldImputer.fit([rows[index] for index in train_idx])
+        imputed = [imputer.transform(row) for row in rows]
+        scaler = _fit_scaler([imputed[index] for index in train_idx])
+        scaled = [_scaled_row(imputed[index], scaler) for index in range(len(rows))]
+
+        train_rows = [scaled[index] for index in train_idx]
+        test_rows = [scaled[index] for index in test_idx]
+        train_targets = [float(targets[index]) for index in train_idx]
+        test_targets = [float(targets[index]) for index in test_idx]
+
+        predictions: dict[str, tuple[float, ...]] = {
+            MODEL_MEAN: tuple(float(np.mean(train_targets)) for _ in test_targets),
+            MODEL_RIDGE: _ridge_predict(train_rows, train_targets, test_rows),
+        }
+        mae: dict[str, float | None] = {
+            MODEL_MEAN: _mae(predictions[MODEL_MEAN], test_targets),
+            MODEL_RIDGE: _mae(predictions[MODEL_RIDGE], test_targets),
+        }
+        neural_status = NEURAL_UNAVAILABLE
+        final_loss: float | None = None
+        refusal = ""
+        try:
+            assert_trainable(
+                train_rows,
+                train_targets,
+                config=CONFIG,
+                identity_trust=IDENTITY_SHARED,
+                allow_untrusted_pipeline=True,
+            )
+        except TrainingRefused as exc:
+            neural_status = NEURAL_REFUSED
+            refusal = str(exc)
+        else:
+            fold_dir = Path(out_dir) / f"fold-{fold_index}" if out_dir else None
+            try:
+                manifest = train_realtime_smoke(
+                    train_rows,
+                    train_targets,
+                    scaler=scaler,
+                    config=CONFIG,
+                    identity_trust=IDENTITY_SHARED,
+                    allow_untrusted_pipeline=True,
+                    out_dir=fold_dir,
+                )
+            except TrainingUnavailable:
+                neural_status = NEURAL_UNAVAILABLE
+            except TrainingRefused as exc:
+                neural_status = NEURAL_REFUSED
+                refusal = str(exc)
+            else:
+                neural_status = NEURAL_COMPLETED
+                final_loss = manifest.final_loss
+                predictions[MODEL_NEURAL] = predict_masked(
+                    test_rows,
+                    checkpoint=(
+                        Path(fold_dir) / "model_state.pt"
+                        if fold_dir
+                        else Path("runs/physio-smoke/model_state.pt")
+                    ),
+                    scaler=scaler,
+                    hidden_dim=CONFIG.hidden_dim,
+                    fusion_dim=CONFIG.fusion_dim,
+                    dropout=CONFIG.dropout,
+                )
+                mae[MODEL_NEURAL] = _mae(predictions[MODEL_NEURAL], test_targets)
+
+        if MODEL_NEURAL not in predictions:
+            predictions[MODEL_NEURAL] = ()
+            mae[MODEL_NEURAL] = None
+
+        fold_results.append(
+            FoldResult(
+                fold=fold_index,
+                train_subjects=tuple(sorted({subjects[index] for index in train_idx})),
+                test_subjects=tuple(sorted({subjects[index] for index in test_idx})),
+                n_train=len(train_idx),
+                n_test=len(test_idx),
+                predictions=predictions,
+                targets=tuple(test_targets),
+                mae=mae,
+                final_loss=final_loss,
+                neural_status=neural_status,
+                refusal=refusal,
+            )
+        )
+
+    pooled_predictions = {
+        name: [value for fold in fold_results for value in fold.predictions.get(name, ())]
+        for name in MODELS
+    }
+    pooled_targets = [value for fold in fold_results for value in fold.targets]
+    pooled_subjects = [
+        subject
+        for fold in fold_results
+        for subject in fold.test_subjects
+    ]
+    model_mae: dict[str, float | None] = {}
+    for name in MODELS:
+        values = pooled_predictions[name]
+        if len(values) != len(pooled_targets) or not pooled_targets:
+            model_mae[name] = None
+            continue
+        model_mae[name] = _mae(values, pooled_targets)
+
+    report = evaluate_regression(
+        pooled_predictions[MODEL_MEAN],
+        pooled_targets,
+        [True] * len(pooled_targets),
+        pooled_subjects,
+    )
+    missing_by_feature: dict[str, int] = {}
+    for row in rows:
+        for name, valid in zip(row.feature_names, row.valid_mask, strict=True):
+            if not valid:
+                missing_by_feature[name] = missing_by_feature.get(name, 0) + 1
+    imputed_features = tuple(sorted(missing_by_feature))
+
+    return RealTrainingReport(
+        schema=REAL_TRAINING_SCHEMA_VERSION,
+        status=STATUS_INSUFFICIENT if report.status == STATUS_INSUFFICIENT else STATUS_EVALUATED,
+        reason=report.reason,
+        target=target,
+        feature_names=feature_names,
+        n_sessions=len(sessions),
+        n_subjects=len(distinct_subjects),
+        n_members=len(members),
+        identity_trust=IDENTITY_SHARED,
+        folds=tuple(fold_results),
+        model_mae=model_mae,
+        neural_status=_neural_status(fold_results),
+        imputed_features=imputed_features,
+        feature_missing_counts=dict(sorted(missing_by_feature.items())),
+        evaluation_status=report.status,
+        evaluation_metrics=report.metrics,
+        notes=tuple(notes),
+    )
+
+
+def _neural_status(fold_results: Sequence[FoldResult]) -> str:
+    statuses = {fold.neural_status for fold in fold_results}
+    if not statuses:
+        return NEURAL_UNAVAILABLE
+    if statuses == {NEURAL_COMPLETED}:
+        return NEURAL_COMPLETED
+    if NEURAL_REFUSED in statuses:
+        return NEURAL_REFUSED
+    return NEURAL_UNAVAILABLE
