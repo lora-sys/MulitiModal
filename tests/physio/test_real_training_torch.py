@@ -7,6 +7,7 @@ good: with five sessions the evaluation status remains INSUFFICIENT_EVIDENCE.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,7 @@ def test_neural_path_completes_on_real_rows():
     for fold in report.folds:
         assert fold.neural_status == NEURAL_COMPLETED
         assert fold.final_loss is not None
-        assert fold.final_loss == fold.final_loss  # not NaN
+        assert math.isfinite(fold.final_loss)
         assert fold.mae[MODEL_NEURAL] is not None
         assert fold.mae[MODEL_NEURAL] >= 0.0
 

@@ -37,20 +37,27 @@ from .schema import (
 
 REAL_EXPORT_SCHEMA_VERSION = "physio-real-export-v1"
 
-#: Declared endpoint-selection rule. The reference training set was produced with
-#: this rule; it is declared here so it can be tested rather than inferred.
+#: EXTRACT-FITTED HYPOTHESIS, NOT A VENDOR RULE.
+#:
+#: The reference training set for the provided 5-session extract was produced with
+#: this endpoint rule, and the rule reproduces every reference value on that
+#: extract. It is reverse-engineered from the extract, not supplied by the vendor.
+#: A future export with different measurement timing can break it, and the
+#: guardrails below can silently discard valid labels if read as a contract.
+#: They are constants so they can be tested and changed, never a frozen spec.
 ENDPOINT_RULE = "first_and_last_measurement_group_by_measured_at"
 ENDPOINT_GROUP_WINDOW_S = 60.0
 MAX_ENDPOINT_INTERVAL_S = 2 * 3600.0
 
-#: Declared blood-pressure delta guardrails. They reproduce the reference QC
-#: verdict on the provided 5-session extract; the vendor's own threshold is not
-#: published, so this is an engineering guardrail and not a clinical rule.
+#: EXTRACT-FITTED HYPOTHESIS, NOT A CLINICAL OR VENDOR RULE. These thresholds
+#: reproduce the reference anomaly verdict on the provided extract only. They are
+#: an engineering guardrail and must not be treated as a general contract.
 BP_DELTA_SBP_GUARD_MMHG = 30.0
 BP_DELTA_DBP_GUARD_MMHG = 20.0
 
-#: Declared tolerance for cross-module heart-rate agreement (health module versus
-#: blood-pressure ``pulse``). A disagreement is a QC observation, never a repair.
+#: EXTRACT-FITTED HYPOTHESIS. Tolerance for cross-module heart-rate agreement
+#: (health module versus blood-pressure ``pulse``). A disagreement is a QC
+#: observation, never a repair, and the tolerance is not a vendor contract.
 HR_CROSS_MODULE_TOLERANCE_BPM = 5.0
 
 #: The export carries naive wall-clock timestamps. Only relative ordering and

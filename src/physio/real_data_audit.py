@@ -50,6 +50,11 @@ STATUS_VERIFIED = "VERIFIED"
 STATUS_VERIFIED_WITH_EXCEPTIONS = "VERIFIED_WITH_EXCEPTIONS"
 STATUS_FAILED = "FAILED"
 
+#: The engineering path ran and produced no contradiction. This says nothing
+#: about whether the 94-field reference transformation has been reproduced.
+STATUS_MAPPING_VERIFIED = "MAPPING_VERIFIED"
+STATUS_MAPPING_NOT_VERIFIED = "MAPPING_NOT_VERIFIED"
+
 #: Fields whose mismatch is a contract question rather than a value failure.
 CONTRACT_FIELDS: frozenset[str] = frozenset({"label_masks"})
 
@@ -198,10 +203,21 @@ class RealDataAudit:
     issues: tuple[RealQCIssue, ...]
     open_items: tuple[str, ...] = ()
     notes: tuple[str, ...] = ()
+    mapping_status: str = STATUS_MAPPING_NOT_VERIFIED
+    mapping_blockers: tuple[str, ...] = ()
 
     @property
     def passed(self) -> bool:
+        """Whether the engineering path ran without contradiction.
+
+        Deliberately independent of ``mapping_status``: a green engineering run
+        must never be readable as sign-off on the 94-field mapping.
+        """
         return self.status != STATUS_FAILED
+
+    @property
+    def mapping_verified(self) -> bool:
+        return self.mapping_status == STATUS_MAPPING_VERIFIED
 
     def verdict_counts(self) -> dict[str, int]:
         counts = {
@@ -863,6 +879,33 @@ def audit_real_export(
     else:
         status = STATUS_VERIFIED
 
+    blockers: list[str] = []
+    for finding in abstained:
+        blockers.append(
+            f"{finding.session_id}: {finding.field} — {finding.note}"
+        )
+    for finding in findings:
+        if finding.verdict == VERDICT_NOT_RECOVERABLE and finding.field in RESPONSE_HASH_COLUMNS:
+            blockers.append(
+                f"{finding.session_id}: {finding.field} — {finding.note}"
+            )
+    unrecoverable = sorted(
+        {finding.field for finding in findings if finding.verdict == VERDICT_NOT_RECOVERABLE}
+    )
+    if unrecoverable:
+        blockers.append(
+            f"{len(unrecoverable)} reference columns are not recoverable from the provided "
+            "de-identified extract: " + ",".join(unrecoverable)
+        )
+    for finding in mismatches:
+        blockers.append(
+            f"{finding.session_id}: {finding.field} — reconstructed "
+            f"{finding.reconstructed!r} but the reference is {finding.reference!r}"
+        )
+    mapping_status = (
+        STATUS_MAPPING_VERIFIED if not blockers else STATUS_MAPPING_NOT_VERIFIED
+    )
+
     return RealDataAudit(
         schema=AUDIT_SCHEMA_VERSION,
         status=status,
@@ -874,6 +917,8 @@ def audit_real_export(
         + tuple(issue for session in sessions for issue in session_labels(session).issues),
         open_items=_open_items(findings),
         notes=tuple(notes),
+        mapping_status=mapping_status,
+        mapping_blockers=tuple(blockers),
     )
 
 

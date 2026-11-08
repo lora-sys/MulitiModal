@@ -852,6 +852,7 @@ def _real_data_audit_gate(repo_root: Path) -> CheckResult:
     """#102: every reference field is match, explained or unrecoverable."""
     try:
         from physio.real_data_audit import (
+            STATUS_MAPPING_NOT_VERIFIED,
             STATUS_VERIFIED,
             STATUS_VERIFIED_WITH_EXCEPTIONS,
             VERDICT_MISMATCH,
@@ -884,12 +885,17 @@ def _real_data_audit_gate(repo_root: Path) -> CheckResult:
         assert failed.status == "FAILED"
         assert failed.passed is False
 
+        assert audit.mapping_status == STATUS_MAPPING_NOT_VERIFIED
+        assert audit.mapping_verified is False
+        assert audit.mapping_blockers
+
         return CheckResult(
             "real_data_audit",
             "#102",
             True,
-            "reference training set and quality report are rebuilt from raw records; a "
-            "tampered reference value fails the audit instead of being repaired",
+            "engineering path rebuilt from raw records with no contradiction and a tampered "
+            "reference value fails the audit; the 94-field mapping itself is "
+            f"{audit.mapping_status} ({len(audit.mapping_blockers)} blockers)",
         )
     except Exception as exc:  # noqa: BLE001
         return CheckResult("real_data_audit", "#102", False, _failure_detail(exc))
@@ -929,6 +935,24 @@ def _real_training_gate(repo_root: Path) -> CheckResult:
         )
 
 
+def _real_data_mapping_status(repo_root: Path) -> str:
+    """The 94-field mapping verdict, reported separately from the checks."""
+    try:
+        from physio.real_data_audit import audit_real_export, load_reference_rows
+        from physio.real_export import import_real_export
+
+        fixtures = repo_root / "tests" / "fixtures"
+        sessions = import_real_export(fixtures / "physio-legacy-sessions-synthetic.csv")
+        audit = audit_real_export(
+            sessions,
+            load_reference_rows(fixtures / "physio-legacy-reference-synthetic.csv"),
+            load_reference_rows(fixtures / "physio-legacy-qc-synthetic.csv"),
+        )
+        return f"{audit.mapping_status} ({len(audit.mapping_blockers)} blockers)"
+    except Exception as exc:  # noqa: BLE001
+        return f"UNAVAILABLE ({_failure_detail(exc)})"
+
+
 def run_acceptance(repo_root: str | Path | None = None) -> dict[str, Any]:
     """Run all synthetic engineering acceptance checks and return one report."""
     root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
@@ -961,8 +985,11 @@ def run_acceptance(repo_root: str | Path | None = None) -> dict[str, Any]:
         "smoke_only": SMOKE_ONLY,
         "device_control": NOT_CONNECTED,
         "checks": [check.to_dict() for check in checks],
+        "real_data_mapping_status": _real_data_mapping_status(root),
         "limitations": [
             "synthetic fixtures only; no real device, subject or paired label data",
+            "real_data_mapping_status is independent of the engineering checks: OVERALL PASS "
+            "means the pipeline ran, never that the 94-field mapping is verified",
             "the real 94-field export audit runs on the private data/local/ extract and is "
             "never committed",
             "no model performance, efficacy or clinical claim",

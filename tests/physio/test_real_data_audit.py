@@ -8,6 +8,7 @@ import pytest
 
 from physio.real_data_audit import (
     STATUS_FAILED,
+    STATUS_MAPPING_NOT_VERIFIED,
     VERDICT_EXPLAINED,
     VERDICT_MATCH,
     VERDICT_MISMATCH,
@@ -197,3 +198,38 @@ def test_summarize_findings_groups_by_verdict():
     assert VERDICT_MISMATCH not in grouped
     assert grouped[VERDICT_MATCH]
     assert all(item.count(":") == 1 for items in grouped.values() for item in items)
+
+
+def test_synthetic_fixture_carries_the_full_94_column_shape():
+    """The fixture must exercise the real reference shape, not a reduced one."""
+    columns = set(load_reference_rows(REFERENCE)[0])
+    real_shape = {
+        "y_delta_sbp", "brain_record_id", "feature_route", "response_hash",
+        "brain_neutral_pct", "sublingual_vein", "impedance", "age_group",
+    }
+    assert len(columns) == 94
+    assert real_shape <= columns
+
+
+def test_mapping_status_is_not_verified_while_blockers_remain():
+    audit = _audit()
+    assert audit.mapping_status == STATUS_MAPPING_NOT_VERIFIED
+    assert audit.mapping_verified is False
+    assert audit.mapping_blockers
+    # Engineering PASS and mapping verdict are deliberately independent.
+    assert audit.passed is True
+    assert audit.mapping_verified is False
+
+
+def test_mapping_blockers_name_the_unrecoverable_columns():
+    audit = _audit()
+    summary = [b for b in audit.mapping_blockers if "not recoverable" in b]
+    assert summary
+    assert "age" in summary[0] and "height_cm" in summary[0]
+
+
+def test_response_hash_is_a_mapping_blocker():
+    audit = _audit()
+    hash_blockers = [b for b in audit.mapping_blockers if "response_hash" in b]
+    assert hash_blockers
+    assert "not declared" in hash_blockers[0]

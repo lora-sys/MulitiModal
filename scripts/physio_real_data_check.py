@@ -109,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
         "sessions": len(sessions),
         "records": audit.records,
         "audit_status": audit.status,
+        "mapping_status": audit.mapping_status,
+        "mapping_blockers": list(audit.mapping_blockers),
         "audit_verdicts": audit.verdict_counts(),
         "audit_qc_verdicts": audit.qc_verdict_counts(),
         "open_items": list(audit.open_items),
@@ -118,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         "neural_status": training.neural_status,
         "passed": audit.passed
         and training.evaluation_status in {"EVALUATED", "INSUFFICIENT_EVIDENCE"},
+        "mapping_verified": audit.mapping_verified,
     }
 
     if args.json:
@@ -127,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"raw export      : {raw_path}")
     print(f"sessions        : {report['sessions']}  records: {report['records']}")
     print(f"audit status    : {audit.status}  {audit.verdict_counts()}")
+    print(f"mapping status  : {audit.mapping_status}  ({len(audit.mapping_blockers)} blockers)")
     print(f"evaluation      : {training.evaluation_status}  ({training.reason})")
     print("pipeline MAE    : "
           + ", ".join(
@@ -142,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"reports         : {out_dir}")
     print(f"evidence        : {EVIDENCE_LEVEL} / {ISOLATION_LEVEL}")
     print("gates           : " + ", ".join(NOT_GRANTED_GATES))
+    print(f"mapping verified: {audit.mapping_status} — engineering PASS does not verify the "
+          "94-field mapping")
     print("OVERALL:", "PASS" if report["passed"] else "FAIL")
     return 0 if report["passed"] else 1
 

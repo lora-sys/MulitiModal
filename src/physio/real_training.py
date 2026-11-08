@@ -5,15 +5,27 @@ This module therefore answers one engineering question: does the whole path —
 subject-level folds, fold-internal imputation, fold-internal scaling, masked-loss
 training, checkpoint reload and prediction — run end to end on real rows?
 
-Every number here is a **pipeline regression, not a model comparison**. With one
-test row per fold the three declared baselines cannot be ranked, and nothing in
-this module may be read as such. ``evaluate_regression`` is the authority on
-status and returns ``INSUFFICIENT_EVIDENCE`` for this sample size.
+Three things must not be read into any number produced here:
+
+1. **It is a pipeline regression, not a model comparison.** One test row per fold
+   cannot rank three baselines, and the module publishes per-model errors only as
+   evidence that each path ran.
+2. **Both declared targets are vendor proxies of the same family as a Pre
+   feature.** ``post_state`` is the Post-endpoint vendor fatigue index, and the
+   Pre features already contain the Pre-endpoint vendor fatigue index;
+   ``delta_vendor_fatigue`` is the difference of two vendor scores. The
+   regression is therefore near-autoregressive on a vendor score and says nothing
+   about predicting fatigue from independent physiology.
+3. **A zero in the design matrix is a masked placeholder**, never a measured or
+   imputed value. ``masked_placeholder_features`` names the columns where that
+   still happens after fold imputation.
+
+``evaluate_regression`` is the authority on status and returns
+``INSUFFICIENT_EVIDENCE`` for this sample size.
 """
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -31,7 +43,7 @@ from .dataset import (
     make_subject_folds,
 )
 from .evaluation import STATUS_EVALUATED, STATUS_INSUFFICIENT, evaluate_regression
-from .preprocessing import WindowScaler
+from .preprocessing import PreprocessingError, WindowScaler
 from .real_export import RealSession, session_feature_row, session_labels
 from .training import (
     TrainingConfig,
@@ -119,6 +131,7 @@ class RealTrainingReport:
     neural_status: str
     imputed_features: tuple[str, ...]
     feature_missing_counts: dict[str, int]
+    masked_placeholder_features: tuple[str, ...]
     evaluation_status: str
     evaluation_metrics: dict[str, float | None] = dataclass_field(default_factory=dict)
     notes: tuple[str, ...] = ()
@@ -142,6 +155,7 @@ class RealTrainingReport:
             "neural_status": self.neural_status,
             "imputed_features": list(self.imputed_features),
             "feature_missing_counts": dict(self.feature_missing_counts),
+            "masked_placeholder_features": list(self.masked_placeholder_features),
             "evaluation_status": self.evaluation_status,
             "evaluation_metrics": dict(self.evaluation_metrics),
             "folds": [fold.to_dict() for fold in self.folds],
@@ -164,60 +178,56 @@ def build_targets(
     raise RealTrainingError(f"unknown target mode {target!r}")
 
 
+@dataclass(frozen=True)
+class _ScalerInput:
+    """Adapter that lets the shared ``WindowScaler.fit`` consume a ``FeatureRow``.
+
+    ``WindowScaler.fit`` reads ``feature_names``, ``values`` and ``mask``. Reusing
+    it instead of reimplementing the statistics keeps one zero-variance and mask
+    policy in the codebase; a local copy is what previously let the companion
+    transform be forgotten.
+    """
+
+    feature_names: tuple[str, ...]
+    values: tuple[float, ...]
+    mask: tuple[bool, ...]
+
+
 def _fit_scaler(rows: Sequence[FeatureRow]) -> WindowScaler:
     """Fold-internal standardizer over **observed** entries only.
 
-    This matches ``WindowScaler.fit``: unobserved and imputed positions never
-    enter the statistics, so a training-fold median cannot silently shape the
-    scaling of a held-out subject.
+    Delegates to ``WindowScaler.fit``, which skips unobserved entries, so a
+    training-fold median cannot silently shape the scaling of a held-out subject.
     """
     if not rows:
         raise RealTrainingError("cannot fit a scaler without training rows")
-    names = rows[0].feature_names
-    size = len(names)
-    sums = [0.0] * size
-    squares = [0.0] * size
-    counts = [0] * size
-    for row in rows:
-        if row.feature_names != names:
-            raise RealTrainingError("training rows do not share one feature contract")
-        for index, (value, observed) in enumerate(
-            zip(row.values, row.observed_mask, strict=True)
-        ):
-            if not observed:
-                continue
-            number = float(value)
-            if not math.isfinite(number):
-                raise RealTrainingError("training row contains a non-finite value")
-            sums[index] += number
-            squares[index] += number * number
-            counts[index] += 1
-    means: list[float] = []
-    stds: list[float] = []
-    for index in range(size):
-        if counts[index] == 0:
-            means.append(0.0)
-            stds.append(1.0)
-            continue
-        mean = sums[index] / counts[index]
-        variance = max(squares[index] / counts[index] - mean * mean, 0.0)
-        std = math.sqrt(variance)
-        means.append(mean)
-        stds.append(std if std >= 1e-8 else 1.0)
-    return WindowScaler(
-        feature_names=names,
-        mean=tuple(means),
-        std=tuple(stds),
-        observed_counts=tuple(counts),
-    )
+    try:
+        return WindowScaler.fit(
+            [
+                _ScalerInput(row.feature_names, row.values, row.observed_mask)
+                for row in rows
+            ]
+        )
+    except PreprocessingError as exc:
+        raise RealTrainingError(f"fold scaler refused: {exc}") from exc
 
 
 def _scaled_row(row: FeatureRow, scaler: WindowScaler) -> FeatureRow:
+    """Standardize one row with the fold-internal scaler.
+
+    Observed and fold-imputed positions are normalized with the training-fold
+    mean and standard deviation. A position that is neither observed nor imputed
+    stays ``0.0`` with ``valid_mask`` false: that zero is a masked placeholder,
+    never a measurement, and ``masked_placeholder_features`` names the columns
+    where it still occurs.
+    """
     if row.feature_names != scaler.feature_names:
         raise RealTrainingError("row does not share the scaler feature contract")
     values = [
-        float(value) if valid else 0.0
-        for value, valid in zip(row.values, row.valid_mask, strict=True)
+        (float(value) - mean) / std if valid else 0.0
+        for value, valid, mean, std in zip(
+            row.values, row.valid_mask, scaler.mean, scaler.std, strict=True
+        )
     ]
     return FeatureRow(
         feature_names=row.feature_names,
@@ -434,6 +444,26 @@ def run_real_pre_experiment(
                 missing_by_feature[name] = missing_by_feature.get(name, 0) + 1
     imputed_features = tuple(sorted(missing_by_feature))
 
+    # After fold imputation some positions may still be invalid: the training
+    # fold had too few observations for a median. Those become 0.0 placeholders
+    # in the design matrix and must be named, never mistaken for measurements.
+    masked: set[str] = set()
+    for fold_index in range(folds.n_folds):
+        train_idx = [
+            index
+            for index in range(len(rows))
+            if folds.folds[subjects[index]] != fold_index and targets[index] is not None
+        ]
+        if not train_idx:
+            continue
+        imputer = FoldImputer.fit([rows[index] for index in train_idx])
+        for index in range(len(rows)):
+            transformed = imputer.transform(rows[index])
+            for name, valid in zip(transformed.feature_names, transformed.valid_mask, strict=True):
+                if not valid:
+                    masked.add(name)
+    masked_placeholder_features = tuple(sorted(masked))
+
     return RealTrainingReport(
         schema=REAL_TRAINING_SCHEMA_VERSION,
         status=STATUS_INSUFFICIENT if report.status == STATUS_INSUFFICIENT else STATUS_EVALUATED,
@@ -449,6 +479,7 @@ def run_real_pre_experiment(
         neural_status=_neural_status(fold_results),
         imputed_features=imputed_features,
         feature_missing_counts=dict(sorted(missing_by_feature.items())),
+        masked_placeholder_features=masked_placeholder_features,
         evaluation_status=report.status,
         evaluation_metrics=report.metrics,
         notes=tuple(notes),

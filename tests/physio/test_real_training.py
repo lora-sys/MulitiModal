@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from physio.dataset import IDENTITY_TRUSTED
+from physio.dataset import IDENTITY_TRUSTED, FeatureRow, FoldImputer
+from physio.preprocessing import WindowScaler
 from physio.real_export import import_real_export, session_feature_row
 from physio.real_training import (
     MODEL_MEAN,
@@ -18,6 +20,8 @@ from physio.real_training import (
     TARGET_DELTA_FATIGUE,
     TARGET_POST_STATE,
     RealTrainingError,
+    _fit_scaler,
+    _scaled_row,
     build_targets,
     run_real_pre_experiment,
 )
@@ -87,8 +91,6 @@ def test_mean_baseline_predicts_the_training_fold_mean():
 
 def test_scaler_is_fitted_on_training_rows_only():
     """A held-out subject's values must not enter the fold statistics."""
-    from physio.real_training import _fit_scaler
-
     sessions = _sessions()
     rows = [session_feature_row(session) for session in sessions]
     train = rows[:4]
@@ -105,20 +107,130 @@ def test_scaler_is_fitted_on_training_rows_only():
 
 
 def test_imputed_positions_never_enter_the_scaler_statistics():
-    from physio.dataset import FoldImputer
-    from physio.real_training import _fit_scaler
-
     sessions = _sessions()
     rows = [session_feature_row(session) for session in sessions]
+    # weight_kg is observed only in SYNTH-A and SYNTH-D; the other three sessions
+    # have no 体脂 record, so the training fold holds exactly two observations and
+    # the fold median must be their mean. Recomputing the expectation here keeps
+    # the test independent of FoldImputer's own arithmetic.
+    observed = sorted(
+        float(row.values[index])
+        for row in rows[:4]
+        for index, name in enumerate(row.feature_names)
+        if name == "weight_kg" and row.observed_mask[index]
+    )
+    assert len(observed) == 2
     imputer = FoldImputer.fit(rows[:4])
     imputed = [imputer.transform(row) for row in rows]
     scaler = _fit_scaler(imputed[:4])
+    weight_index = rows[0].feature_names.index("weight_kg")
     assert all(imputed[1].imputed_mask[index] for index in (0, 1))
     assert all(imputed[4].observed_mask[index] for index in (0, 1))
+    assert scaler.observed_counts[weight_index] == 2
+    assert scaler.mean[weight_index] == pytest.approx(sum(observed) / 2.0)
     assert scaler.observed_counts == tuple(
         sum(1 for row in imputed[:4] if row.observed_mask[index])
         for index in range(len(rows[0].feature_names))
     )
+
+
+def test_scaler_is_actually_applied_to_the_design_matrix():
+    """Regression guard: a fitted scaler must transform the values it is given."""
+    sessions = _sessions()
+    rows = [session_feature_row(session) for session in sessions]
+    scaler = _fit_scaler(rows[:4])
+    assert any(std != 1.0 for std in scaler.std)
+    scaled = [_scaled_row(row, scaler) for row in rows]
+    for raw, scaled_row in zip(rows, scaled, strict=True):
+        for index, name in enumerate(raw.feature_names):
+            if not raw.valid_mask[index]:
+                assert scaled_row.values[index] == 0.0
+                assert scaled_row.valid_mask[index] is False
+                continue
+            expected = (float(raw.values[index]) - scaler.mean[index]) / scaler.std[index]
+            assert scaled_row.values[index] == pytest.approx(expected), name
+
+
+def test_scaler_transform_is_not_the_identity():
+    sessions = _sessions()
+    rows = [session_feature_row(session) for session in sessions]
+    scaler = _fit_scaler(rows[:4])
+    changed = 0
+    for raw in rows:
+        scaled = _scaled_row(raw, scaler)
+        for index, valid in enumerate(raw.valid_mask):
+            if valid and raw.values[index] != scaled.values[index]:
+                changed += 1
+    assert changed, "the scaler must change at least one observed value"
+
+
+def test_scaler_statistics_come_from_the_training_fold_only():
+    sessions = _sessions()
+    rows = [session_feature_row(session) for session in sessions]
+    fold_scaler = _fit_scaler(rows[:4])
+    whole_scaler = _fit_scaler(rows)
+    assert fold_scaler.mean != whole_scaler.mean
+    assert fold_scaler.observed_counts != whole_scaler.observed_counts
+
+
+def test_masked_placeholder_features_are_named():
+    report = _report()
+    # A masked placeholder is a zero in the design matrix, never a measurement.
+    assert isinstance(report.masked_placeholder_features, tuple)
+    assert set(report.masked_placeholder_features) <= set(report.imputed_features)
+
+
+def test_a_feature_with_too_few_training_observations_stays_masked():
+    """Prove the placeholder path: one observation cannot found a fold median."""
+    names = ("a", "b")
+    cutoff = datetime(2026, 11, 1, tzinfo=UTC)
+
+    def row(session: str, values, observed, valid):
+        return FeatureRow(
+            feature_names=names,
+            values=values,
+            observed_mask=observed,
+            valid_mask=valid,
+            imputed_mask=(False, False),
+            imputation=("none", "none"),
+            subject_ref=f"subject:{session}",
+            session_id=session,
+            cutoff=cutoff,
+        )
+
+    rows = [
+        row("S1", (1.0, 5.0), (True, True), (True, True)),
+        row("S2", (0.0, 6.0), (False, True), (False, True)),
+    ]
+    imputer = FoldImputer.fit(rows)
+    transformed = [imputer.transform(item) for item in rows]
+    # "a" has a single observation in the training fold: below min_observed, so it
+    # is never imputed and stays invalid. Downstream that becomes a 0.0 that is a
+    # masked placeholder, not a measurement.
+    assert transformed[1].values[0] == 0.0
+    assert transformed[1].valid_mask[0] is False
+    assert transformed[1].imputed_mask[0] is False
+    # "b" is observed in both rows, so it is usable everywhere.
+    assert transformed[1].valid_mask[1] is True
+
+
+def test_fold_scaler_refuses_empty_training_rows():
+    with pytest.raises(RealTrainingError, match="without training rows"):
+        _fit_scaler([])
+
+
+def test_fold_scaler_delegates_to_the_shared_window_scaler():
+    """One zero-variance and mask policy, not a second copy of it."""
+    from physio.real_training import _ScalerInput
+
+    rows = [session_feature_row(session) for session in _sessions()]
+    delegated = _fit_scaler(rows[:4])
+    direct = WindowScaler.fit(
+        [_ScalerInput(row.feature_names, row.values, row.observed_mask) for row in rows[:4]]
+    )
+    assert delegated.mean == direct.mean
+    assert delegated.std == direct.std
+    assert delegated.observed_counts == direct.observed_counts
 
 
 def test_ridge_is_fitted_on_the_training_fold_only():
