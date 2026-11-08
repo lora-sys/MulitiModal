@@ -227,3 +227,14 @@ def test_report_serialises_to_json():
     assert payload["evaluation_status"] == STATUS_INSUFFICIENT
     assert payload["identity_trust"] == "SHARED_ACCOUNT_UNKNOWN"
     assert len(payload["folds"]) == 5
+
+
+def test_fold_checkpoint_directory_is_fold_scoped_without_out_dir():
+    """Without an explicit out_dir the fallback must still be per-fold."""
+    from physio.real_training import _fold_checkpoint_dir
+
+    default_dir = _fold_checkpoint_dir(None, 0)
+    assert default_dir.name == "fold-0"
+    assert "physio-real-data" in default_dir.parts
+    assert _fold_checkpoint_dir(None, 3).name == "fold-3"
+    assert _fold_checkpoint_dir(Path("/tmp/x"), 2) == Path("/tmp/x/fold-2")

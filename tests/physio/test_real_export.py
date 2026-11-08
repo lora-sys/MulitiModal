@@ -11,8 +11,10 @@ from physio.real_export import (
     QC_BP_DELTA_ANOMALY,
     QC_BRAIN_SELECTION_NOT_RECOVERABLE,
     QC_CODED_FIELD_SEMANTICS_UNVERIFIED,
+    QC_DECLARED_UNUSABLE,
     QC_IDENTITY_SHARED,
     QC_INVALID_VALUE,
+    QC_MISSING_MODULE,
     QC_POINT_STREAM_EXCLUDED,
     QC_SNAPSHOT_ENDPOINT,
     QC_STATIC_PROFILE_COLLISION,
@@ -22,6 +24,7 @@ from physio.real_export import (
     contract_coverage,
     import_real_export,
     load_real_records,
+    reconcile_reference_contract,
     session_feature_row,
     session_labels,
 )
@@ -134,8 +137,65 @@ def test_point_stream_rows_and_brain_selection_are_reported():
     session = _session("SYNTH-A")
     assert QC_POINT_STREAM_EXCLUDED in session.issue_codes()
     assert QC_BRAIN_SELECTION_NOT_RECOVERABLE in session.issue_codes()
-    assert session.eeg_record_id == "9011"
-    assert session.eeg_values["brain_overall"] == 32.0
+    # Two 脑波 records and no declared selection rule: nothing is emitted.
+    assert session.eeg_record_id == ""
+    assert session.eeg_values == {}
+    assert session.module_present("eeg") is True
+
+
+def test_single_brain_record_is_emitted_and_auditable():
+    assert _session("SYNTH-E").eeg_record_id == "9405"
+    assert _session("SYNTH-E").eeg_values["brain_overall"] == 28.0
+    assert _session("SYNTH-E").eeg_values["sample_points"] == 400.0
+    assert _session("SYNTH-B").eeg_record_id == ""
+
+
+def test_missing_module_families_are_reported_at_session_level():
+    session = _session("SYNTH-B")
+    assert QC_MISSING_MODULE in session.issue_codes()
+    for module in ("body", "tcm", "eeg"):
+        assert session.module_present(module) is False
+    full = _session("SYNTH-E")
+    assert QC_MISSING_MODULE not in full.issue_codes()
+    for module in ("bp", "health", "body", "tcm", "eeg"):
+        assert full.module_present(module) is True
+
+
+def test_columns_with_no_recoverable_meaning_are_reported():
+    for session in _sessions():
+        assert QC_DECLARED_UNUSABLE in session.issue_codes()
+        details = [i.detail for i in session.issues if i.code == QC_DECLARED_UNUSABLE]
+        assert any("fatigue_level" in detail for detail in details)
+
+
+def test_contract_reconciliation_abstains_when_no_rule_is_declared():
+    """A derivable label the reference excludes must not be claimed admissible."""
+    labels = session_labels(_session("SYNTH-C"))
+    assert labels.mask["y_delta_vendor_health"] is True
+    assert labels.values["y_delta_vendor_health"] == -1.0
+    admitted = (
+        "y_delta_sbp",
+        "y_delta_dbp",
+        "y_delta_hr",
+        "y_delta_spo2",
+        "y_delta_micro",
+        "y_delta_vendor_fatigue",
+    )
+    reconciled = reconcile_reference_contract(labels, admitted)
+    assert reconciled.mask["y_delta_vendor_health"] is False
+    assert reconciled.abstained == ("y_delta_vendor_health",)
+    assert set(reconciled.available) == set(admitted)
+    assert "exclusion_rule_not_recoverable" in reconciled.reasons["y_delta_vendor_health"]
+    # The derived value survives for audit; only admissibility changes.
+    assert reconciled.values["y_delta_vendor_health"] == -1.0
+
+
+def test_contract_reconciliation_keeps_labels_the_reference_admits():
+    labels = session_labels(_session("SYNTH-A"))
+    admitted = ("y_delta_sbp", "y_delta_vendor_health")
+    reconciled = reconcile_reference_contract(labels, admitted)
+    assert set(reconciled.available) >= set(admitted)
+    assert reconciled.mask["y_delta_vendor_health"] is True
 
 
 def test_coded_gender_is_preserved_without_a_semantic_claim():

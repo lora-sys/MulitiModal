@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import csv
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -105,6 +105,7 @@ MODULE_METRIC_COLUMNS: dict[str, tuple[tuple[str, str, str], ...]] = {
 STATIC_MODULE_COLUMNS: dict[str, tuple[tuple[str, str, str], ...]] = {
     "body": (
         ("weight_kg", "weight_kg", "weight_kg"),
+        ("body_fat_pct", "body_fat_percentage", "body_fat_pct"),
         ("bmi", "bmi", "bmi"),
     ),
 }
@@ -180,6 +181,35 @@ REQUIRED_RAW_COLUMNS: tuple[str, ...] = (
     "measured_at",
 )
 
+#: Every raw column the mapping declares. A column present in an export but
+#: absent here is reported as unmapped rather than silently dropped.
+DECLARED_RAW_COLUMNS: frozenset[str] = frozenset(
+    REQUIRED_RAW_COLUMNS
+    + ("is_complete", "fatigue_level")
+    + tuple(column for module in MODULE_METRIC_COLUMNS.values() for column, _, _ in module)
+    + tuple(
+        column
+        for module in STATIC_MODULE_COLUMNS.values()
+        for column, _, _ in module
+    )
+    + tuple(column for _module, column, _reference in CODED_FIELDS)
+    + ("constitution", "health_index")
+    + (
+        "brain_overall",
+        "brain_avg_meditation",
+        "brain_duration",
+        "sample_points",
+    )
+)
+
+#: Raw columns declared as carrying no recoverable meaning in this contract.
+DECLARED_UNUSABLE_RAW_COLUMNS: tuple[str, ...] = ("fatigue_level",)
+
+#: Module families whose absence is a session-level QC observation. ``eeg_points``
+#: is excluded: it is a point stream that is never a feature or label, so its
+#: absence is reported only when it is present (``QC_POINT_STREAM_EXCLUDED``).
+REPORTED_MODULE_FAMILIES: tuple[str, ...] = ("bp", "health", "body", "tcm", "eeg")
+
 _UNIT_OVERRIDES: dict[str, str] = {
     "sys": "mmHg",
     "dia": "mmHg",
@@ -191,6 +221,7 @@ _UNIT_OVERRIDES: dict[str, str] = {
     "fatigue_index": "index",
     "vendor_score": "index",
     "weight_kg": "kg",
+    "body_fat_pct": "%",
     "bmi": "kg/m2",
     "sex": "",
 }
@@ -209,6 +240,8 @@ QC_IDENTITY_SHARED = "shared_account_identity"
 QC_STATIC_PROFILE_COLLISION = "static_profile_collision"
 QC_BRAIN_SELECTION_NOT_RECOVERABLE = "brain_record_selection_not_recoverable"
 QC_CODED_FIELD_SEMANTICS_UNVERIFIED = "coded_field_semantics_unverified"
+QC_UNMAPPED_RAW_COLUMN = "unmapped_raw_column"
+QC_DECLARED_UNUSABLE = "declared_unusable_raw_column"
 
 
 class RealExportError(ValueError):
@@ -325,10 +358,23 @@ class RealSession:
     def issue_codes(self) -> tuple[str, ...]:
         return tuple(sorted({issue.code for issue in self.issues}))
 
+    def module_present(self, module: str) -> bool:
+        """Whether the export carries records for a module family.
+
+        This is record presence, not value emission: a family can be present and
+        still yield no value when the selection rule is not recoverable.
+        """
+        return any(record.module == module for record in self.records)
+
 
 @dataclass(frozen=True)
 class RealSessionLabels:
-    """Reconstructed reference labels plus every admission reason."""
+    """Reconstructed reference labels plus every admission reason.
+
+    ``available`` answers *what the raw records can produce*. It is deliberately
+    not a claim about what the frozen reference contract admits; that view is
+    produced by ``reconcile_reference_contract``.
+    """
 
     session_id: str
     values: Mapping[str, float | None]
@@ -337,6 +383,7 @@ class RealSessionLabels:
     excluded_bp_labels: tuple[str, ...]
     cross_module_hr: Mapping[str, float | None]
     issues: tuple[RealQCIssue, ...] = ()
+    abstained: tuple[str, ...] = ()
 
     @property
     def available(self) -> tuple[str, ...]:
@@ -350,6 +397,7 @@ class RealSessionLabels:
             "reasons": dict(self.reasons),
             "excluded_bp_labels": list(self.excluded_bp_labels),
             "cross_module_hr": dict(self.cross_module_hr),
+            "abstained": list(self.abstained),
         }
 
 
@@ -567,9 +615,8 @@ def _static_values(
 
 
 def _static_profile_key(static_values: Mapping[str, float]) -> tuple[float, ...]:
-    return tuple(
-        round(float(static_values.get(name, 0.0)), 6) for name in sorted(REAL_PRE_FEATURE_NAMES)
-    )
+    """Project over the static values actually held, never over a nominal feature list."""
+    return tuple(round(float(value), 6) for value in sorted(static_values.values()))
 
 
 def _draft_session(session_id: str, records: Sequence[RealRecord]) -> RealSessionDraft:
@@ -637,8 +684,8 @@ def _draft_session(session_id: str, records: Sequence[RealRecord]) -> RealSessio
                 draft.tcm_values[column] = value
 
     eeg_records = _module_records(ordered, "eeg")
-    if eeg_records:
-        selected = eeg_records[-1]
+    if len(eeg_records) == 1:
+        selected = eeg_records[0]
         draft.eeg_record_id = selected.record_id
         for raw_column, feature_name in (
             ("brain_overall", "brain_overall"),
@@ -649,15 +696,17 @@ def _draft_session(session_id: str, records: Sequence[RealRecord]) -> RealSessio
             number = _float(selected.value(raw_column))
             if number is not None:
                 draft.eeg_values[feature_name] = number
-        if len(eeg_records) > 1:
-            draft.issues.append(
-                RealQCIssue(
-                    QC_BRAIN_SELECTION_NOT_RECOVERABLE,
-                    f"{len(eeg_records)} 脑波 records are present but the reference selection "
-                    "rule is not recoverable from this extract",
-                    session_id,
-                )
+    elif eeg_records:
+        # More than one record and no declared selection rule: emit nothing rather
+        # than publish a value chosen by an undeclared "latest wins" heuristic.
+        draft.issues.append(
+            RealQCIssue(
+                QC_BRAIN_SELECTION_NOT_RECOVERABLE,
+                f"{len(eeg_records)} 脑波 records are present but the reference selection "
+                "rule is not recoverable from this extract; no brain value is emitted",
+                session_id,
             )
+        )
 
     point_records = _module_records(ordered, "eeg_points")
     if point_records:
@@ -669,6 +718,40 @@ def _draft_session(session_id: str, records: Sequence[RealRecord]) -> RealSessio
                 session_id,
             )
         )
+
+    for module in REPORTED_MODULE_FAMILIES:
+        if _module_records(ordered, module):
+            continue
+        if module in ENDPOINT_MODULES:
+            continue
+        draft.issues.append(
+            RealQCIssue(
+                QC_MISSING_MODULE,
+                f"module family {module!r} has no records in this session",
+                session_id,
+            )
+        )
+
+    present_columns = {column for record in ordered for column in record.fields}
+    unmapped = sorted(present_columns - DECLARED_RAW_COLUMNS)
+    if unmapped:
+        draft.issues.append(
+            RealQCIssue(
+                QC_UNMAPPED_RAW_COLUMN,
+                "raw columns with no declared mapping: " + ",".join(unmapped),
+                session_id,
+            )
+        )
+    for column in DECLARED_UNUSABLE_RAW_COLUMNS:
+        if column in present_columns:
+            draft.issues.append(
+                RealQCIssue(
+                    QC_DECLARED_UNUSABLE,
+                    f"raw column {column!r} is declared but carries no recoverable meaning "
+                    "in this contract; it is excluded from every feature and label",
+                    session_id,
+                )
+            )
     for _module, raw_column, reference_column in CODED_FIELDS:
         for record in _module_records(ordered, _module):
             value = record.value(raw_column)
@@ -942,6 +1025,43 @@ def session_post_state(session: RealSession) -> float | None:
     if measurement is None or not measurement.valid or measurement.value is None:
         return None
     return float(measurement.value) / 100.0
+
+
+def reconcile_reference_contract(
+    labels: RealSessionLabels, reference_mask: Iterable[str]
+) -> RealSessionLabels:
+    """Apply the project ABSTAIN rule to labels the reference contract excludes.
+
+    A delta the raw records can produce but the frozen reference contract does
+    not admit is marked inadmissible when no exclusion rule is declared
+    (``规则缺项一律 ABSTAIN``). The derived value is preserved for audit; only
+    admissibility changes, and the reason names the missing rule instead of
+    inventing one.
+    """
+    declared = set(reference_mask)
+    mask = dict(labels.mask)
+    reasons = dict(labels.reasons)
+    values = dict(labels.values)
+    abstained: list[str] = []
+    for key, admitted in labels.mask.items():
+        if not admitted or key in declared:
+            continue
+        mask[key] = False
+        reasons[key] = (
+            "exclusion_rule_not_recoverable: the reference contract excludes this label "
+            "and no exclusion rule is declared, so the label is not admitted"
+        )
+        abstained.append(key)
+    return RealSessionLabels(
+        session_id=labels.session_id,
+        values=values,
+        mask=mask,
+        reasons=reasons,
+        excluded_bp_labels=labels.excluded_bp_labels,
+        cross_module_hr=labels.cross_module_hr,
+        issues=labels.issues,
+        abstained=tuple(sorted(abstained)),
+    )
 
 
 def import_real_export(

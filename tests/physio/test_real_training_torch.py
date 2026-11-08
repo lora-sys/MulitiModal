@@ -67,3 +67,14 @@ def test_neural_mae_is_reported_without_a_quality_claim():
     report = _report()
     assert report.model_mae[MODEL_NEURAL] is not None
     assert "INSUFFICIENT_EVIDENCE" in report.to_dict()["evaluation_status"]
+
+
+def test_each_fold_owns_its_checkpoint_directory(tmp_path):
+    report = run_real_pre_experiment(
+        import_real_export(FIXTURE), out_dir=tmp_path
+    )
+    assert report.neural_status == NEURAL_COMPLETED
+    checkpoints = sorted(tmp_path.rglob("model_state.pt"))
+    assert len(checkpoints) == len(report.folds)
+    assert len({path.parent.name for path in checkpoints}) == len(report.folds)
+    assert not (tmp_path / "model_state.pt").exists()

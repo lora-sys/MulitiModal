@@ -41,7 +41,7 @@ Pre/Post 端点与 `y_delta_*` 标签；参考训练集只用于核对，不作�
 5. 时间戳为文件内裸本地时间：按 UTC 读取，**只用相对顺序与差值**，因此偏移不可能改变任何标签；
    裸时间戳仍登记为 `naive_timestamp` QC。
 
-该规则由 5 条真实 Session 的参考训练集逐字段反推并验证（148 项 `match`）。
+该规则由 5 条真实 Session 的参考训练集逐字段反推并验证（190 项 `match`、0 项值级 `mismatch`）。
 
 ## 4. 冻结的标签契约
 
@@ -56,9 +56,11 @@ Pre/Post 端点与 `y_delta_*` 标签；参考训练集只用于核对，不作�
 | `fatigue_index` | `fatigue_index` | `y_delta_vendor_fatigue` | 1 |
 | `vendor_health_index` | `vendor_score` | `y_delta_vendor_health` | 1 |
 
-- `REFERENCE_LABEL_KEYS` 是 7 个键的固定集合，参考质量报告与训练集一致列出；
-  可导出但不在契约内的 `y_delta_rr` 记为 `outside_reference_label_contract`，
-  既不静默纳入也不静默丢弃。
+- `REFERENCE_LABEL_KEYS` 是 7 个键的固定集合，参考质量报告与训练集一致列出。
+- `session_labels(...).available` 只回答"原始记录能产出什么"；
+  **契约准入**视图由 `reconcile_reference_contract` 产生：参考契约排除、
+  且未声明排除规则的标签一律 `ABSTAIN`（`规则缺项一律 ABSTAIN`），
+  派生值保留供审计，只改准入。
 - `y_pri` 恒为 `None` / 不可用，任何路径都不得训练它。
 - 新增规范指标 `microcirculation_index`、`vendor_health_index` 均为**厂商代理分**，
   语义与既有的 `fatigue_index` / `stress_index` 同级，不是独立或临床标签。
@@ -74,7 +76,8 @@ Pre/Post 端点与 `y_delta_*` 标签；参考训练集只用于核对，不作�
 - `sex` 原始码 0/1 与规范 `sex` 指标的语义类别不匹配：原样保留用于核对，
   `coded_field_semantics_unverified`，**不派生任何特征**。
 - Pre 特征契约 = 冻结的 `physio-input-pre-only-v0`：本抽取集实现
-  `body_pre` 2/12（`weight_kg`、`bmi`）+ `physio_pre` 7/7 = 10/19。
+  `body_pre` 2/12（`weight_kg`、`bmi`）+ `physio_pre` 7/7 = **9/19**。
+- 多 `脑波` 记录且无选择规则时**不输出任何脑波值**（不使用未声明的"取最后一条"启发式）。
 - 体成分其余字段、年龄、身高不在本脱敏抽取集内，一律 `not_recoverable`。
 
 ## 6. 不可从抽取集还原的决策

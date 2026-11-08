@@ -128,12 +128,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"sessions        : {report['sessions']}  records: {report['records']}")
     print(f"audit status    : {audit.status}  {audit.verdict_counts()}")
     print(f"evaluation      : {training.evaluation_status}  ({training.reason})")
-    print("model MAE       : "
+    print("pipeline MAE    : "
           + ", ".join(
               f"{name}={value:.4f}" if value is not None else f"{name}=n/a"
               for name, value in training.model_mae.items()
-          ))
+          )
+          + "  <- pipeline regression only, NOT a model comparison")
     print(f"neural path     : {training.neural_status}")
+    print("model ranking   : not reported; "
+          f"{training.n_sessions} sessions with one test row per fold cannot rank models")
     for item in audit.open_items:
         print(f"OPEN ITEM       : {item}")
     print(f"reports         : {out_dir}")

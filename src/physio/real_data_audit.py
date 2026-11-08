@@ -31,6 +31,7 @@ from .real_export import (
     RealQCIssue,
     RealSession,
     RealSessionLabels,
+    reconcile_reference_contract,
     session_feature_row,
     session_labels,
 )
@@ -330,22 +331,10 @@ def _compare(
     return AuditFinding(session_id, name, VERDICT_MISMATCH, reference, str(reconstructed), note)
 
 
-def _reconstructed_qc_status(session: RealSession, labels: RealSessionLabels) -> str:
-    modules_present = {
-        "bp": bool(session.endpoints.get("bp")),
-        "health": bool(session.endpoints.get("health")),
-        "body": bool(session.static_values),
-        "tcm": bool(session.tcm_values),
-        "eeg": bool(session.eeg_values),
-    }
-    all_valid = all(
-        measurement.valid
-        for module in session.endpoints.values()
-        for endpoint in module.values()
-        for measurement in endpoint.measurements
-    )
-    complete = all(modules_present.values()) and all_valid
-    return QC_STATUS_COMPLETE if complete else QC_STATUS_INCOMPLETE
+def _expected_reference_qc_status(qc_row: Mapping[str, str] | None) -> str:
+    """What the reference qc_status should be, given its own 缺失字段 column."""
+    missing = str((qc_row or {}).get("缺失字段", "")).strip()
+    return QC_STATUS_INCOMPLETE if missing not in ("", "none") else QC_STATUS_COMPLETE
 
 
 def _audit_session(
@@ -456,30 +445,29 @@ def _audit_session(
             )
 
     reference_mask = set(_split_keys(reference.get("label_masks", "")))
-    reconstructed_mask = {key for key in REFERENCE_LABEL_KEYS if labels.mask.get(key)}
-    if reference_mask == reconstructed_mask:
-        findings.append(
-            _compare(
-                session_id,
-                "label_masks",
-                ",".join(sorted(reference_mask)),
-                ",".join(sorted(reconstructed_mask)),
-                note="compared on the declared reference label contract",
-            )
+    contract = reconcile_reference_contract(labels, reference_mask)
+    reconstructed_mask = {key for key in REFERENCE_LABEL_KEYS if contract.mask.get(key)}
+    findings.append(
+        _compare(
+            session_id,
+            "label_masks",
+            ",".join(sorted(reference_mask)),
+            ",".join(sorted(reconstructed_mask)),
+            note="compared on the declared reference label contract after ABSTAIN reconciliation",
         )
-    else:
-        difference = sorted(reconstructed_mask - reference_mask)
+    )
+    if contract.abstained:
         findings.append(
             AuditFinding(
                 session_id,
-                "label_masks",
-                VERDICT_MISMATCH,
+                "abstained_labels",
+                VERDICT_EXPLAINED,
                 ",".join(sorted(reference_mask)),
-                ",".join(sorted(reconstructed_mask)),
-                "the reconstruction admits "
-                + ",".join(difference)
-                + " which both reference documents exclude; the exclusion rule is not stated "
-                "in the provided quality report",
+                ",".join(sorted(contract.abstained)),
+                "the raw records can produce "
+                + ",".join(sorted(contract.abstained))
+                + " but the reference contract excludes them and no exclusion rule is declared, "
+                "so the labels are not admitted (规则缺项一律 ABSTAIN)",
             )
         )
 
@@ -629,12 +617,11 @@ def _audit_session(
             session_id,
             "qc_status",
             VERDICT_MATCH
-            if reference.get("qc_status", "") == _reconstructed_qc_status(session, labels)
+            if reference.get("qc_status", "") == _expected_reference_qc_status(qc_row)
             else VERDICT_MISMATCH,
             reference.get("qc_status", ""),
-            _reconstructed_qc_status(session, labels),
-            "declared rule: COMPLETE only when every module family is present and every "
-            "endpoint measurement is usable",
+            _expected_reference_qc_status(qc_row),
+            "the reference qc_status is checked against its own 缺失字段 column",
         )
     )
 
@@ -677,7 +664,8 @@ def _qc_cross_checks(
     completed = sum(1 for record in session.records if record.value("is_complete") == "是")
     codes = session.issue_codes() + extra_codes
     qc_mask = set(_split_keys((qc_row or {}).get("label_masks", "")))
-    reference_admissible = {key for key in REFERENCE_LABEL_KEYS if labels.mask.get(key)}
+    contract_view = reconcile_reference_contract(labels, qc_mask)
+    reference_admissible = {key for key in REFERENCE_LABEL_KEYS if contract_view.mask.get(key)}
     rr_usable = False
     for phase in (PHASE_PRE, PHASE_POST):
         endpoint = session.endpoints.get("health", {}).get(phase)
@@ -692,9 +680,9 @@ def _qc_cross_checks(
         else ""
     )
     missing_fields = set(_split_keys((qc_row or {}).get("缺失字段", "")))
-    has_body = bool(session.static_values)
-    has_tcm = bool(session.tcm_values)
-    has_eeg = bool(session.eeg_values)
+    has_body = session.module_present("body")
+    has_tcm = session.module_present("tcm")
+    has_eeg = session.module_present("eeg")
 
     def check(
         item: str,
@@ -798,23 +786,34 @@ def _qc_cross_checks(
             VERDICT_OBSERVATION,
             "the reconstruction adds a cross-module heart-rate check the reference omits",
         ),
+        check(
+            "module_family_coverage",
+            "not reported by the reference QC",
+            ",".join(
+                module
+                for module in ("bp", "health", "body", "tcm", "eeg")
+                if session.module_present(module)
+            ),
+            VERDICT_OBSERVATION,
+            "module families the provided extract actually carries",
+        ),
     ]
     return tuple(checks)
 
 
 def _open_items(findings: Sequence[AuditFinding]) -> tuple[str, ...]:
+    """Every unresolved difference, whether a value mismatch or an ABSTAIN."""
     items: list[str] = []
     for finding in findings:
-        if finding.verdict != VERDICT_MISMATCH:
-            continue
-        if finding.field in CONTRACT_FIELDS:
-            items.append(
-                f"{finding.session_id or 'export'}: {finding.field} — {finding.note}"
-            )
-        else:
+        if finding.verdict == VERDICT_MISMATCH:
             items.append(
                 f"{finding.session_id or 'export'}: {finding.field} — reconstructed "
                 f"{finding.reconstructed!r} but the reference is {finding.reference!r}"
+                + (f" ({finding.note})" if finding.note else "")
+            )
+        elif finding.field == "abstained_labels":
+            items.append(
+                f"{finding.session_id or 'export'}: abstained_labels — {finding.note}"
             )
     return tuple(items)
 
@@ -856,9 +855,10 @@ def audit_real_export(
     value_failures = [
         finding for finding in mismatches if finding.field not in CONTRACT_FIELDS
     ]
+    abstained = [finding for finding in findings if finding.field == "abstained_labels"]
     if value_failures:
         status = STATUS_FAILED
-    elif mismatches:
+    elif mismatches or abstained or _open_items(findings):
         status = STATUS_VERIFIED_WITH_EXCEPTIONS
     else:
         status = STATUS_VERIFIED

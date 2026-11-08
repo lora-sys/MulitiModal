@@ -123,6 +123,18 @@ class CheckResult:
         }
 
 
+def _failure_detail(exc: BaseException) -> str:
+    """Name the failure precisely enough to tell a mapping error from a
+    transient environment error, without dumping a whole traceback."""
+    kind = f"{type(exc).__module__}.{type(exc).__qualname__}"
+    frame = exc.__traceback__
+    location = ""
+    while frame is not None:
+        location = f"{Path(frame.tb_frame.f_code.co_filename).name}:{frame.tb_lineno}"
+        frame = frame.tb_next
+    return f"{kind}: {exc} (raised at {location})"
+
+
 def _ts(seconds: int) -> str:
     from datetime import UTC, datetime, timedelta
 
@@ -241,7 +253,7 @@ def _protocol_equivalence_check() -> CheckResult:
             "device/service/offline produce identical canonical measurements and timestamps",
         )
     except Exception as exc:  # noqa: BLE001 - acceptance reports, never crashes
-        return CheckResult("protocol_equivalence", "#96", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("protocol_equivalence", "#96", False, _failure_detail(exc))
 
 
 def _replay_equivalence_check() -> CheckResult:
@@ -268,7 +280,7 @@ def _replay_equivalence_check() -> CheckResult:
             "same cutoff and events yield identical window features after out-of-order replay",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("replay_equivalence", "#97", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("replay_equivalence", "#97", False, _failure_detail(exc))
 
 
 def _negative_path_check() -> CheckResult:
@@ -296,7 +308,7 @@ def _negative_path_check() -> CheckResult:
             "unknown fields/units, SpO2 zero, rr zero, invalid HR/BP and non-numeric rejected",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("field_qc_negatives", "#96", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("field_qc_negatives", "#96", False, _failure_detail(exc))
 
 
 def _model_gate_check() -> CheckResult:
@@ -355,7 +367,7 @@ def _model_gate_check() -> CheckResult:
             "unbound/tampered artifacts never score; stale input abstains",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("model_output_gate", "#97", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("model_output_gate", "#97", False, _failure_detail(exc))
 
 
 def _artifact_binding_check() -> CheckResult:
@@ -417,7 +429,7 @@ def _artifact_binding_check() -> CheckResult:
             "missing, tampered or unvalidated artifacts are refused before scoring",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("artifact_binding_gate", "#97", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("artifact_binding_gate", "#97", False, _failure_detail(exc))
 
 
 def _recommendation_gate_check() -> CheckResult:
@@ -446,7 +458,7 @@ def _recommendation_gate_check() -> CheckResult:
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
             "recommendation_safety_gate", "#99", False,
-            f"{type(exc).__name__}: {exc}",
+            _failure_detail(exc),
         )
 
 
@@ -481,7 +493,7 @@ def _response_label_check() -> CheckResult:
             "Post-Pre delta is signed observation only; y_pri stays null/unavailable",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("response_label_gate", "#98", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("response_label_gate", "#98", False, _failure_detail(exc))
 
 
 def _approved_registry() -> KnowledgeRegistry:
@@ -561,7 +573,7 @@ def _tcm_sidecar_check() -> CheckResult:
             "device labels map only to approved knowledge; missing review/license is excluded",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("tcm_sidecar_gate", "#100", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("tcm_sidecar_gate", "#100", False, _failure_detail(exc))
 
 
 def _integration_boundary_check(repo_root: Path) -> CheckResult:
@@ -590,7 +602,7 @@ def _integration_boundary_check(repo_root: Path) -> CheckResult:
             "TCM has no Mendeley import",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("integration_boundaries", "#95", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("integration_boundaries", "#95", False, _failure_detail(exc))
 
 
 def _legacy_import_gate() -> CheckResult:
@@ -649,7 +661,7 @@ def _legacy_import_gate() -> CheckResult:
             "snapshot/completed resolves deterministically; one record cannot be Pre and Post",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("legacy_export_gate", "#96", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("legacy_export_gate", "#96", False, _failure_detail(exc))
 
 
 def _dataset_label_gate() -> CheckResult:
@@ -718,7 +730,7 @@ def _dataset_label_gate() -> CheckResult:
             "fold imputation is masked; y_delta requires independent valid endpoints; y_pri null",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("dataset_label_gate", "#98", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("dataset_label_gate", "#98", False, _failure_detail(exc))
 
 
 def _training_refusal_gate() -> CheckResult:
@@ -758,7 +770,7 @@ def _training_refusal_gate() -> CheckResult:
         )
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
-            "training_refusal_gate", "#97", False, f"{type(exc).__name__}: {exc}"
+            "training_refusal_gate", "#97", False, _failure_detail(exc)
         )
 
 
@@ -779,7 +791,7 @@ def _evaluation_gate() -> CheckResult:
         )
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
-            "evaluation_evidence_gate", "#95", False, f"{type(exc).__name__}: {exc}"
+            "evaluation_evidence_gate", "#95", False, _failure_detail(exc)
         )
 
 
@@ -832,7 +844,7 @@ def _real_export_mapping_gate(repo_root: Path) -> CheckResult:
         )
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
-            "real_export_mapping", "#102", False, f"{type(exc).__name__}: {exc}"
+            "real_export_mapping", "#102", False, _failure_detail(exc)
         )
 
 
@@ -841,6 +853,7 @@ def _real_data_audit_gate(repo_root: Path) -> CheckResult:
     try:
         from physio.real_data_audit import (
             STATUS_VERIFIED,
+            STATUS_VERIFIED_WITH_EXCEPTIONS,
             VERDICT_MISMATCH,
             audit_real_export,
             load_reference_rows,
@@ -855,7 +868,8 @@ def _real_data_audit_gate(repo_root: Path) -> CheckResult:
             load_reference_rows(fixtures / "physio-legacy-qc-synthetic.csv"),
         )
         counts = audit.verdict_counts()
-        assert audit.status == STATUS_VERIFIED
+        assert audit.status in {STATUS_VERIFIED, STATUS_VERIFIED_WITH_EXCEPTIONS}
+        assert audit.passed is True
         assert counts[VERDICT_MISMATCH] == 0
         assert counts["match"] > 0 and counts["explained"] > 0 and counts["not_recoverable"] > 0
         comparable = [c for c in audit.qc_cross_checks if c.verdict != "observation"]
@@ -878,7 +892,7 @@ def _real_data_audit_gate(repo_root: Path) -> CheckResult:
             "tampered reference value fails the audit instead of being repaired",
         )
     except Exception as exc:  # noqa: BLE001
-        return CheckResult("real_data_audit", "#102", False, f"{type(exc).__name__}: {exc}")
+        return CheckResult("real_data_audit", "#102", False, _failure_detail(exc))
 
 
 def _real_training_gate(repo_root: Path) -> CheckResult:
@@ -911,7 +925,7 @@ def _real_training_gate(repo_root: Path) -> CheckResult:
         )
     except Exception as exc:  # noqa: BLE001
         return CheckResult(
-            "real_training_pipeline", "#102", False, f"{type(exc).__name__}: {exc}"
+            "real_training_pipeline", "#102", False, _failure_detail(exc)
         )
 
 

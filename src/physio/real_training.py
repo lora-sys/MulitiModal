@@ -1,13 +1,14 @@
 """Real-data pipeline pre-experiment (#102).
 
 Five de-identified sessions cannot support any performance or clinical claim.
-This module therefore answers engineering questions only: does the whole path —
+This module therefore answers one engineering question: does the whole path —
 subject-level folds, fold-internal imputation, fold-internal scaling, masked-loss
-training, checkpoint reload and prediction — run end to end on real rows, and how
-do the three declared models rank on those rows?
+training, checkpoint reload and prediction — run end to end on real rows?
 
-Every number here is a local pipeline regression. ``evaluate_regression`` is the
-authority on status and returns ``INSUFFICIENT_EVIDENCE`` for this sample size.
+Every number here is a **pipeline regression, not a model comparison**. With one
+test row per fold the three declared baselines cannot be ranked, and nothing in
+this module may be read as such. ``evaluate_regression`` is the authority on
+status and returns ``INSUFFICIENT_EVIDENCE`` for this sample size.
 """
 
 from __future__ import annotations
@@ -353,7 +354,7 @@ def run_real_pre_experiment(
             neural_status = NEURAL_REFUSED
             refusal = str(exc)
         else:
-            fold_dir = Path(out_dir) / f"fold-{fold_index}" if out_dir else None
+            fold_dir = _fold_checkpoint_dir(out_dir, fold_index)
             try:
                 manifest = train_realtime_smoke(
                     train_rows,
@@ -374,11 +375,7 @@ def run_real_pre_experiment(
                 final_loss = manifest.final_loss
                 predictions[MODEL_NEURAL] = predict_masked(
                     test_rows,
-                    checkpoint=(
-                        Path(fold_dir) / "model_state.pt"
-                        if fold_dir
-                        else Path("runs/physio-smoke/model_state.pt")
-                    ),
+                    checkpoint=fold_dir / "model_state.pt",
                     scaler=scaler,
                     hidden_dim=CONFIG.hidden_dim,
                     fusion_dim=CONFIG.fusion_dim,
@@ -456,6 +453,16 @@ def run_real_pre_experiment(
         evaluation_metrics=report.metrics,
         notes=tuple(notes),
     )
+
+
+def _fold_checkpoint_dir(out_dir: Path | None, fold_index: int) -> Path:
+    """Every fold owns its checkpoint directory.
+
+    A shared, cwd-relative path would let one fold's reload observe another
+    fold's weights, so the fallback is still fold-scoped.
+    """
+    base = Path(out_dir) if out_dir is not None else Path("runs") / "physio-real-data"
+    return base / f"fold-{fold_index}"
 
 
 def _neural_status(fold_results: Sequence[FoldResult]) -> str:

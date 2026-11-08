@@ -186,7 +186,7 @@ METRIC_SPECS: dict[str, MetricSpec] = {
     ),
     "body_fat_percentage": _spec(
         "body_fat_percentage", "%", DATA_TYPE_FLOAT, 2, 70, ZERO_INVALID,
-        ("body_fat", "body_fat_percentage", "体脂率"),
+        ("body_fat", "body_fat_pct", "body_fat_percentage", "体脂率"),
         "body fat percentage baseline",
     ),
     "bmi": _spec(
