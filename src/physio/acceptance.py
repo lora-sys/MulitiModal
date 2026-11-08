@@ -858,7 +858,9 @@ def _real_data_audit_gate(repo_root: Path) -> CheckResult:
         assert audit.status == STATUS_VERIFIED
         assert counts[VERDICT_MISMATCH] == 0
         assert counts["match"] > 0 and counts["explained"] > 0 and counts["not_recoverable"] > 0
-        assert all(check.verdict == "match" for check in audit.qc_cross_checks)
+        comparable = [c for c in audit.qc_cross_checks if c.verdict != "observation"]
+        assert comparable
+        assert all(check.verdict == "match" for check in comparable)
 
         tampered = [dict(row) for row in load_reference_rows(
             fixtures / "physio-legacy-reference-synthetic.csv"

@@ -65,6 +65,7 @@ Pre/Post 端点与 `y_delta_*` 标签；参考训练集只用于核对，不作�
 - 血压 delta 护栏 `|ΔSBP|>30 mmHg` 或 `|ΔDBP|>20 mmHg` 排除血压标签；
   该阈值在给定 5 条 Session 上复现参考结论，**不是**临床规则。
 - 跨模块心率差 > 5 bpm 登记 QC，永不修复。
+- 折内标准化只统计**观测值**（`observed_mask`），与 `WindowScaler.fit` 一致；插补位置不进入统计量。
 
 ## 5. 身份与特征
 

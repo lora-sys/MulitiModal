@@ -41,6 +41,9 @@ VERDICT_MATCH = "match"
 VERDICT_MISMATCH = "mismatch"
 VERDICT_NOT_RECOVERABLE = "not_recoverable"
 VERDICT_EXPLAINED = "explained"
+#: A reconstruction the reference report has no counterpart for. It is reported
+#: as an observation and never counted as agreement.
+VERDICT_OBSERVATION = "observation"
 
 STATUS_VERIFIED = "VERIFIED"
 STATUS_VERIFIED_WITH_EXCEPTIONS = "VERIFIED_WITH_EXCEPTIONS"
@@ -205,9 +208,17 @@ class RealDataAudit:
             VERDICT_MISMATCH: 0,
             VERDICT_EXPLAINED: 0,
             VERDICT_NOT_RECOVERABLE: 0,
+            VERDICT_OBSERVATION: 0,
         }
         for finding in self.findings:
             counts[finding.verdict] = counts.get(finding.verdict, 0) + 1
+        return counts
+
+    def qc_verdict_counts(self) -> dict[str, int]:
+        """Verdicts of the quality-report cross-checks, observations included."""
+        counts = {VERDICT_MATCH: 0, VERDICT_MISMATCH: 0, VERDICT_OBSERVATION: 0}
+        for check in self.qc_cross_checks:
+            counts[check.verdict] = counts.get(check.verdict, 0) + 1
         return counts
 
     def to_dict(self) -> dict[str, object]:
@@ -217,6 +228,7 @@ class RealDataAudit:
             "sessions": self.sessions,
             "records": self.records,
             "verdicts": self.verdict_counts(),
+            "qc_verdicts": self.qc_verdict_counts(),
             "open_items": list(self.open_items),
             "findings": [finding.to_dict() for finding in self.findings],
             "qc_cross_checks": [check.to_dict() for check in self.qc_cross_checks],
@@ -642,6 +654,19 @@ def _audit_session(
     return findings, checks
 
 
+def _leading_int(text: str) -> int | None:
+    """Read the leading integer of a reference cell such as ``0(仅快照)``."""
+    digits = ""
+    for character in str(text).strip():
+        if character.isdigit():
+            digits += character
+        elif digits:
+            break
+        elif not character.isspace():
+            return None
+    return int(digits) if digits else None
+
+
 def _qc_cross_checks(
     session: RealSession,
     labels: RealSessionLabels,
@@ -680,12 +705,13 @@ def _qc_cross_checks(
     ) -> QCCrossCheck:
         return QCCrossCheck(session_id, item, verdict, reference, reconstructed, note)
 
+    qc_cell = (qc_row or {}).get("健康完成态数", "")
     checks = [
         check(
             "health_completion_count",
-            (qc_row or {}).get("健康完成态数", ""),
+            qc_cell,
             str(completed),
-            VERDICT_MATCH,
+            VERDICT_MATCH if _leading_int(qc_cell) == completed else VERDICT_MISMATCH,
             "raw is_complete=是 records counted directly from the extract",
         ),
         check(
@@ -747,29 +773,29 @@ def _qc_cross_checks(
             "shared_account_identity",
             (qc_row or {}).get("拒绝原因", ""),
             "shared account flagged" if QC_IDENTITY_SHARED in codes else "not flagged",
-            VERDICT_MATCH,
+            VERDICT_OBSERVATION,
             "the reference QC does not separate member and subject identity; the "
             "reconstruction flags it independently",
         ),
         check(
             "snapshot_endpoints",
             "labels derived from snapshot records",
-            f"{QC_SNAPSHOT_ENDPOINT in codes and 'flagged' or 'not flagged'}",
-            VERDICT_MATCH,
+            "flagged" if QC_SNAPSHOT_ENDPOINT in codes else "not flagged",
+            VERDICT_OBSERVATION,
             "Pre/Post endpoints use is_complete=否 records",
         ),
         check(
             "point_stream_excluded",
             "point-level brain rows excluded",
-            f"{QC_POINT_STREAM_EXCLUDED in codes and 'excluded' or 'absent'}",
-            VERDICT_MATCH,
+            "excluded" if QC_POINT_STREAM_EXCLUDED in codes else "absent",
+            VERDICT_OBSERVATION,
             "脑波逐点 rows are never features or labels",
         ),
         check(
             "hr_cross_module",
             "not checked by the reference QC",
-            f"{QC_HR_CROSS_MODULE_MISMATCH in codes and 'flagged' or 'agree'}",
-            VERDICT_MATCH,
+            "flagged" if QC_HR_CROSS_MODULE_MISMATCH in codes else "agree",
+            VERDICT_OBSERVATION,
             "the reconstruction adds a cross-module heart-rate check the reference omits",
         ),
     ]

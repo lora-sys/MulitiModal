@@ -110,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
         "records": audit.records,
         "audit_status": audit.status,
         "audit_verdicts": audit.verdict_counts(),
+        "audit_qc_verdicts": audit.qc_verdict_counts(),
         "open_items": list(audit.open_items),
         "evaluation_status": training.evaluation_status,
         "evaluation_reason": training.reason,

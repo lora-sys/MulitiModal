@@ -19,6 +19,7 @@ from dataclasses import field as dataclass_field
 from pathlib import Path
 
 import numpy as np
+from sklearn.linear_model import Ridge
 
 from .dataset import (
     IDENTITY_SHARED,
@@ -163,7 +164,12 @@ def build_targets(
 
 
 def _fit_scaler(rows: Sequence[FeatureRow]) -> WindowScaler:
-    """Fold-internal standardizer over observed, valid entries only."""
+    """Fold-internal standardizer over **observed** entries only.
+
+    This matches ``WindowScaler.fit``: unobserved and imputed positions never
+    enter the statistics, so a training-fold median cannot silently shape the
+    scaling of a held-out subject.
+    """
     if not rows:
         raise RealTrainingError("cannot fit a scaler without training rows")
     names = rows[0].feature_names
@@ -174,8 +180,10 @@ def _fit_scaler(rows: Sequence[FeatureRow]) -> WindowScaler:
     for row in rows:
         if row.feature_names != names:
             raise RealTrainingError("training rows do not share one feature contract")
-        for index, (value, valid) in enumerate(zip(row.values, row.valid_mask, strict=True)):
-            if not valid:
+        for index, (value, observed) in enumerate(
+            zip(row.values, row.observed_mask, strict=True)
+        ):
+            if not observed:
                 continue
             number = float(value)
             if not math.isfinite(number):
@@ -241,17 +249,15 @@ def _ridge_predict(
     train_targets: Sequence[float],
     test_rows: Sequence[FeatureRow],
 ) -> tuple[float, ...]:
-    features = _dense(train_rows)
-    labels = np.asarray(train_targets, dtype=float)
-    centered = features - features.mean(axis=0)
-    target_mean = float(labels.mean())
-    penalty = RIDGE_LAMBDA * np.eye(centered.shape[1])
-    weights, *_ = np.linalg.lstsq(
-        centered.T @ centered + penalty, centered.T @ (labels - target_mean), rcond=None
-    )
-    test = _dense(test_rows)
-    predictions = test - features.mean(axis=0)
-    return tuple(float(value) for value in predictions @ weights + target_mean)
+    """Closed-form ridge baseline on the fold-internal scaled matrix.
+
+    ``sklearn`` is already an ``src/``-level dependency (``src/research/train.py``,
+    ``src/syndrome/baselines.py``), so the baseline uses it instead of hand-rolled
+    linear algebra. The model is fitted on training rows only.
+    """
+    model = Ridge(alpha=RIDGE_LAMBDA)
+    model.fit(_dense(train_rows), np.asarray(train_targets, dtype=float))
+    return tuple(float(value) for value in model.predict(_dense(test_rows)))
 
 
 def _mae(predictions: Sequence[float], targets: Sequence[float]) -> float:

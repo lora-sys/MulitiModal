@@ -56,8 +56,11 @@
 | `bp_delta_anomaly` | 1 | Session 4 `ΔSBP=-52/ΔDBP=-18` 超出声明护栏，血压标签被排除 |
 | `naive_timestamp` | 5 | 文件为裸本地时间，按 UTC 读取，仅用相对顺序 |
 
-参考质量报告的 `健康完成态数`、`窗口`、`缺失字段`（bodyfat/tongue/brain/rr）、
-`异常`、`label_masks` 与重建结果**逐项一致**（11 项交叉核对全 `match`）。
+参考质量报告有 8 项可比对交叉核对：`健康完成态数`（含 `0(仅快照)` 的前导整数）、
+`窗口`、`缺失字段`（bodyfat/tongue/brain/rr 四项）、`异常`、`label_masks`，
+其中 **39 项 `match` / 1 项 `mismatch`**（即第 5 节开放项）。另有 4 项重建观察
+（共用账号身份、快照端点、点级流排除、跨模块心率）参考报告没有对应列，
+记为 `observation`，**不计入一致数**。
 `呼吸率补均值 15.41` 的来源样本集超出本 5 条抽取集，登记 `not_recoverable`。
 
 ## 4. 训练准入与预实验
@@ -73,7 +76,7 @@
 
 留一受试者折（5 折，每折 4 训练 / 1 测试），折内中位数插补 + 折内标准化：
 
-| 目标 | 训练折均值基线 | 岭回归 | realtime MLP（torch 2.15） |
+| 目标 | 训练折均值基线 | 岭回归（sklearn `Ridge`） | realtime MLP（torch 2.15） |
 |---|---|---|---|
 | `post_state`（厂商疲劳指数/100） | MAE **0.0790** | 0.1049 | 18.9675（末损 459–625） |
 | `delta_vendor_fatigue`（厂商分） | MAE **5.8000** | 2.5362 | 26.3544（末损 853–1197） |
@@ -126,3 +129,48 @@
   `GO_RESEARCH_CLAIMS(physio)` 仍 `NOT_GRANTED`，推理固定 `NOT_AVAILABLE`
 - 真实设备控制：`NOT_CONNECTED`
 - 结论级别 `LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`
+
+## 9. 评审
+
+### 9.1 多 provider 评审团未能召开
+
+用户要求"开个评审团，跟 claude code 好好讨论"。实际尝试了 5 个 provider / 6 个模型，
+**全部失败**，因此没有取得任何第三方独立评审意见，也没有虚构评分：
+
+| provider | 模型 | 结果 |
+|---|---|---|
+| codex | gpt-6.1-sol (reasoningEffort=high) | usage limit 已达上限 |
+| claudeAgent | claude-opus-5-5 (effort=high) | fetch failed（两次） |
+| opencode | opencode/claude-opus-5-5 (variant=high) | Insufficient account funds |
+| antigravity | gemini-3.8-flash-high | fetch failed |
+| pi | magpie/auto/glm-5.3 / default | fetch failed |
+
+按 council 规则，"无法访问指定 provider、评审无回复或任务失败都不算通过"，
+因此本次评审结论为**未通过**，`no score`。需要 provider 恢复后重开评审团。
+
+### 9.2 主 Agent 自审发现并已修复的问题
+
+评审团不可用，改为对本次 diff 做逐项自审，发现并修复 4 个真实缺陷：
+
+| ID | 严重度 | 问题 | 修复 |
+|---|---|---|---|
+| S1 | P1 | `_fit_scaler` 用 `valid_mask` 统计，插补值会进入折内均值/方差，违背 `WindowScaler.fit` "未观测项不进入统计量"的既定约定 | 改用 `observed_mask`（`FoldImputer.transform` 保留该掩码），并加 3 个负例测试 |
+| S2 | P1 | 12 项 QC 交叉核对中有 5 项硬编码 `VERDICT_MATCH`，实际不做任何比较，使"交叉核对全部一致"的结论失真 | 新增 `observation` 判定；只有参考报告有对应列的才算 `match`/`mismatch`；`health_completion_count` 改为真实比较前导整数（含 `0(仅快照)`） |
+| S3 | P2 | 岭回归基线手写中心化 + `lstsq`，而 sklearn 已是 `src/` 级既有依赖（`src/research/train.py`、`src/syndrome/baselines.py`） | 改用 `sklearn.linear_model.Ridge`，删除手写线性代数 |
+| S4 | P2 | 报告把 4 项无参考对应的观察写成"一致"，夸大核对范围 | 报告改为"8 项可比对：39 match / 1 mismatch；4 项观察不计入一致数" |
+
+### 9.3 自审确认为正确的部分
+
+- 端点规则（首末测量组 + 组内第一个可用值）在 5 条真实 Session 上复现全部 38 个 `y_delta` 值；
+  未找到另一条同样简洁且能复现的规则。`spo2` 0.01 缩放、`y_delta_hr` 归 health 模块、
+  `y_delta_rr` 因两端点 `rr=0` 被拒，均有参考证据支撑。
+- 无数据泄漏：`FoldImputer.fit` 与 `_fit_scaler` 都只吃训练折；`admit_delta_targets` 要求
+  Pre/Post 来自不同 record；参考行只用于比对，不作为特征或标签来源。
+- 无伪造：不可用值一律 `value=None` + `valid=False` 并带拒绝原因；
+  未知 `source_type`、缺列、空文件直接拒判。
+- 报告无性能/疗效/临床表述；MLP 的 MAE 明确标注为链路跑通证据而非模型对比结论。
+
+### 9.4 自审无法验证、需带回的事项
+
+与第 5 节开放项相同（Session 4 的 `label_masks` 排除规则、`脑波` 记录选择规则、
+`is_complete` 语义、`response_hash` 构造、呼吸率补值来源样本集、抽取集缺失的 12 列）。

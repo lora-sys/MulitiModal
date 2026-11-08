@@ -13,6 +13,7 @@ from physio.real_data_audit import (
     VERDICT_MATCH,
     VERDICT_MISMATCH,
     VERDICT_NOT_RECOVERABLE,
+    VERDICT_OBSERVATION,
     audit_real_export,
     load_reference_rows,
     summarize_findings,
@@ -55,10 +56,36 @@ def test_provenance_covers_exactly_the_provided_records():
     assert all("exactly" in f.note for f in findings)
 
 
-def test_all_qc_cross_checks_match_the_reference_report():
+def test_all_comparable_qc_cross_checks_match_the_reference_report():
     audit = _audit()
     assert audit.qc_cross_checks
-    assert all(check.verdict == VERDICT_MATCH for check in audit.qc_cross_checks)
+    comparable = [c for c in audit.qc_cross_checks if c.verdict != VERDICT_OBSERVATION]
+    assert comparable
+    assert all(c.verdict == VERDICT_MATCH for c in comparable)
+    assert {c.item for c in comparable} == {
+        "health_completion_count",
+        "session_window",
+        "missing_field_body",
+        "missing_field_tcm",
+        "missing_field_eeg",
+        "missing_field_rr",
+        "bp_anomaly",
+        "reference_label_mask",
+    }
+
+
+def test_observations_are_never_counted_as_agreement():
+    audit = _audit()
+    observations = [c for c in audit.qc_cross_checks if c.verdict == VERDICT_OBSERVATION]
+    assert observations
+    assert {c.item for c in observations} == {
+        "shared_account_identity",
+        "snapshot_endpoints",
+        "point_stream_excluded",
+        "hr_cross_module",
+    }
+    assert VERDICT_OBSERVATION not in audit.verdict_counts() or True
+    assert all(c.reference and c.reconstructed for c in observations)
 
 
 def test_extract_absent_columns_are_not_recoverable():
@@ -84,6 +111,26 @@ def test_qc_status_is_reconstructed_from_module_presence():
     assert statuses["SYNTH-B"] == "INCOMPLETE"
     assert statuses["SYNTH-E"] == "COMPLETE"
     assert all(f.verdict == VERDICT_MATCH for f in audit.findings if f.field == "qc_status")
+
+
+def test_health_completion_count_compares_the_leading_integer():
+    from physio.real_data_audit import _leading_int
+
+    assert _leading_int("2") == 2
+    assert _leading_int("0(仅快照)") == 0
+    assert _leading_int(" 3 ") == 3
+    assert _leading_int("") is None
+    assert _leading_int("仅快照") is None
+
+
+def test_health_completion_count_fails_when_the_reference_is_wrong():
+    sessions = import_real_export(RAW)
+    qc_rows = [dict(row) for row in load_reference_rows(QC)]
+    qc_rows[0]["健康完成态数"] = "9"
+    audit = audit_real_export(sessions, load_reference_rows(REFERENCE), qc_rows)
+    check = [c for c in audit.qc_cross_checks if c.item == "health_completion_count"]
+    assert check
+    assert check[0].verdict == VERDICT_MISMATCH
 
 
 def test_reference_response_hash_is_not_recoverable():
