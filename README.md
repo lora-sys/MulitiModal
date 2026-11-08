@@ -78,6 +78,17 @@
 - **交付工件与入口**：`artifacts/constitution-v1-champion/`（由 [src/research/constitution_delivery.py](src/research/constitution_delivery.py) 交付验收）。
 - **详细程序契约**：[skills/autoresearch/program-constitution.md](skills/autoresearch/program-constitution.md)
 
+### 3. 实时生理疲劳与安全推荐（产品工程主线，`NOT_VALIDATED`）
+- **产品目标**：按摩椅运行期间接收带时间戳的生理事件，结合静态基线与历史窗口估计**当前疲劳相关状态**，并在安全约束内给出可解释的程序候选；中医健康信息作为独立辅助能力。
+- **当前能力边界**：只有版本化协议、适配器、滑窗特征、门禁、推荐状态机与 SMOKE_ONLY 模拟演示；**没有真实配对标签、没有独立验证、没有真实设备协议**。推理固定返回 `NOT_AVAILABLE`，设备控制固定 `NOT_CONNECTED`，不得展示虚构疲劳分数或自动下发强度指令。
+- **统一契约**：设备直连 / 厂商云 / 离线研究导入收敛到 `PhysioEventV1` + `PhysioSessionV1`；CSV 仅是离线研究入口，不是实时推理依赖。SpO2 单位、零值语义、缺失/乱序/过期/断线均有显式处理。
+- **离线导入与数据纪律**：`legacy_export` 冻结 94 字段导出映射并按行记录 QC 问题（未知字段、快照/完成态冲突、同一记录冒充 Pre/Post、重复/乱序、时区/跨日、EEG 与 duration 冲突、补值标记）；`dataset` 分离 observed/valid/imputed 三种 mask，插补只在训练折内拟合，受试者级划分拒绝共用账号泛化，`y_pri` 恒不可用。
+- **训练与测评**：`training` 为 torch-optional 的 masked-loss smoke 训练（无有效标签、无可信身份时拒绝启动）；`artifacts` 用特征/目标版本、scaler sha256 与模型 state sha256 绑定工件，缺失或篡改一律 `NOT_AVAILABLE`；`evaluation` 在样本或受试者不足时固定返回 `INSUFFICIENT_EVIDENCE`。本地无 torch 时训练测试 skip，远端训练机实际执行。
+- **工程入口**：[src/physio/](src/physio/)（`schema`、`metrics`、`adapters`、`legacy_export`、`windows`、`preprocessing`、`artifacts`、`inference`、`dataset`、`training`、`evaluation`、`response`、`recommendation`、`tcm_exam`、`benchmark`）；设计契约见 [docs/design/physio-realtime-v1.md](docs/design/physio-realtime-v1.md)。
+- **模拟演示与验证**：`PYTHONPATH=src python -m scripts.physio_realtime_demo --pretty`（按事件时间逐步回放，`SMOKE_ONLY`）；`PYTHONPATH=src python scripts/physio_benchmark.py --pretty` 输出实测延迟/内存；`python scripts/physio_verify.py` 一次运行 acceptance + pytest + scoped ruff。
+- **硬阻塞与报告**：真实 94 字段导出、5 场共用账号会话、独立疲劳标签和厂商控制协议均未提供，相关项标 `BLOCKED_BY_DATA_OR_DEVICE`；能力清单见 [docs/reports/issue-95-gap-analysis.md](docs/reports/issue-95-gap-analysis.md)，验收证据见 [docs/reports/issue-95-acceptance.md](docs/reports/issue-95-acceptance.md)。
+- **历史研究线**：`PhysioBPSIEFRIModel` 的 Pre-only EFRI/BPSI 研究继续归档，不定义新的产品主线，也不修改其冻结实验语义。
+
 ---
 
 ## 快速上手与操作指南
@@ -168,6 +179,7 @@ python -m syndrome.delivery \
 - [docs/autoresearch-brief.md](docs/autoresearch-brief.md)：新实验立项必须填写的科研简报模板。
 - [docs/autoresearch-design.md](docs/autoresearch-design.md)：AutoResearch 架构设计理念与边界阐述。
 - [docs/trusted-evaluator.md](docs/trusted-evaluator.md)：独立可信评价环境部署契约。
+- [docs/design/physio-realtime-v1.md](docs/design/physio-realtime-v1.md)：实时生理疲劳与安全推荐的统一事件/窗口/推荐契约（工程实现，`NOT_VALIDATED`）。
 - [docs/design/physio-next-phase-plan.md](docs/design/physio-next-phase-plan.md)：按摩前生理预测模型下一阶段最小实施方案（`NOT_VALIDATED`，是设计不是结果）。
 - [docs/design/autoresearch-rsi-v1.md](docs/design/autoresearch-rsi-v1.md)：AutoResearch 自主循环的历史设计，仅作沿革参考。
 - [docs/reports/](docs/reports/)：历史科研实验报告归档。

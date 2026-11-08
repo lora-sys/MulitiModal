@@ -62,9 +62,15 @@
   - 只读价值复核：[src/research/constitution_value_review.py](src/research/constitution_value_review.py)（训练折均值基线对比、配对差值、逐维显著性与 Bootstrap CI 审计）。
 
 ### 3. 生理状态与实时知识研究线 (Physiology Track)
-- **业务定位**：面向按摩椅前置生理指标（心率、血氧、皮温、HRV 等）的健康主题知识检索；
-- **防越界护栏**：实时知识模式绝不从生理数值推断中医证候或体质，严格切断生理数值与疾病/证候的伪造关联；当前未配对真值数据状态为 `BLOCKED`。
+- **产品主线（#95–#100）**：按摩过程中接收带时间戳的生理事件，结合静态基线与截至当前时刻的滑窗估计**当前疲劳相关状态**，并在安全约束内提供可解释的程序候选；中医设备结果只做有出处的独立辅助映射。
+- **统一契约**：设备直连、厂商服务端与离线研究导入共用 `PhysioEventV1` + `PhysioSessionV1`（[src/physio/schema.py](src/physio/schema.py)）；CSV 仅是离线研究入口，不得成为实时推理依赖。实时推理入口见 [src/physio/inference.py](src/physio/inference.py)，设计与模块边界见 [docs/design/physio-realtime-v1.md](docs/design/physio-realtime-v1.md)。
+- **离线导入与数据纪律**：`legacy_export`（[src/physio/legacy_export.py](src/physio/legacy_export.py)）冻结 94 字段映射并对 identity、快照/完成态、Pre/Post 冒充、重复/乱序、时区/跨日、EEG/duration 冲突和补值逐行记录 QC；`dataset`（[src/physio/dataset.py](src/physio/dataset.py)）分离 observed/valid/imputed mask，插补仅在训练折内拟合，受试者级划分拒绝共用账号泛化声明，`y_pri` 恒不可用。
+- **训练、测评与 benchmark**：`training` 为 torch-optional masked-loss smoke 训练，无有效标签或无可信身份时拒绝启动；`evaluation` 在样本或受试者不足时固定返回 `INSUFFICIENT_EVIDENCE`；`benchmark` 只报告实测延迟、吞吐与峰值内存，不设未经验证的医学或产品阈值。
+- **门禁与安全边界**：在真实配对标签、独立验证和厂家控制 API 到位前，疲劳预测固定 `NOT_AVAILABLE`，推荐只给经审查的静态候选，设备控制固定 `NOT_CONNECTED`；不得用合成模型分数冒充实测，也不得按未经验证的“疲劳下降”排序或宣称某程序最优。
+- **防越界护栏**：实时知识模式绝不从生理数值推断中医证候或体质，严格切断生理数值与疾病/证候的伪造关联；当前未配对真值数据状态为 `BLOCKED`。历史 Pre-only `PhysioBPSIEFRIModel` 研究继续归档，不定义产品主线，也不修改其冻结实验语义。
 
 ### 4. 辅助验收与演示工具
 - **双轨最小演示入口**：[scripts/tcm_minimal_demo.py](scripts/tcm_minimal_demo.py)（加载真实工件与冻结特征，体验端到端推理、异常拒判与生理防越界护栏）；
-- **实际输入场景鲁棒性套件**：[scripts/tcm_input_scenarios.py](scripts/tcm_input_scenarios.py)（覆盖日常口语表达、特征全缺/部分缺、极端合理值与矛盾症状 4 类场景；仅做鲁棒性检查，显式标为 `SMOKE_ONLY`，严禁产出准确率）。
+- **实际输入场景鲁棒性套件**：[scripts/tcm_input_scenarios.py](scripts/tcm_input_scenarios.py)（覆盖日常口语表达、特征全缺/部分缺、极端合理值与矛盾症状 4 类场景；仅做鲁棒性检查，显式标为 `SMOKE_ONLY`，严禁产出准确率）；
+- **实时生理模拟入口**：[scripts/physio_realtime_demo.py](scripts/physio_realtime_demo.py)（按事件时间逐步回放设备流、断线恢复、窗口推理门禁、静态候选与中医侧车；`SMOKE_ONLY`，未对真实设备验证）；
+- **生理 benchmark 与统一验证入口**：[scripts/physio_benchmark.py](scripts/physio_benchmark.py) 输出实测导入/窗口/推理延迟与峰值内存（不设未经验证阈值），[scripts/physio_verify.py](scripts/physio_verify.py) 一次运行 acceptance + pytest + scoped ruff。
