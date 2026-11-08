@@ -148,14 +148,17 @@ checkpoint 保存/重载、每折独立目录、预测），不证明它更好�
 
 | provider | 模型 | 结果 |
 |---|---|---|
-| codex | gpt-6.1-sol (reasoningEffort=high) | usage limit 已达上限 |
+| codex | gpt-6.1-sol (reasoningEffort=high) | usage limit 已达上限（恢复时间 Nov 11 16:38） |
 | claudeAgent | claude-opus-5-5 (effort=high) | fetch failed（两次） |
 | opencode | opencode/claude-opus-5-5 (variant=high) | Insufficient account funds |
 | antigravity | gemini-3.8-flash-high | fetch failed |
-| antigravity | claude-opus-4-6-thinking | quota 已达上限 |
-| pi | magpie/auto/glm-5.3 | fetch failed |
+| antigravity | claude-opus-4-6-thinking | Antigravity quota for this period 已达上限 |
+| pi | magpie/auto/glm-5.3 | 429 rate_limit_error：OpenCode Go usage limit exceeded（恢复时间 18:45 / 22:26 UTC+8） |
 | pi | magpie/auto/gpt-6.1-sol | 401 authentication_error |
 | pi | default | **已完成，取得评审报告** |
+
+失败原因是账号额度/配额/限流/传输错误，**不是代码或环境问题**；重开评审团需要等对应
+provider 的额度恢复。
 
 **未取得三个不同 provider 的独立意见**，因此不按 council 规则记为"通过"。
 已取得的 1 份评审（`pi` / default，thread `d49f1e07…`，task
