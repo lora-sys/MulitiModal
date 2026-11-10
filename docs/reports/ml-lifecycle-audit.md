@@ -155,3 +155,18 @@ G5 依赖下界 → 加伴随式 `requirements-lock.txt`（本机复现快照，
 **未达标说明**：Step 5 Preview 首轮 8.6 < 9.0，虽已全部修复但**尚未复评**，
 故本分支仍**不记为验收通过**；三份评分齐全、修复后复评两轴均 ≥9.0 前不合并 PR。
 两份评审都针对 `55dd039`（修复前），复评必须针对最新 HEAD。
+
+### 10.1 迟到评审（针对 `d5cc1b3`）的处置
+
+| 项 | 评审主张 | 复现结论 | 处置 |
+|---|---|---|---|
+| C1 | 碰撞回滚未移除旧批次已接受行，`n_accepted + n_rejected + n_duplicate` 不能守恒 | **主诉为误报**：旧批次被接受的行的 idempotency key 在 re-ingest 时被覆盖，实测 `record_ids ['1','3','4','5']`，被删除的 `r2` 不会残留。但它暴露了**真实 P1**（见下） | 保留并强化回滚计数；新增「修正批次删除旧行」回归测试 |
+| C2 | 冲突重复被静默 last-writer-wins | 成立（P3） | quarantine 记录补 `resolution: first_write_wins` / `kept_record_id` / `kept_batch_id` |
+
+**C1 暴露的真实 P1（已修，`36068dc`）**：任意行级重复（批内或跨批）都会让
+`QCReport` 守恒式失败并抛 `ContractError`，管道直接崩溃——含重复幂等键的真实
+导出根本无法导入。修复：守恒式改为
+`n_accepted + n_rejected + n_duplicate == n_input`；同批次字节相同的一次运行内重放
+改记为 drift 而不是 duplicate；冲突重复记录保留策略。新增 4 项回归测试
+（批内重复、跨批重复、修正批次删除旧行、同批次重放），契约与重放两项经突变验证
+（各自撤回修复即 2 failed）。
