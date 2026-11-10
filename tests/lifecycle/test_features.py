@@ -445,3 +445,14 @@ def test_registries_and_data_dictionaries() -> None:
             "timepoint", "provenance", "approval", "unavailable_reason",
         ):
             assert key in entry
+
+
+def test_bpsi_refuses_positional_weights_with_a_mapping():
+    """G1: a positional weight vector must not silently bind to dict order."""
+    import pytest
+
+    from lifecycle.features import bpsi
+
+    with pytest.raises(TypeError, match="dict insertion order"):
+        bpsi({"a": 1.0, "b": 2.0}, [0.3, 0.7])
+    assert bpsi({"a": 1.0, "b": 2.0}, {"a": 0.3, "b": 0.7}) == pytest.approx(1.7)

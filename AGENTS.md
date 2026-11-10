@@ -77,16 +77,16 @@
   - `GO_REAL_DATA_TRAINING`：**NOT_GRANTED**（真实数据未提供物理隔离受试者与客观生理真值，绿色 CI 绝不自动提权）；
   - `GO_RESEARCH_CLAIMS`：**NOT_GRANTED**（历史 holdout 预算已耗尽，未获外部多中心临床独立验证）。
 - **实测基线与验收数据**：
-  - 全仓 `pytest -q` 实测 `979 passed, 9 skipped`；
+  - 全仓 `pytest -q` 实测 `982 passed, 9 skipped`；
   - 全仓 `ruff check` 零告警；
   - 纯 stdlib 契约快测 `pytest tests/lifecycle/test_contracts_fast.py -m fast -q` 实测 `19 passed`；
-  - 合成生命周期套件 `pytest tests/lifecycle -q` 实测 `146 passed`；
+  - 合成生命周期套件 `pytest tests/lifecycle -q` 实测 `149 passed`；
   - 统一验收脚本 `python scripts/lifecycle_verify.py` 执行 15/15 项验收（含 10 项安全负例全部拦截，实测 `OVERALL: PASS`）。
 - **CI 与环境适配**：[.github/workflows/ci.yml](.github/workflows/ci.yml) 设 4 个 jobs（fast contracts 覆盖 Py3.11/3.12/3.13，synthetic E2E 覆盖 Py3.11/3.13，frozen-lines 冻结研究线回归、no-torch 诚实 skip 验证）。因 `pyproject.toml` 未声明 `[build-system]`，CI 显式声明 `PYTHONPATH: "src:."`；`core/__init__.py` 采用 PEP 562 惰性解析 Torch 相关符号，确保无 Torch 环境下导入纯标准库 `core.specs` 与 `lifecycle.contracts` 畅通无阻；`python scripts/lifecycle_verify.py --torch-free-smoke` 验证无 Torch 纯契约可导入性。无私有数据、无厂商网络服务、无 GPU。
 - **数据纪律与持续迭代**：raw 只读、派生可重建；缓存键 = 源 hash + 代码版本 + 配置 + 规则版本；被拒行必须带理由进隔离区，禁止 silent skip；新数据只自动刷新导入/QC/特征，绝不自动触发训练、模型提升或部署发布。
 - **历史工单迁移结论**：历史工单 #22–#43、#46、#36 均已统一关闭（stateReason 为 `NOT_PLANNED` / `superseded`），代表向 #104–#112 体系迁移与收敛，**绝非声称其历史功能已逐项实现**。中医独立工单 #52/#54/#90/#91 继续保持 open。
 - **已知未决遗留项（诚实记录）**：
-  1. `requirements-dev.txt` 目前采用 `>=` 下界约束，尚未完全锁死精确版本号（exact pins）；
+  1. `requirements-dev.txt` 采用 `>=` 下界；已提供伴随式 `requirements-lock.txt` 作本机实测复现快照，但 CI 因跨 Py3.11/3.12/3.13 矩阵不强制启用，跨版本漂移仍可见于 job 的 `pip freeze` 输出；
   2. 真实按摩椅设备恒定为 `NOT_CONNECTED`，厂商控制协议未接入；
   3. 94 字段厂商字典与原始数据格式受阻，标为 `BLOCKED_BY_DATA_OR_DEVICE`；
   4. 真实物理受试者身份隔离未获验证（共用测试账号导致 1 member_hash 映射 5 个 subject_key）。

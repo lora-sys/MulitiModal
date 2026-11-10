@@ -437,3 +437,12 @@ def test_subject_spanning_sessions_is_a_declared_deferral_not_contamination(tmp_
     result = run_pipeline([declare_batch(path)], tmp_path / "multi")
     assert any("span multiple sessions" in d for d in result.qc.drift)
     assert not any("mixes subjects" in b for b in result.qc.blocked)
+
+
+def test_cold_run_id_is_deterministic_from_declared_inputs(tmp_path):
+    """G2: two cold runs in different directories share the same run_id."""
+    batch = declare_batch(BATCH_A)
+    first = run_pipeline([batch], tmp_path / "cold_a")
+    second = run_pipeline([batch], tmp_path / "cold_b")
+    assert first.run_id == second.run_id
+    assert first.state.run_id == second.state.run_id

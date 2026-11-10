@@ -196,6 +196,7 @@ def test_summary_counts_rates_rollback_and_staleness_are_measured_from_events(tm
         "latest_event_time": "2026-01-01T00:30:00+00:00",
         "measured_at": MEASURED_AT,
         "lag_s": 5400.0,
+        "clock_skew": False,
         "marker": "MEASURED_LAG_FROM_DECLARED_EVENT_TIME",
     }
     assert "threshold" in first["note"]
@@ -389,3 +390,14 @@ def test_experiment_records_are_durable_reasoned_and_never_silently_retried(tmp_
     with pytest.raises(ObserveError):
         experiment_record(DECISION_KEEP, run_id="synthetic-run-4", reason=" ", path=path)
     assert len(path.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_negative_lag_is_reported_as_clock_skew(tmp_path):
+    """G4: a client clock ahead of the measurement clock is not a negative age."""
+    from lifecycle.observe import _staleness
+
+    report = {"declared_event_times": ["2026-01-01T03:00:00+00:00"]}
+    result = _staleness(report, "2026-01-01T02:00:00+00:00")
+    assert result["lag_s"] == 0.0
+    assert result["clock_skew"] is True
+    assert result["marker"] == "CLOCK_SKEW_DETECTED"

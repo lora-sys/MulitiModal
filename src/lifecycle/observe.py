@@ -342,12 +342,16 @@ def _staleness(report: Mapping[str, Any], measured_at: str | None) -> dict[str, 
         }
     latest = max(times, key=_parse_timestamp)
     lag = (_parse_timestamp(measured_at) - _parse_timestamp(latest)).total_seconds()
+    # A client clock slightly ahead of the measurement clock yields a negative
+    # age. Report it as clock skew rather than a negative duration.
+    skew = lag < 0.0
     return {
         "measurement": MEASURED,
         "latest_event_time": latest,
         "measured_at": measured_at,
-        "lag_s": lag,
-        "marker": "MEASURED_LAG_FROM_DECLARED_EVENT_TIME",
+        "lag_s": max(0.0, lag),
+        "clock_skew": skew,
+        "marker": "CLOCK_SKEW_DETECTED" if skew else "MEASURED_LAG_FROM_DECLARED_EVENT_TIME",
     }
 
 

@@ -145,7 +145,7 @@ def test_backpressure_overflow_drops_with_counter_and_reason():
     assert queue.push(_events()[1]) is True
     assert queue.push(_events()[2]) is False
     assert queue.dropped_count == 1
-    assert any("backpressure overflow" in r for r in queue.reasons)
+    assert any("TAIL_DROP backpressure" in r for r in queue.reasons)
     assert [e.key for e in queue.accepted] == ["a", "b"]
 
 

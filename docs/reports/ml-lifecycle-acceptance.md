@@ -93,7 +93,10 @@ python scripts/lifecycle_verify.py --acceptance-only      # 仅 15 项统一检�
 ## 7. 遗留项（如实登记，未掩盖）
 
 1. `requirements-dev.txt` 使用 `>=` 下界而非精确 pin，CI 会随上游小版本漂移。
-   本次未擅自改成 lock，因为会改变既有研究线依赖解析；列为后续独立任务。
+   已新增**伴随式** `requirements-lock.txt`（本机 CPython 3.13.12 实测版本快照），
+   但**不强制 CI 使用**：CI 矩阵跨 Py3.11/3.12/3.13，锁死到本机版本会让 3.11 job
+   无法安装。CI 仍装 `requirements-dev.txt` 并打印 `pip freeze`，使漂移在 job log 可见。
+   完全消除跨版本漂移需按每个 Python 版本分别生成 lock，列为后续独立任务。
 2. 旧 #41–#43 的"真实 BPSI/EFRI 拟合"迁移到 #113/#114/#115 并标 BLOCKED，
    属**迁移而非实现**；本验收不声称该历史要求已完成。
 3. 无 torch 的干净 CI 只跑 fast 契约与 `tests/physio`（神经用例显式 skip），

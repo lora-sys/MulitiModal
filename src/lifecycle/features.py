@@ -82,13 +82,14 @@ def bpsi(
         elif isinstance(weights, Mapping):
             raw_sum = sum(float(features[k]) * float(weights[k]) for k in features)
         elif isinstance(weights, Sequence):
-            if len(weights) != p:
-                raise ValueError("weights length must match features length")
-            raw_sum = sum(
-                float(val) * float(w) for val, w in zip(features.values(), weights, strict=True)
+            # A Mapping has no declared pairing to a positional weight vector:
+            # zipping it would silently bind weights to insertion order.
+            raise TypeError(
+                "weights must be a Mapping when features is a Mapping; "
+                "a Sequence would depend on dict insertion order"
             )
         else:
-            raise TypeError("weights must be a Mapping, Sequence, or None")
+            raise TypeError("weights must be a Mapping or None when features is a Mapping")
     elif isinstance(features, Sequence):
         p = len(features)
         if p == 0:

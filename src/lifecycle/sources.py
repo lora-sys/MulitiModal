@@ -271,7 +271,12 @@ def adapter_class(kind: str) -> type[SimulatedAdapter] | type[OfflineBatchAdapte
 
 
 class BoundedEventQueue:
-    """Bounded buffer. Overflow DROPS with a counted reason, never silently."""
+    """Bounded buffer with a declared TAIL_DROP backpressure policy.
+
+    Once full, every NEW event is dropped until the queue is drained; earlier
+    accepted events are never evicted. This is a fixed policy, not a config knob:
+    the caller must see the drop count and reasons rather than silently lose data.
+    """
 
     def __init__(self, max_size: int, *, session_id: str = "S1") -> None:
         if max_size < 1:
@@ -303,7 +308,8 @@ class BoundedEventQueue:
         if len(self._accepted) >= self.max_size:
             self.dropped_count += 1
             self.reasons.append(
-                f"backpressure overflow at max_size={self.max_size}: dropped {event.key!r}"
+                f"TAIL_DROP backpressure at max_size={self.max_size}: "
+                f"dropped new event {event.key!r}"
             )
             return False
         self._accepted[event.key] = event

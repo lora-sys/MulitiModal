@@ -693,12 +693,20 @@ def run_pipeline(
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     started = utc_now().isoformat()
-    run = run_id or digest(
-        {"batches": [b.sha256 for b in batches], "started_at": started}
-    )[:16]
-
     rules_sha256 = digest({"schema": cfg.schema_version, "rules": rules_version})
     dataset_sha256 = digest(sorted(b.sha256 for b in batches))
+    # G2: a cold run's identity must be reproducible from declared inputs, not
+    # from wall-clock time. Two cold runs of the same data/config/code/rules in
+    # different directories now produce the same run_id.
+    run = run_id or digest(
+        {
+            "dataset": dataset_sha256,
+            "schema": cfg.schema_version,
+            "code": code_version,
+            "config": cfg.sha256,
+            "rules": rules_sha256,
+        }
+    )[:16]
     state_path = out / STATE_FILE
     snapshot_path = out / SNAPSHOT_FILE
 
