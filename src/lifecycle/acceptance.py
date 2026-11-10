@@ -239,6 +239,34 @@ def _check_release_no_self_promote(root: Path) -> str:
     return "registry never auto-promotes; gates stay independent"
 
 
+def _check_sources_capability_and_replay(root: Path) -> str:
+    from .contracts import SOURCE_DEVICE
+    from .sources import (
+        SourceCapability,
+        SourceError,
+        conformance_record,
+        live,
+        make_event,
+        replay,
+    )
+
+    try:
+        SourceCapability("dev1", SOURCE_DEVICE, "CONNECTED")
+    except SourceError:
+        pass
+    else:
+        raise AssertionError("fake connected real device was accepted")
+    record = conformance_record(SourceCapability("dev1", SOURCE_DEVICE))
+    assert record["gate"] == "BLOCKED_BY_DATA_OR_DEVICE"
+
+    t0 = "2026-11-01T09:00:00+00:00"
+    t1 = "2026-11-01T09:01:00+00:00"
+    events = [make_event("a", event_time=t0), make_event("b", event_time=t1)]
+    assert replay(events) == replay(list(reversed(events)))
+    assert live(list(reversed(events))).accepted == replay(events)
+    return "no fake CONNECTED device, BLOCKED verdict, live/replay converge"
+
+
 def _check_features_head_mismatch(root: Path) -> str:
     from .contracts import TargetSpec
     from .features import (
@@ -342,6 +370,7 @@ CHECKS: tuple[tuple[str, str, Callable[[Path], str], bool], ...] = (
     ("no_silent_skip", "validate", _check_no_silent_skip, True),
     ("training_no_auto_promotion", "train", _check_training_gates, True),
     ("release_no_self_promote", "promote", _check_release_no_self_promote, True),
+    ("sources_capability_replay", "ingest", _check_sources_capability_and_replay, True),
     ("features_head_mismatch", "features", _check_features_head_mismatch, True),
     ("features_no_fabricated_truth", "features", _check_features_no_fabricated_truth, True),
     ("gateway_fail_closed", "serve", _check_gateway_fail_closed, True),

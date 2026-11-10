@@ -17,7 +17,7 @@
 python -m pytest tests/lifecycle/test_contracts_fast.py -m fast -q   # 纯 stdlib 契约门禁
 python -m pytest tests/lifecycle -q           # 合成生命周期套件
 python -m ruff check src tests scripts        # 全仓 lint
-python scripts/lifecycle_verify.py            # 统一验收（含 14 项检查 / 9 项负例）
+python scripts/lifecycle_verify.py            # 统一验收（含 15 项检查 / 10 项负例）
 python scripts/lifecycle_verify.py --torch-free-smoke   # 无 torch 时纯契约可导入
 ```
 
@@ -39,7 +39,7 @@ python scripts/lifecycle_verify.py --torch-free-smoke   # 无 torch 时纯契约
 |---|---|
 | 数据字典 / 版本化 spec 散落在 `core/specs.py`、`physio/model.py`、`physio/dataset.py` | `contracts.py` 提供**唯一词汇**；其余模块保持原样不改写，避免动冻结研究线 |
 | 工件哈希绑定同时存在于 `physio/artifacts.py` 与 `lifecycle/release.py` | 前者是推理时 fail-closed 绑定，后者是发布期原子提升/回滚；职责不同，不合并 |
-| `src/physio/acceptance.py`（16/16）与 `src/lifecycle/acceptance.py`（14/14） | 分别是生理工程验收与生命周期验收；`lifecycle_verify.py` 不重复跑前者，`physio_verify.py` 仍独立 |
+| `src/physio/acceptance.py`（16/16）与 `src/lifecycle/acceptance.py`（15/15） | 分别是生理工程验收与生命周期验收；`lifecycle_verify.py` 不重复跑前者，`physio_verify.py` 仍独立 |
 | 旧 `src/data/*` 与 `src/lifecycle/pipeline.py` | 前者是既有研究线数据读取；后者是生命周期增量编排，不复制其实现 |
 
 ## 4. 审计发现的真实缺陷与修复（禁止为了让 CI 绿而扩大假通过）
@@ -48,7 +48,7 @@ python scripts/lifecycle_verify.py --torch-free-smoke   # 无 torch 时纯契约
 |---|---|---|---|
 | A1 | **P1** | `src/core/__init__.py` 顶层 eager 导入 `.models`（后者 `import torch`），干净 CI 无 torch 时连**纯 stdlib** 的 `core.specs` 都无法 import。实测：屏蔽 torch 后 `import core.specs` 抛 `ModuleNotFoundError` | 改为 PEP 562 `__getattr__` 惰性解析 torch 相关符号；`specs` 仍顶层导出。实测：无 torch 时 `core.specs` 可用、`core.ModelBatch` 明确拒绝；有 torch 时 `from core import ModelBatch, PhysioBPSIEFRIModel` 与 `dir(core)` 语义不变 |
 | A2 | P2 | 全局 `ruff check src tests scripts` 有 8 处遗留错误（6×E501、1×B905、1×I001） | 逐处机械修复：长字符串改为相邻字面量、`zip(..., strict=True)`、import 排序。研究线 281 passed / 7 skipped 确认字符串值未变 |
-| A3 | P2 | `pyproject.toml` 声明了 `fast`/`slow` 标记，但**全仓 0 个测试**使用 `fast`，`pytest -m fast` 会 NO_TESTS_COLLECTED | 新增 `tests/lifecycle/test_contracts_fast.py`（19 项纯 stdlib 契约测试，标 `fast`）；启用 `--strict-markers`；新增 `real_data` 标记说明 |
+| A3 | P2 | `pyproject.toml` 声明了 `fast`/`slow` 标记，但**全仓 0 个测试**使用 `fast`，`pytest -m fast` 会 NO_TESTS_COLLECTED | 新增 `tests/lifecycle/test_contracts_fast.py`（110 项纯 stdlib 契约测试，标 `fast`）；启用 `--strict-markers`；新增 `real_data` 标记说明 |
 | A4 | P2 | 新增 `tests/lifecycle/test_training.py` 与既有 `tests/physio/test_training.py` basename 撞名，pytest 收集期 `import file mismatch` | 改名 `test_train_ready.py`；未加 `tests/lifecycle/__init__.py`，避免遮蔽 `src/lifecycle` 包 |
 | A5 | P2 | 无 `.github/workflows`，无法证明干净环境可复现 | 新增 `ci.yml`：3 层 job（fast 契约 × Py3.11/3.12/3.13、合成 E2E × Py3.11/3.13、无 torch 诚实 skip），无私有数据、无联网厂商服务、无 GPU |
 | A8 | **P1** | 无 torch 时 `pytest -m fast` 会**收集全仓**，`tests/runtime/*` / `tests/core/*` 顶层 import torch-backed 模块 → 5 个 collection error，CI fast job 直接崩（实测） | fast 门禁改为明确路径 `pytest tests/lifecycle/test_contracts_fast.py -m fast -q`；fast 门禁本就只应跑 stdlib 契约文件，不是缩窄通过数。实测无 torch：fast 19 passed、lifecycle 121 passed、lifecycle+physio 473 passed / 3 skipped |
@@ -61,7 +61,7 @@ python scripts/lifecycle_verify.py --torch-free-smoke   # 无 torch 时纯契约
 |---|---|---|---|
 | 快测 | `fast` | `pytest -m fast` | 纯 stdlib 不可变契约：门禁独立、假设备拒判、受试者泄漏、VALIDATED 证据约束、cache key 依赖、QC 无静默跳过 |
 | 合成 E2E | `synthetic` | `pytest tests/lifecycle` | 增量幂等、乱序/迟到收敛、失败恢复、drift 阻断、折内拟合、release 原子提升/回滚、gateway 负例、observe 哈希链 |
-| 安全负例 | — | `lifecycle_verify.py` | 14 项统一检查含 9 项负例：注入失败、ready-gate 拒判、坏行带理由、训练不自动提升、工件不自提升 |
+| 安全负例 | — | `lifecycle_verify.py` | 15 项统一检查含 10 项负例：注入失败、ready-gate 拒判、坏行带理由、训练不自动提升、工件不自提升 |
 | 慢测 | `slow` | `pytest -m slow` | 长耗时集成/Bootstrap；CI 按需启用，未纳入常规通过数 |
 | 真实数据 | `real_data` | 默认跳过 | 需 `data/local/` 私有数据；**不计入常规 CI 通过数** |
 
