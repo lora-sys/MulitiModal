@@ -155,8 +155,8 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在�
 
 | 检查 | 结果 |
 |---|---|
-| `pytest tests`（本地，torch 2.15 已装） | **825 passed / 9 skipped** |
-| `pytest tests/physio` | 365 passed / 0 skipped |
+| `pytest tests`（本地，torch 2.15 已装） | **829 passed / 9 skipped** |
+| `pytest tests/physio` | 369 passed / 0 skipped |
 | `ruff check src/physio tests/physio scripts/physio_real_data_check.py` | PASS |
 | `run_acceptance()` | **16/16 PASS**（新增 `real_export_mapping`、`real_data_audit`、`real_training_pipeline` 三项 #102 检查）。报告另含独立字段 `real_data_mapping_status = MAPPING_NOT_VERIFIED`（合成 fixture 上为 10 项 blocker，真实导出上为 9 项——合成 fixture 多出的 1 项是 `SYNTH-C` 上复现真实 Session 4 情形的 `ABSTAIN`），**工程 PASS 不等于 94 字段映射已核实** |
 | `scripts/physio_verify.py` | **OVERALL PASS** |
@@ -174,8 +174,10 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在�
 50 列 = `EXTRACT_ABSENT_REFERENCE_COLUMNS` 的 48 列 + `brain_record_id`
 （多 `脑波` 记录时选择规则不可还原）+ `response_hash`（构造方式未声明）。
 
-新增测试 80 项（`test_real_export.py` 25、`test_real_data_audit.py` 22、
-`test_real_training.py` 27、`test_real_training_torch.py` 6），
+新增测试 87 项（`test_real_export.py` 25、`test_real_data_audit.py` 26、
+`test_real_training.py` 29、`test_real_training_torch.py` 7），
+另有 `tests/physio/physio_reference_columns.py`（94 列期望顺序常量，提交在库内，
+使列序断言在无私有数据的主机上也有效），
 全部只跑 `tests/fixtures/physio-legacy-*-synthetic.csv`（合成 fixture，带 synthetic 标记）。
 合成 fixture 覆盖：快照/完成健康记录对、`rr=0` 回落到完成记录、血压 delta 异常、
 共用账号身份、静态画像碰撞、`脑波逐点`、单/多 `脑波` 记录、缺失模块族、
@@ -213,7 +215,7 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在�
 
 ## 9. 评审
 
-### 9.1 多 provider 评审团：18 次尝试，取得 7 份独立评审
+### 9.1 多 provider 评审团：19 次尝试，取得 8 份独立评审
 
 用户要求"开个评审团，跟 claude code 好好讨论"。实际尝试 10 个 provider/模型组合：
 
@@ -231,7 +233,7 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在�
 失败原因是账号额度/配额/限流/传输错误，**不是代码或环境问题**；重开评审团需要等对应
 provider 的额度恢复。
 
-**共取得 7 份来自 2 个不同 provider（`pi`、`claudeAgent`）的独立评审，仍未满足三个不同
+**共取得 8 份来自 2 个不同 provider（`pi`、`claudeAgent`）的独立评审，仍未满足三个不同
 provider 的 council 要求**，因此 council 不记为"通过"。
 
 - **第 1 份**（`pi` / default，task `2031a6d0-…`）：**8 / 10**，结论
@@ -350,7 +352,31 @@ than it first appears."*
 评审者未执行 pytest / ruff / acceptance，因此报告中的测试与验收总数在其审阅时点是
 源码声明而非独立复跑结果；其本地环境缺 `sklearn`，仅用内存桩做折与缩放检查。
 
-### 9.4 五轮独立评审确认正确的部分
+#### 第六轮复核（`claudeAgent` / claude-opus-5-5，7.5/10，审 `57c37f6`）
+
+该轮的 P1/P2 发现（scaler 策略缺口、MLP 目标域、`to_dict()` 缺映射字段、
+报告数字陈旧）**均已在 `4830f68` / `4e9dc16` / `8dd932d` 修复**，评审者本人也逐条注明了
+对应后续提交。它真正的新贡献是列出 **5 个"回归可存活于测试套件"的缺口**——即早先缺陷
+即使被修好，也没有测试能在它复发时失败。这 5 个缺口本轮全部补齐，并逐个用突变验证：
+
+| ID | 缺口 | 新增测试 | 突变验证 |
+|---|---|---|---|
+| M1 | `to_dict()` 丢映射字段（R4-F3 复发无测试可捕） | `test_to_dict_carries_the_independent_mapping_verdict`：断言 8 个键存在、值与对象一致，且 `passed=True` 与 `mapping_verified=False` 可同时读出 | 删除 `to_dict()` 的 4 个映射字段 → **该测试失败** |
+| M2 | 零观测特征未被拒绝（R4-F1 复发无测试可捕） | `test_a_refused_fold_never_reaches_the_models`：构造"两条训练行不观测特征 0、留出行观测"的真实形状，断言 `WindowScaler.transform` 与 `_scaled_row` **都**拒绝、且 `FoldImputer` 不伪造中位数 | 删除 `_scaled_row` 的拒绝守卫 → **该测试失败** |
+| M3 | 双目标有限损失只断言 `is not None`（R4-F5） | `test_neural_loss_is_finite_for_both_target_modes` 改为逐折 `math.isfinite`，失败信息带目标与折号 | — |
+| M4 | 94 列顺序用 `set` 断言，重排/重复列可通过（R4-F6） | 新增**提交在库内**的 `tests/physio/physio_reference_columns.py`（94 列期望顺序），`test_synthetic_fixture_column_order_matches_the_committed_expectation` 直接比对 tuple；有私有数据时再用私有参考核对常量本身 | 交换 fixture 前两列 → **两个顺序测试都失败**；临时移走私有数据 → 顺序测试仍运行（不跳过） |
+| M5 | MLP 输出域与目标域不匹配无测试钉住（R4-F2 复发会使报告声明变陈旧） | `test_declared_targets_are_outside_the_model_output_scale`：钉住目标侧——`post_state` 全部落在 `[0,100]` 内但 `max < 1.0`，`delta_vendor_fatigue` 全部为负即完全在声明输出域外 | — |
+
+该轮另确认（独立复算，非读代码）：改动留出行值不影响训练折的 scaler / imputer /
+ridge 系数 / 折指派；`_fit_scaler` 委托的均值、标准差、计数、最小标准差策略与掩码语义
+逐折一致；190/22/196/0 字段判定、40/0/25 QC 判定、3 个开放项、9 项 blocker、
+41 条记录、6 类 source_type、1→5 的 member/subject 关系、`ΔSBP`/`Δvendor_health` 示例
+全部复现正确。
+
+该轮评审者披露：一次诊断调用用了默认输出目录，写入了 gitignore 的
+`runs/physio-real-data/`；被跟踪工作树保持干净，未再重跑该命令。
+
+### 9.4 六轮独立评审确认正确的部分
 
 第一轮（`pi`）：独立重算 5 条真实 Session 的 `y_delta` 值与参考完全一致；
 未找到另一条同样简洁且能复现的规则；折内拟合经 observed counts 验证无泄漏；
@@ -360,7 +386,7 @@ than it first appears."*
 "unusually disciplined"，报告避免了临床声明。
 
 第三轮（`pi` 8.5 + 三份 Gemini 9.6/9.0/9.2）：一致确认 C1–C9 全部修复到位，
-第四、五轮（Claude 8/10 与 7.5/10）独立复核同样确认九项修复成立、无 P0，
+第四、五、六轮（Claude 8/10 与两份 7.5/10）独立复核同样确认九项修复成立、无 P0，
 并用"改动留出行值"实验证明折内拟合无泄漏、用"缩放退化为恒等"实验证明
 C1 修复可被 mutation 检测；
 受试者级折边界、折内插补、折作用域 checkpoint 均保持；
@@ -376,7 +402,8 @@ C1 修复可被 mutation 检测；
   （需厂商字段字典）。
 - 第三轮 `claudeAgent` 评审未实际发出（循环检测 + 传输错误），该 provider 的独立意见
   在本轮缺失。
-- 第四、五轮评审者均**未执行** pytest / ruff / acceptance，因此报告中的测试与验收
-  总数在其审阅时点是源码与产物声明，不是独立复跑结果；第五轮评审者本地缺 `sklearn`。
+- 第四、五、六轮评审者均**未执行** pytest / ruff / acceptance（第六轮只跑聚焦测试与
+  `run_acceptance()`），因此报告中的测试与验收总数在其审阅时点是源码与产物声明，
+  不是独立复跑结果；第五轮评审者本地缺 `sklearn`。
 - 五轮评审均无法验证 `fatigue_level`、`脑波` 记录选择规则、`is_complete` 语义、
   以及 5 个 `subject_key` 是否为 5 个生理受试者（需厂商字段字典）。

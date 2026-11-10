@@ -6,7 +6,10 @@ import hashlib
 from pathlib import Path
 
 import pytest
+from physio_reference_columns import EXPECTED_REFERENCE_COLUMNS
 
+from physio.dataset import FeatureRow
+from physio.preprocessing import PreprocessingError, WindowScaler
 from physio.real_data_audit import (
     STATUS_FAILED,
     STATUS_MAPPING_NOT_VERIFIED,
@@ -19,7 +22,9 @@ from physio.real_data_audit import (
     load_reference_rows,
     summarize_findings,
 )
-from physio.real_export import import_real_export
+from physio.real_export import import_real_export, session_feature_row
+from physio.real_training import RealTrainingError, _fit_scaler, _scaled_row
+from physio.windows import WindowFeatures
 
 pytestmark = pytest.mark.synthetic
 
@@ -213,20 +218,24 @@ def test_synthetic_fixture_carries_the_full_94_column_shape():
     assert real_shape <= set(columns)
 
 
-def test_synthetic_fixture_column_order_matches_the_reference():
-    """Column order is part of the frozen shape, so it is asserted, not assumed.
+def test_synthetic_fixture_column_order_matches_the_committed_expectation():
+    """Column order is asserted against a committed constant, so it is sensitive
+    on every host, including one without the private extract."""
+    actual = list(load_reference_rows(REFERENCE)[0])
+    assert actual == list(EXPECTED_REFERENCE_COLUMNS)
 
-    The private reference is the only source of the real order; when it is absent
-    the test skips rather than passing on an unchecked assumption.
-    """
+
+def test_synthetic_fixture_column_order_matches_the_reference():
+    """When the private reference is present, the committed constant is checked
+    against it too, so a drift in either fails loudly instead of silently."""
     private = FIXTURES.parent.parent / "data" / "local" / "physio-legacy" / (
         "reference_train94_5sessions.csv"
     )
     if not private.is_file():
         pytest.skip("private reference export is not present on this host")
     expected = list(load_reference_rows(private)[0])
-    actual = list(load_reference_rows(REFERENCE)[0])
-    assert actual == expected
+    assert list(EXPECTED_REFERENCE_COLUMNS) == expected
+    assert list(load_reference_rows(REFERENCE)[0]) == expected
 
 
 def test_mapping_status_is_not_verified_while_blockers_remain():
@@ -279,3 +288,96 @@ def test_report_hash_fragments_match_the_private_inputs():
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         assert digest[:8] in text, f"{name}: fragment {digest[:8]} is not quoted in the report"
         assert digest[-4:] in text, f"{name}: suffix {digest[-4:]} is not quoted in the report"
+
+
+def test_to_dict_carries_the_independent_mapping_verdict():
+    """The persisted audit.json must not read as unqualified verification.
+
+    R4-F3 was that to_dict() dropped the mapping verdict while the script writes
+    exactly that dict to runs/physio-real-data/audit.json.
+    """
+    audit = _audit()
+    payload = audit.to_dict()
+    for key in (
+        "mapping_status",
+        "mapping_verified",
+        "mapping_blockers",
+        "passed",
+        "status",
+        "verdicts",
+        "qc_verdicts",
+        "open_items",
+    ):
+        assert key in payload, key
+    assert payload["mapping_status"] == audit.mapping_status
+    assert payload["mapping_verified"] == audit.mapping_verified
+    assert payload["mapping_blockers"] == list(audit.mapping_blockers)
+    assert payload["passed"] == audit.passed
+    # Engineering PASS and mapping sign-off must stay independently readable.
+    assert payload["passed"] is True
+    assert payload["mapping_verified"] is False
+
+
+def test_a_refused_fold_never_reaches_the_models():
+    """R4-F1: a feature with no training observations must be refused, not scaled.
+
+    ``WindowScaler.transform`` refuses it; ``_scaled_row`` must match, and the fold
+    must be recorded as refused rather than degraded.
+    """
+    from datetime import UTC, datetime
+
+    from physio.dataset import FoldImputer
+
+    names = session_feature_row(import_real_export(RAW)[0]).feature_names
+    size = len(names)
+    cutoff = datetime(2026, 11, 1, tzinfo=UTC)
+
+    def make_row(session: str, subject: str, values, observed):
+        return FeatureRow(
+            feature_names=names,
+            values=values,
+            observed_mask=observed,
+            valid_mask=observed,
+            imputed_mask=(False,) * size,
+            imputation=("none",) * size,
+            subject_ref=subject,
+            session_id=session,
+            cutoff=cutoff,
+        )
+
+    # Two training rows that never observe feature 0, and one held-out row that
+    # does. That is the real-extract shape: a fold whose training partition has zero
+    # observations for a feature the held-out row measured.
+    training = [
+        make_row("T1", "subject:t1", (0.0,) + (5.0,) * (size - 1), (False,) + (True,) * (size - 1)),
+        make_row("T2", "subject:t2", (0.0,) + (6.0,) * (size - 1), (False,) + (True,) * (size - 1)),
+    ]
+    held_out = make_row(
+        "E1", "subject:e1", (1.0,) + (7.0,) * (size - 1), (True,) * size
+    )
+    scaler = _fit_scaler(training)
+    assert scaler.observed_counts[0] == 0
+    assert scaler.mean[0] == 0.0 and scaler.std[0] == 1.0
+
+    # The shared contract refuses such a value; so must _scaled_row.
+    window = WindowFeatures(
+        usable=True,
+        feature_names=names,
+        values=held_out.values,
+        mask=held_out.valid_mask,
+        coverage=1.0,
+        n_events=1,
+        start=cutoff,
+        end=cutoff,
+        quality="ok",
+        metrics_present=tuple(names),
+    )
+    with pytest.raises(PreprocessingError, match="never observed"):
+        WindowScaler.transform(scaler, window)
+    with pytest.raises(RealTrainingError, match="refusing to fabricate a normalization"):
+        _scaled_row(held_out, scaler)
+
+    # The imputer cannot invent a median either, so it leaves the position as the
+    # row supplied it; the refusal has to come from the scaler, not the imputer.
+    imputer = FoldImputer.fit(training)
+    assert imputer.transform(held_out).valid_mask[0] is True

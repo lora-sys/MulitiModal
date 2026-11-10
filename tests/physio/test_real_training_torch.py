@@ -57,11 +57,45 @@ def test_neural_predictions_are_deterministic():
 
 
 def test_neural_loss_is_finite_for_both_target_modes():
+    """A NaN loss on the *second* target must fail, not merely be non-None.
+
+    ``final_loss is not None`` passes for NaN and inf, so finiteness is asserted per
+    fold for both declared targets.
+    """
     for target in ("post_state", "delta_vendor_fatigue"):
         report = _report(target=target)
         assert report.neural_status == NEURAL_COMPLETED
-        assert all(fold.final_loss is not None for fold in report.folds)
-    assert len(report.folds) == 5
+        assert len(report.folds) == 5
+        for fold in report.folds:
+            assert fold.final_loss is not None
+            assert math.isfinite(fold.final_loss), f"{target} fold {fold.fold}: {fold.final_loss}"
+
+
+def test_declared_targets_are_outside_the_model_output_scale():
+    """The [0, 100] head (pinned by test_realtime_model) cannot express the targets.
+
+    ``test_forward_returns_one_bounded_fatigue_state`` already proves the head emits
+    within [0, 100]. This test pins the *target* side so the report's
+    structural-mismatch disclosure cannot silently go stale if someone retargets
+    the model to a domain it can express.
+    """
+    from physio.real_export import import_real_export as _import
+    from physio.real_training import build_targets
+
+    sessions = _import(FIXTURE)
+    post_state = [v for v in build_targets(sessions, "post_state") if v is not None]
+    delta = [v for v in build_targets(sessions, "delta_vendor_fatigue") if v is not None]
+    assert post_state and delta
+
+    # post_state fits the range numerically but sits three orders of magnitude
+    # below its scale.
+    assert all(0.0 <= v <= 100.0 for v in post_state)
+    assert max(post_state) < 1.0
+
+    # delta_vendor_fatigue is negative for every session here, i.e. entirely
+    # outside the declared output range.
+    assert all(v < 0.0 for v in delta)
+    assert all(not 0.0 <= v <= 100.0 for v in delta)
 
 
 def test_neural_mae_is_reported_without_a_quality_claim():
