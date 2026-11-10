@@ -373,7 +373,9 @@ class SyndromeInference:
         for i, t in enumerate(clean):
             if results[i] is None:
                 results[i] = (
-                    self._invalid_input_result(fields[i], f"症状文本类型 {type(texts[i]).__name__} 非法")
+                    self._invalid_input_result(
+                        fields[i], f"症状文本类型 {type(texts[i]).__name__} 非法"
+                    )
                     if i in invalid else self.predict_one(t, fields[i])
                 )
         return results  # type: ignore[return-value]

@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from scripts import tcm_minimal_demo as demo
 from syndrome.inference import SyndromeInference
 from syndrome.labels import LabelSpace
 from syndrome.service import (
@@ -17,7 +18,6 @@ from syndrome.service import (
     SymptomAnalysisRequest,
     SyndromeService,
 )
-from scripts import tcm_minimal_demo as demo
 
 pytestmark = pytest.mark.synthetic
 

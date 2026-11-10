@@ -1,11 +1,12 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
-addopts = "-ra"
+addopts = "-ra --strict-markers"
 markers = [
-    "fast: 默认快速测试",
-    "slow: 长耗时测试，CI 按需启用",
+    "fast: 纯契约/单元逻辑，无文件 I/O 与网络；CI 第一道门禁",
+    "slow: 集成、模型前向、Bootstrap 等长耗时用例；CI 按需启用",
     "synthetic: 仅使用合成 fixture 的测试",
+    "real_data: 需 data/local/ 私有数据，默认跳过，不计入常规 CI 通过数",
 ]
 
 [tool.ruff]
