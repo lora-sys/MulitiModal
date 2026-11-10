@@ -123,3 +123,27 @@ BLOCKED，属**迁移而非实现**；本报告不声称每项历史要求已完
 - 独立配对疲劳标签 / 生理受试者隔离：`INSUFFICIENT_EVIDENCE` / `PHYSICAL_SUBJECT_ISOLATION_UNVERIFIED`
 - 真实设备控制：`NOT_CONNECTED`
 - 结论级别：`LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`
+
+## 10. 评审团第一轮汇总（进行中）
+
+用户要求三模型评审团（Gemini 3.8 Flash / Step 5 Preview / Claude Opus 5.5）对
+质量与实现程度两轴打分，均须 ≥9.0；按汇总结果继续优化后复评。
+
+| 评审者 | 质量 | 实现 | 总评 | 状态 |
+|---|---|---|---|---|
+| Step 5 Preview (`pi`) | 8.7 | 8.6 | **8.6** | 13 项 finding 已全部处置，见 `e334cb0`；待复评 |
+| Gemini 3.8 Flash (`antigravity`) | 待返回 | 待返回 | 待返回 | 运行中 |
+| Claude Opus 5.5 (`claudeAgent`) | 待返回 | 待返回 | 待返回 | 运行中 |
+
+**Step 5 Preview 的阻塞项（已修，`e334cb0`）**：S1 假真设备可构造（P1）、
+S2 依赖变化把 7 行 snapshot 覆盖成 0 行（P1）、S3 同名不同字节被当重复静默丢弃（P2）、
+S9 缓存 QC 损坏崩溃（P2）。其余：S4 README fast 命令、S5 伪造的"110 项"、
+S6 过时计数、S7 CI 无 torch 注释、S8 冻结研究线无 CI 保护、S13 内容级泄漏检查、
+S10/S11/S12 时间戳与语义问题。每项修复都用"撤回修复看测试是否失败"验证过。
+
+**首轮教训**：三个 P1/P2 缺陷是我自己在批量 `sed` 替换与增量语义优化时引入的，
+说明"为了修一个发现而改动共享路径"必须同时跑全量回归 — 本次靠评审团的
+独立复现捕获，未流入合并。
+
+**未达标说明**：首轮 8.6 < 9.0，故本分支**不记为验收通过**；三份评分齐全后
+按汇总再优化并复评，达标前不合并 PR。
