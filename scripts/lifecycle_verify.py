@@ -82,7 +82,12 @@ def main(argv: list[str] | None = None) -> int:
     write_acceptance(report, ROOT / "runs" / "lifecycle")
     checks: list[dict[str, object]] = []
     if not args.acceptance_only:
-        checks.append(_run([sys.executable, "-m", "pytest", "-m", "fast", "-q"]))
+        checks.append(
+            _run([
+                sys.executable, "-m", "pytest",
+                "tests/lifecycle/test_contracts_fast.py", "-m", "fast", "-q",
+            ])
+        )
         checks.append(_run([sys.executable, "-m", "pytest", "tests/lifecycle", "-q"]))
         checks.append(_run([sys.executable, "-m", "ruff", "check", "src", "tests", "scripts"]))
 

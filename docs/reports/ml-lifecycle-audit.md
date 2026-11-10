@@ -14,7 +14,7 @@
 复现命令：
 
 ```bash
-python -m pytest -m fast -q                  # 纯 stdlib 契约门禁
+python -m pytest tests/lifecycle/test_contracts_fast.py -m fast -q   # 纯 stdlib 契约门禁
 python -m pytest tests/lifecycle -q           # 合成生命周期套件
 python -m ruff check src tests scripts        # 全仓 lint
 python scripts/lifecycle_verify.py            # 统一验收（含 14 项检查 / 9 项负例）
@@ -51,6 +51,7 @@ python scripts/lifecycle_verify.py --torch-free-smoke   # 无 torch 时纯契约
 | A3 | P2 | `pyproject.toml` 声明了 `fast`/`slow` 标记，但**全仓 0 个测试**使用 `fast`，`pytest -m fast` 会 NO_TESTS_COLLECTED | 新增 `tests/lifecycle/test_contracts_fast.py`（19 项纯 stdlib 契约测试，标 `fast`）；启用 `--strict-markers`；新增 `real_data` 标记说明 |
 | A4 | P2 | 新增 `tests/lifecycle/test_training.py` 与既有 `tests/physio/test_training.py` basename 撞名，pytest 收集期 `import file mismatch` | 改名 `test_train_ready.py`；未加 `tests/lifecycle/__init__.py`，避免遮蔽 `src/lifecycle` 包 |
 | A5 | P2 | 无 `.github/workflows`，无法证明干净环境可复现 | 新增 `ci.yml`：3 层 job（fast 契约 × Py3.11/3.12/3.13、合成 E2E × Py3.11/3.13、无 torch 诚实 skip），无私有数据、无联网厂商服务、无 GPU |
+| A8 | **P1** | 无 torch 时 `pytest -m fast` 会**收集全仓**，`tests/runtime/*` / `tests/core/*` 顶层 import torch-backed 模块 → 5 个 collection error，CI fast job 直接崩（实测） | fast 门禁改为明确路径 `pytest tests/lifecycle/test_contracts_fast.py -m fast -q`；fast 门禁本就只应跑 stdlib 契约文件，不是缩窄通过数。实测无 torch：fast 19 passed、lifecycle 121 passed、lifecycle+physio 473 passed / 3 skipped |
 | A6 | P3 | 管道 `snapshot.created_at` 取墙钟时间，导致同一输入两次运行 snapshot hash 不同；`PipelineState` 的 `run_id`/时间戳同理 | `created_at` 改为数据内最早 `event_time`（确定性 as-of）；缓存命中时继承 prior 的 run 身份与时间戳，state 文件逐字节一致。由 `test_repeated_run_is_byte_identical_and_has_no_duplicates` 钉住 |
 | A7 | P3 | 训练 `stage="validate"` 与管道数据校验阶段同名，语义冲突 | 训练侧改 `validate_model`，`STAGES` 增 `prepare` |
 

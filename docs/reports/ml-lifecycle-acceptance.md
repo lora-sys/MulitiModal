@@ -20,7 +20,7 @@
 ## 2. 可复现命令
 
 ```bash
-python -m pytest -m fast -q                    # 纯 stdlib 契约快测
+python -m pytest tests/lifecycle/test_contracts_fast.py -m fast -q   # 纯 stdlib 契约快测
 python -m pytest tests/lifecycle -q             # 合成生命周期套件
 python -m ruff check src tests scripts          # 全仓 lint
 python scripts/lifecycle_verify.py              # 统一验收 + 三层检查

@@ -52,7 +52,10 @@ jobs:
       - name: Lint (whole repo)
         run: python -m ruff check src tests scripts
       - name: Fast contract gate
-        run: python -m pytest -m fast -q
+        # Explicit path: collecting the whole repo would import torch-backed
+        # runtime/core test modules at collection time on a torch-free host.
+        # The fast gate is stdlib-only by definition, so scope it to its file.
+        run: python -m pytest tests/lifecycle/test_contracts_fast.py -m fast -q
 
   synthetic:
     name: synthetic lifecycle E2E (py${{ matrix.python-version }})
