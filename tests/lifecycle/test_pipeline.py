@@ -484,3 +484,75 @@ def test_batch_id_containing_a_colon_does_not_collide(tmp_path):
     assert all("id collision" not in q["reason"] for q in result.quarantine)
     assert not any("re-issued" in d for d in result.qc.drift)
     assert result.qc.n_accepted == 7
+
+
+def test_intra_batch_duplicate_is_counted_not_dropped(tmp_path):
+    """A duplicate row is an input row: it must be counted, never crash QC."""
+    rows = _base_rows()
+    duplicate = _row("9", "S1", "P1", "heart_rate", "68", "bpm")
+    duplicate["source_record"] = "src-1"
+    rows.append(duplicate)
+    path = tmp_path / "dup.csv"
+    _write_batch(path, rows)
+
+    result = run_pipeline([declare_batch(path, batch_id="dup")], tmp_path / "dup-out")
+    assert result.qc.n_input == 5
+    assert result.qc.n_accepted == 4
+    assert result.qc.n_rejected == 0
+    assert result.qc.n_duplicate == 1
+    assert result.qc.n_input == (
+        result.qc.n_accepted + result.qc.n_rejected + result.qc.n_duplicate
+    )
+
+
+def test_cross_batch_duplicate_is_counted_once(tmp_path):
+    rows = _base_rows()
+    other = _base_rows()[0]
+    other["record_id"] = "10"
+    other["value"] = "71"
+    other["source_record"] = "src-1"
+    rows.append(other)
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+    _write_batch(first, _base_rows())
+    _write_batch(second, [other])
+
+    result = run_pipeline(
+        [declare_batch(first, batch_id="one"), declare_batch(second, batch_id="two")],
+        tmp_path / "two-batches",
+    )
+    assert result.qc.n_input == 5
+    assert result.qc.n_accepted == 4
+    assert result.qc.n_duplicate == 1
+    assert result.qc.n_input == (
+        result.qc.n_accepted + result.qc.n_rejected + result.qc.n_duplicate
+    )
+
+
+def test_correction_drops_rows_absent_from_the_new_bytes(tmp_path):
+    """C1: a reissued batch must not leave stale accepted rows behind."""
+    first_rows = _base_rows()
+    corrected_rows = [row for row in _base_rows() if row["record_id"] != "2"]
+    corrected_rows.append(_row("5", "S2", "P2", "heart_rate", "66", "bpm"))
+    first = tmp_path / "first.csv"
+    corrected = tmp_path / "corrected.csv"
+    _write_batch(first, first_rows)
+    _write_batch(corrected, corrected_rows)
+
+    result = run_pipeline(
+        [declare_batch(first, batch_id="same"), declare_batch(corrected, batch_id="same")],
+        tmp_path / "correction",
+    )
+    assert sorted(row.record_id for row in result.snapshot.rows) == ["1", "3", "4", "5"]
+    assert result.qc.n_input == 4
+    assert result.qc.n_accepted == 4
+    assert result.qc.n_rejected == 0
+    assert result.qc.n_duplicate == 0
+
+
+def test_identical_batch_replayed_in_one_run_is_skipped_with_drift(tmp_path):
+    batch = declare_batch(BATCH_A, batch_id="replay")
+    result = run_pipeline([batch, batch], tmp_path / "replay")
+    assert any("replay skipped" in d for d in result.qc.drift)
+    assert result.qc.n_duplicate == 0
+    assert result.qc.n_input == result.qc.n_accepted

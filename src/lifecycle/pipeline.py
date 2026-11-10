@@ -434,7 +434,9 @@ def _ingest(
     for batch in batches:
         key = _batch_key(batch)
         if key in processed:
-            ws.duplicates += 1
+            ws.drift.add(
+                f"{batch.batch_id}: identical sha256 already ingested; replay skipped"
+            )
             continue
         collisions = [
             old for old in processed
@@ -479,11 +481,15 @@ def _ingest(
             if row.key in ws.rows:
                 ws.duplicates += 1
                 if ws.rows[row.key].to_dict() != row.to_dict():
+                    kept = ws.rows[row.key]
                     ws.quarantine.append(
                         {
                             "key": row.key,
                             "batch_id": batch.batch_id,
                             "reason": "conflicting duplicate with the same idempotency key",
+                            "resolution": "first_write_wins",
+                            "kept_record_id": kept.record_id,
+                            "kept_batch_id": kept.batch_id,
                         }
                     )
                 continue

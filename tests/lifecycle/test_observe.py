@@ -72,7 +72,7 @@ def _evidence(stage: str, go: bool, gate: str = GATE_GRANTED) -> StageEvidence:
 def _qc(n_input: int, n_rejected: int, n_duplicate: int, drift: tuple[str, ...]) -> QCReport:
     return QCReport(
         n_input=n_input,
-        n_accepted=n_input - n_rejected,
+        n_accepted=n_input - n_rejected - n_duplicate,
         n_rejected=n_rejected,
         n_duplicate=n_duplicate,
         n_imputed=0,

@@ -340,8 +340,10 @@ class QCReport:
     blocked: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.n_accepted + self.n_rejected != self.n_input:
-            raise ContractError("accepted + rejected must equal input rows")
+        if self.n_accepted + self.n_rejected + self.n_duplicate != self.n_input:
+            raise ContractError(
+                "accepted + rejected + duplicate must equal input rows"
+            )
         if any(not r.get("reason") for r in self.rejections):
             raise ContractError("every rejected row needs a reason (no silent skip)")
 
