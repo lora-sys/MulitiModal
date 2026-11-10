@@ -22,6 +22,7 @@ from typing import Any
 from .contracts import (
     APPROVAL_APPROVED,
     APPROVAL_PENDING,
+    GATE_GRANTED,
     GATE_NOT_GRANTED,
     GATE_REAL_DATA_TRAINING,
     GATE_RESEARCH_CLAIMS,
@@ -155,6 +156,7 @@ def prepare(
     commit: str = "unknown",
     environment: str = "local-cpu",
     run_id: str | None = None,
+    created_at: str | None = None,
 ) -> RunManifest:
     """Bind every immutable reference into one replayable run identity.
 
@@ -188,7 +190,9 @@ def prepare(
         environment=environment,
         seed=config.seed,
         approval=config.approval,
-        created_at=config.commit,
+        # A commit hash is not a timestamp. Use an explicitly declared time, or
+        # a fixed epoch for a replayable synthetic run; never invent a clock.
+        created_at=created_at or "1970-01-01T00:00:00+00:00",
     )
 
 
@@ -197,7 +201,7 @@ def _evidence(stage: str, go: bool, reason: str, level: str) -> StageEvidence:
         stage=stage,
         go=go,
         evidence_level=level,
-        gate="GRANTED" if go else GATE_NOT_GRANTED,
+        gate=GATE_GRANTED if go else GATE_NOT_GRANTED,
         reason=reason,
     )
 

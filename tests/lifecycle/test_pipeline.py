@@ -357,3 +357,83 @@ def test_batch_id_override_is_stable(tmp_path):
     explicit = declare_batch(BATCH_A, batch_id="explicit")
     assert explicit.batch_id == "explicit"
     assert explicit.sha256 == declare_batch(BATCH_A).sha256
+
+
+def test_config_change_never_empties_a_good_snapshot(tmp_path):
+    """S2: a changed dependency must re-ingest, not skip every batch.
+
+    Reverting the resume guard to a dataset-only check makes this fail with
+    0 accepted rows and an empty snapshot overwriting the good one.
+    """
+    a, b = declare_batch(BATCH_A), declare_batch(BATCH_B)
+    first = run_pipeline([a, b], tmp_path / "deps")
+    changed = run_pipeline(
+        [a, b], tmp_path / "deps", config=PipelineConfig(min_subjects=3)
+    )
+    assert changed.qc.n_accepted == first.qc.n_accepted
+    assert changed.snapshot.rows == first.snapshot.rows
+    # The snapshot binds its config, so a changed dependency legitimately
+    # produces a different hash; what must NOT change is the row content.
+    assert changed.snapshot.sha256 != first.snapshot.sha256
+    assert changed.batches_new == ("batch_a", "batch_b")
+
+
+def test_code_version_change_never_empties_a_good_snapshot(tmp_path):
+    a = declare_batch(BATCH_A)
+    first = run_pipeline([a], tmp_path / "code")
+    changed = run_pipeline([a], tmp_path / "code", code_version="v2")
+    assert changed.qc.n_accepted == first.qc.n_accepted
+    assert changed.snapshot.rows == first.snapshot.rows
+
+
+def test_reissued_batch_with_different_bytes_is_not_silently_dropped(tmp_path):
+    """S3: same batch_id, different content is a correction, not a duplicate."""
+    path = tmp_path / "reissued.csv"
+    original = BATCH_A.read_text(encoding="utf-8").rstrip("\n")
+    extra = (
+        "A,99,S9,P9,pre,spo2,98,%,ok,src-99,"
+        "2026-11-01T09:00:00+00:00,2026-11-01T09:00:00+00:00,measured"
+    )
+    path.write_text(original + "\n" + extra + "\n", encoding="utf-8")
+    first = declare_batch(BATCH_A, batch_id="same")
+    second = declare_batch(path, batch_id="same")
+    result = run_pipeline([first, second], tmp_path / "reissue")
+    assert first.sha256 != second.sha256
+    assert result.qc.n_accepted == 5
+    assert result.qc.n_input == result.qc.n_accepted + result.qc.n_rejected
+    assert any("id collision with different content" in q["reason"] for q in result.quarantine)
+    assert any("re-issued with a different sha256" in d for d in result.qc.drift)
+
+
+def test_corrupt_cached_qc_falls_back_to_full_recompute(tmp_path):
+    """S9: a corrupt QC file must not crash the pipeline."""
+    batch = declare_batch(BATCH_A)
+    first = run_pipeline([batch], tmp_path / "qc")
+    (tmp_path / "qc" / QC_FILE).write_text("not json", encoding="utf-8")
+    recovered = run_pipeline([batch], tmp_path / "qc")
+    assert recovered.snapshot is not None
+    assert recovered.snapshot.rows == first.snapshot.rows
+    assert recovered.qc.n_accepted == first.qc.n_accepted
+    assert any("cached QC unreadable" in d for d in recovered.qc.drift)
+
+
+def test_state_file_is_deterministic_without_an_explicit_run_id(tmp_path):
+    """S10: no wall clock in the persisted state on a resumed run."""
+    batch = declare_batch(BATCH_A)
+    first = run_pipeline([batch], tmp_path / "clock")
+    state = (tmp_path / "clock" / STATE_FILE).read_bytes()
+    second = run_pipeline([batch], tmp_path / "clock")
+    assert second.state.run_id == first.state.run_id
+    assert second.state.updated_at == first.state.updated_at
+    assert (tmp_path / "clock" / STATE_FILE).read_bytes() == state
+
+
+def test_subject_spanning_sessions_is_a_declared_deferral_not_contamination(tmp_path):
+    """S11: one subject with several sessions is valid but identity is unverified."""
+    path = tmp_path / "multi.csv"
+    rows = _base_rows()
+    rows[2]["session_id"] = "S1-extra"  # P2 appears in a second session
+    _write_batch(path, rows)
+    result = run_pipeline([declare_batch(path)], tmp_path / "multi")
+    assert any("span multiple sessions" in d for d in result.qc.drift)
+    assert not any("mixes subjects" in b for b in result.qc.blocked)

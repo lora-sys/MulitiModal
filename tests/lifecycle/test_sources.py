@@ -219,3 +219,18 @@ def test_same_logical_events_are_idempotent_under_replay():
     first = replay(_events())
     second = replay(_events() + _events())
     assert first == second
+
+
+def test_simulated_connected_without_conformance_is_refused():
+    """S1: the dangerous combination must fail at construction, not at record()."""
+    from lifecycle.sources import SourceCapability, SourceError
+
+    with pytest.raises(SourceError, match="never be reported as a connected"):
+        SourceCapability(
+            "sim1", SOURCE_SIMULATED, CAP_CONNECTED, source_type="SIMULATED"
+        )
+    with pytest.raises(SourceError, match="never be reported as a connected"):
+        SourceCapability(
+            "sim1", SOURCE_SIMULATED, CAP_CONNECTED,
+            conformance=_full_conformance(), source_type="SIMULATED",
+        )

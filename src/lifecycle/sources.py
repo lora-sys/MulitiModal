@@ -96,7 +96,9 @@ class SourceCapability:
         if self.kind == SOURCE_SIMULATED:
             if self.source_type != "SIMULATED":
                 raise SourceError("a simulated source must declare source_type=SIMULATED")
-            if self.capability == CAP_CONNECTED and self.conformance.present:
+            # Unconditional: a mock can never be a connected real device, even if
+            # someone attaches a synthetic conformance record to make it look one.
+            if self.capability == CAP_CONNECTED:
                 raise SourceError(
                     "a simulated source can never be reported as a connected real device"
                 )

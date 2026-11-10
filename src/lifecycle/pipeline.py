@@ -415,14 +415,51 @@ def _normalize_row(raw: Mapping[str, str], batch: Batch) -> NormalizedRow:
     )
 
 
+def _batch_key(batch: Batch) -> str:
+    """Idempotency key includes the raw hash: a re-issued batch is not a resend."""
+    return f"{batch.batch_id}:{batch.sha256}"
+
+
 def _ingest(
     batches: Sequence[Batch], ws: _Workspace, processed: set[str]
 ) -> None:
-    """Read each batch at most once per run; a resend is a duplicate, not new data."""
+    """Read each batch at most once per run; a resend is a duplicate, not new data.
+
+    A batch re-uploaded under the same id with different bytes is a correction,
+    not a duplicate: it is quarantined with a reason and re-ingested, so the
+    correction cannot vanish silently.
+    """
     for batch in batches:
-        if batch.batch_id in processed:
+        key = _batch_key(batch)
+        if key in processed:
             ws.duplicates += 1
             continue
+        collisions = [old for old in processed if old.startswith(f"{batch.batch_id}:")]
+        if collisions:
+            ws.drift.add(
+                f"{batch.batch_id}: re-issued with a different sha256; "
+                "previous bytes replaced after explicit quarantine"
+            )
+            removed = sum(1 for row in ws.rows.values() if row.batch_id == batch.batch_id)
+            ws.input_rows = max(ws.input_rows - removed, 0)
+            ws.rejections = [r for r in ws.rejections if r.get("batch_id") != batch.batch_id]
+            ws.quarantine = [
+                q for q in ws.quarantine if q.get("batch_id") != batch.batch_id
+            ]
+            ws.quarantine.append(
+                {
+                    "key": key,
+                    "batch_id": batch.batch_id,
+                    "reason": "batch id collision with different content; forced re-ingest",
+                }
+            )
+            ws.rows = {
+                row_key: row
+                for row_key, row in ws.rows.items()
+                if row.batch_id != batch.batch_id
+            }
+            for old_key in collisions:
+                processed.discard(old_key)
         for raw in _read_rows(batch, ws):
             row = _normalize_row(raw, batch)
             if row.key in ws.rows:
@@ -437,7 +474,7 @@ def _ingest(
                     )
                 continue
             ws.rows[row.key] = row
-        processed.add(batch.batch_id)
+        processed.add(key)
         ws.batches_new.append(batch.batch_id)
 
 
@@ -474,17 +511,30 @@ def _validate(ws: _Workspace, config: PipelineConfig) -> None:
             f"bad row fraction {bad_fraction:.3f} exceeds {config.max_bad_fraction:.3f}"
         )
 
-    # A single subject_ref must never appear under two different session ids in
-    # a way that splits one physical subject across folds. Here we only flag the
-    # inverse (one session with two subjects), which is direct contamination.
+    # Direct contamination: one session mixing two subject labels.
     by_session: dict[str, set[str]] = {}
     for row in ws.rows.values():
         by_session.setdefault(row.session_id, set()).add(row.subject_ref)
     for session_id, subjects in by_session.items():
         if len(subjects) > 1:
-            ws.blocked.add(
-                f"session {session_id!r} mixes subjects {sorted(subjects)}"
-            )
+            ws.blocked.add(f"session {session_id!r} mixes subjects {sorted(subjects)}")
+
+    # The inverse is NOT treated as contamination: one physical subject may
+    # legitimately have several sessions. But the export gives no identity
+    # dictionary, so physical-subject isolation stays an explicit deferral.
+    by_subject: dict[str, set[str]] = {}
+    for row in ws.rows.values():
+        by_subject.setdefault(row.subject_ref, set()).add(row.session_id)
+    repeated = {
+        subject: sessions
+        for subject, sessions in by_subject.items()
+        if len(sessions) > 1
+    }
+    if repeated:
+        ws.drift.add(
+            f"{len(repeated)} subject_ref values span multiple sessions; "
+            "physical-subject identity is unverified without a vendor dictionary"
+        )
 
 
 def _reconcile(ws: _Workspace) -> tuple[NormalizedRow, ...]:
@@ -654,7 +704,18 @@ def run_pipeline(
 
     prior = _load_state(state_path) if resume else None
     processed: set[str] = set()
-    if prior is not None and prior.dataset_sha256 == dataset_sha256:
+    # The resume cursor is only valid for the exact dependency set that produced
+    # it. Inheriting it after a config/schema/code/rule change would skip every
+    # batch and overwrite a good snapshot with an empty one.
+    deps_match = (
+        prior is not None
+        and prior.dataset_sha256 == dataset_sha256
+        and prior.schema_version == cfg.schema_version
+        and prior.code_version == code_version
+        and prior.config_sha256 == cfg.sha256
+        and prior.rules_sha256 == rules_sha256
+    )
+    if deps_match and prior is not None:
         processed = set(prior.processed_keys)
     cached = _read_snapshot(snapshot_path)
     recompute_key = digest(
@@ -687,18 +748,29 @@ def run_pipeline(
     error = ""
     snapshot: Snapshot | None = None
 
+    cache_valid = cache_hit
+    cache_corrupted = False
     if cache_hit and cached is not None:
+        try:
+            qc_data = json.loads((out / QC_FILE).read_text(encoding="utf-8"))
+            qc = QCReport(
+                n_input=qc_data["n_input"], n_accepted=qc_data["n_accepted"],
+                n_rejected=qc_data["n_rejected"], n_duplicate=qc_data["n_duplicate"],
+                n_imputed=qc_data["n_imputed"],
+                rejections=tuple(qc_data["rejections"]),
+                drift=tuple(qc_data["drift"]), blocked=tuple(qc_data["blocked"]),
+            )
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            cache_valid = False
+            cache_corrupted = True
+            ws.drift.add(f"cached QC unreadable ({type(exc).__name__}); full recompute")
+    if cache_valid and cached is not None:
         snapshot = cached
-        qc_data = json.loads((out / QC_FILE).read_text(encoding="utf-8"))
-        qc = QCReport(
-            n_input=qc_data["n_input"], n_accepted=qc_data["n_accepted"],
-            n_rejected=qc_data["n_rejected"], n_duplicate=qc_data["n_duplicate"],
-            n_imputed=qc_data["n_imputed"],
-            rejections=tuple(qc_data["rejections"]),
-            drift=tuple(qc_data["drift"]), blocked=tuple(qc_data["blocked"]),
-        )
         ws.rows = {row.key: row for row in cached.rows}
     else:
+        if cache_corrupted:
+            # The prior cursor referred to artifacts that no longer verify.
+            processed.clear()
         try:
             if fail_stage == "ingest":
                 raise PipelineError("injected failure before ingest")
@@ -752,7 +824,7 @@ def run_pipeline(
         STATUS_OK if readiness["train_ready"] else STATUS_ABSTAIN
     )
     inherit = (
-        cache_hit
+        cache_valid
         and prior is not None
         and prior.status != "FAILED"
         and prior.dataset_sha256 == dataset_sha256
@@ -769,8 +841,12 @@ def run_pipeline(
         config_sha256=cfg.sha256,
         rules_sha256=rules_sha256,
         status="FAILED" if error else ("DONE" if status == STATUS_OK else "PAUSED"),
-        started_at=prior.started_at if inherit else (prior.started_at if prior else started),
-        updated_at=prior.updated_at if inherit else started,
+        started_at=prior.started_at if inherit else (
+            prior.started_at if prior else (snapshot.created_at if snapshot else started)
+        ),
+        updated_at=prior.updated_at if inherit else (
+            snapshot.created_at if snapshot else started
+        ),
         error=error,
     )
     (out / STATE_FILE).write_text(
@@ -790,7 +866,7 @@ def run_pipeline(
         batches_seen=tuple(b.batch_id for b in batches),
         batches_new=tuple(ws.batches_new),
         quarantine=tuple(ws.quarantine),
-        reused_snapshot=cache_hit,
+        reused_snapshot=cache_valid,
         error=error,
     )
 
