@@ -345,6 +345,22 @@
 5. **阶段命名冲突纠偏（A7 缺陷）**：
    - *现象*：训练阶段的验证步骤曾被命名为 `validate`，与数据管道的质检 `validate` 冲突。
    - *修复*：训练侧命名规范化为 `validate_model`，生命周期主阶段补充显式 `prepare`。
+6. **无 torch 时全仓收集崩溃（A8 缺陷）**：
+   - *现象*：`pytest -m fast` 会收集全仓，`tests/runtime/*`、`tests/core/*` 在收集期导入 torch-backed 模块，产生 5 个 collection error。
+   - *修复*：fast 门禁改为明确路径 `pytest tests/lifecycle/test_contracts_fast.py -m fast -q`；fast 门禁本就只应跑 stdlib 契约文件，不是缩窄通过数。
+7. **评审团首轮捕获的三项管道/源能力缺陷（A9 缺陷，Step 5 Preview 8.6 分）**：
+   - *现象*：`sources.py` 的 SIMULATED+CONNECTED 守卫条件写反，带空 conformance 的假真设备可构造；`pipeline.py` 的 resume 游标仅按 `dataset_sha256` 继承，配置变化会把 7 行好 snapshot 覆盖成 0 行；同名不同字节的批次被当成重复静默丢弃；缓存 QC 损坏会直接崩溃。
+   - *修复*：SIMULATED+CONNECTED 无条件拒判；`deps_match` 同时匹配 dataset/schema/code/config/rules；`_batch_key` 加入 raw sha256 并对碰撞隔离登记 + 强制 re-ingest；缓存损坏时清空游标全量重算并登记 drift。每项均配"撤回修复则测试失败"的突变验证。
+8. **CI 描述与实际依赖不符（A10 缺陷）**：
+   - *现象*：CI 头部声称"no torch"，但 fast/synthetic job 安装的 `requirements-dev.txt` 含 `transformers`；冻结研究线没有 CI 保护；私有数据断言只查路径不查内容。
+   - *修复*：注释改为"专用 `no-torch` job 才是无 torch 的证明"；新增 `frozen-lines` job 跑研究/证候/数据/证据/标签/脚本套件（384 passed / 9 skipped）；新增真实 session id 与 raw hash 的内容级扫描（不匹配合法字段名、排除 workflow 自身）。
+
+### 首轮评审状态
+
+三模型评审团（Gemini 3.8 Flash / Step 5 Preview / Claude Opus 5.5）要求质量与实现程度两轴均 ≥9.0。
+Step 5 Preview 首轮给出 8.7 / 8.6 → **8.6**，13 项 finding 已全部处置（`e334cb0`），
+另两份评分与最终复评进行中。**首轮未达标前本分支不合并**，评分与处置记录见
+[docs/reports/ml-lifecycle-audit.md](../reports/ml-lifecycle-audit.md) 第 10 节。
 
 ---
 
