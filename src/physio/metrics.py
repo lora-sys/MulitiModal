@@ -146,12 +146,12 @@ METRIC_SPECS: dict[str, MetricSpec] = {
     ),
     "systolic_bp": _spec(
         "systolic_bp", "mmHg", DATA_TYPE_FLOAT, 50, 260, ZERO_MISSING,
-        ("sbp", "systolic", "systolic_bp", "收缩压"),
+        ("sbp", "sys", "systolic", "systolic_bp", "收缩压"),
         "systolic blood pressure; zero means no reading",
     ),
     "diastolic_bp": _spec(
         "diastolic_bp", "mmHg", DATA_TYPE_FLOAT, 30, 200, ZERO_MISSING,
-        ("dbp", "diastolic", "diastolic_bp", "舒张压"),
+        ("dbp", "dia", "diastolic", "diastolic_bp", "舒张压"),
         "diastolic blood pressure; zero means no reading",
     ),
     "hrv_rmssd": _spec(
@@ -169,6 +169,16 @@ METRIC_SPECS: dict[str, MetricSpec] = {
         ("stress", "stress_index", "压力指数"),
         "vendor-provided proxy score; not independently validated",
     ),
+    "microcirculation_index": _spec(
+        "microcirculation_index", "index", DATA_TYPE_FLOAT, 1, 100, ZERO_INVALID,
+        ("micro_hrv", "microcirculation", "micro", "微循环", "末梢微循环"),
+        "vendor microcirculation proxy index; not independently validated",
+    ),
+    "vendor_health_index": _spec(
+        "vendor_health_index", "index", DATA_TYPE_FLOAT, 0, 100, ZERO_VALID,
+        ("vendor_score", "vendor_health", "health_score", "健康评分", "健康指数"),
+        "vendor-provided composite health score; NOT a clinical or independent label",
+    ),
     "bmr": _spec(
         "bmr", "kcal/day", DATA_TYPE_FLOAT, 500, 5000, ZERO_MISSING,
         ("bmr", "basal_metabolic_rate", "基础代谢", "基础代谢率"),
@@ -176,7 +186,7 @@ METRIC_SPECS: dict[str, MetricSpec] = {
     ),
     "body_fat_percentage": _spec(
         "body_fat_percentage", "%", DATA_TYPE_FLOAT, 2, 70, ZERO_INVALID,
-        ("body_fat", "body_fat_percentage", "体脂率"),
+        ("body_fat", "body_fat_pct", "body_fat_percentage", "体脂率"),
         "body fat percentage baseline",
     ),
     "bmi": _spec(
@@ -226,6 +236,8 @@ _UNIT_CONVERSIONS: dict[str, dict[str, tuple[float, float]]] = {
     "hrv_rmssd": {"ms": (1.0, 0.0)},
     "fatigue_index": {"index": (1.0, 0.0), "score": (1.0, 0.0)},
     "stress_index": {"index": (1.0, 0.0), "score": (1.0, 0.0)},
+    "microcirculation_index": {"index": (1.0, 0.0)},
+    "vendor_health_index": {"index": (1.0, 0.0), "score": (1.0, 0.0)},
     "bmr": {"kcal/day": (1.0, 0.0), "kj/day": (0.239006, 0.0)},
     "body_fat_percentage": {"%": (1.0, 0.0)},
     "bmi": {"kg/m2": (1.0, 0.0)},

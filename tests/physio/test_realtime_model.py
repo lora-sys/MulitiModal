@@ -59,7 +59,7 @@ def test_forward_returns_one_bounded_fatigue_state():
     output = model(batch, feature_mask=mask)
     prediction = output.predictions["fatigue_state"]
     assert tuple(prediction.shape) == (1, 1)
-    assert 0.0 <= float(prediction[0, 0]) <= 100.0
+    assert 0.0 <= float(prediction[0, 0].detach()) <= 100.0
     model.eval()
     assert 0.0 <= float(model(batch, feature_mask=mask).predictions["fatigue_state"][0, 0]) <= 100.0
 

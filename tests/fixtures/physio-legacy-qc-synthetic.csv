@@ -1,0 +1,6 @@
+session_id,日期,窗口,健康完成态数,缺失字段,补值项,异常,label_masks,有效标签数,可用性结论,拒绝原因
+SYNTH-A,2026-11-01,2026-11-01 10:00:00~2026-11-01 10:30:00,2,none,无,无,"y_delta_sbp,y_delta_dbp,y_delta_hr,y_delta_spo2,y_delta_micro,y_delta_vendor_fatigue,y_delta_vendor_health",7,可进训练(仅限所列标签)；无额外限制,"y_pri为空,不可用于PRI监督训练"
+SYNTH-B,2026-11-01,2026-11-01 15:00:00~2026-11-01 15:30:00,2,"bodyfat,tongue,brain",体脂/体重补性别均值,血压异常 ΔSBP -60/ΔDBP -35,"y_delta_hr,y_delta_spo2,y_delta_micro,y_delta_vendor_fatigue,y_delta_vendor_health",5,排除血压标签(异常读数)，仅 5 个标签,"y_pri为空,不可用于PRI监督训练"
+SYNTH-C,2026-11-02,2026-11-02 09:00:00~2026-11-02 09:30:00,0(仅快照),"bodyfat,brain,rr_pre,rr_post",呼吸率_pre补均值15.41，呼吸率_post补均值15.41,无,"y_delta_sbp,y_delta_dbp,y_delta_hr,y_delta_spo2,y_delta_micro,y_delta_vendor_fatigue",6,可进训练(仅限所列标签)；无额外限制,"y_pri为空,不可用于PRI监督训练"
+SYNTH-D,2026-11-03,2026-11-03 11:00:00~2026-11-03 11:30:00,0(仅快照),"rr_pre,rr_post,tongue,brain",呼吸率_pre补均值15.41，呼吸率_post补均值15.41,无,"y_delta_sbp,y_delta_dbp,y_delta_hr,y_delta_spo2,y_delta_micro,y_delta_vendor_fatigue,y_delta_vendor_health",7,可进训练(仅限所列标签)；无额外限制,"y_pri为空,不可用于PRI监督训练"
+SYNTH-E,2026-11-04,2026-11-04 14:00:00~2026-11-04 14:30:00,2,bodyfat,体脂/体重补性别均值，呼吸率_pre补均值15.41，呼吸率_post补均值15.41,无,"y_delta_sbp,y_delta_dbp,y_delta_hr,y_delta_spo2,y_delta_micro,y_delta_vendor_fatigue,y_delta_vendor_health",7,可进训练(仅限所列标签)；无额外限制,"y_pri为空,不可用于PRI监督训练"
