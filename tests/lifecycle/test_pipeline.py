@@ -446,3 +446,41 @@ def test_cold_run_id_is_deterministic_from_declared_inputs(tmp_path):
     second = run_pipeline([batch], tmp_path / "cold_b")
     assert first.run_id == second.run_id
     assert first.state.run_id == second.state.run_id
+
+
+def test_collision_rollback_keeps_qc_conservation_with_rejected_rows(tmp_path):
+    """N1: rollback must remove rejected and duplicate raw rows exactly."""
+    rows = _base_rows()
+    rows.append(_row("5", "S1", "P1", "heart_rate", "70", "mmHg"))  # rejected: bad unit
+    duplicate = _row("9", "S1", "P1", "heart_rate", "68", "bpm")
+    duplicate["source_record"] = "src-1"  # same idempotency key as row 1
+    rows.append(duplicate)
+    mixed = tmp_path / "mixed.csv"
+    _write_batch(mixed, rows)
+
+    corrected_rows = _base_rows()
+    corrected_rows.append(_row("5", "S1", "P1", "heart_rate", "70", "mmHg"))
+    corrected_rows.append(_row("7", "S2", "P2", "spo2", "96", "%"))
+    fixed = tmp_path / "fixed.csv"
+    _write_batch(fixed, corrected_rows)
+
+    first = declare_batch(mixed, batch_id="mixed")
+    corrected = declare_batch(fixed, batch_id="mixed")
+    assert first.sha256 != corrected.sha256
+
+    result = run_pipeline([first, corrected], tmp_path / "n1")
+    assert result.qc.n_input == len(corrected_rows)
+    assert result.qc.n_input == result.qc.n_accepted + result.qc.n_rejected
+    assert result.qc.n_accepted == 5
+    assert result.qc.n_rejected == 1
+    assert result.qc.n_duplicate == 0
+
+
+def test_batch_id_containing_a_colon_does_not_collide(tmp_path):
+    """N2: prefix matching would treat 'a:b' and 'a' as the same batch."""
+    a = declare_batch(BATCH_A, batch_id="a:b")
+    b = declare_batch(BATCH_B, batch_id="a")
+    result = run_pipeline([a, b], tmp_path / "colon")
+    assert all("id collision" not in q["reason"] for q in result.quarantine)
+    assert not any("re-issued" in d for d in result.qc.drift)
+    assert result.qc.n_accepted == 7

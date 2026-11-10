@@ -77,10 +77,10 @@
   - `GO_REAL_DATA_TRAINING`：**NOT_GRANTED**（真实数据未提供物理隔离受试者与客观生理真值，绿色 CI 绝不自动提权）；
   - `GO_RESEARCH_CLAIMS`：**NOT_GRANTED**（历史 holdout 预算已耗尽，未获外部多中心临床独立验证）。
 - **实测基线与验收数据**：
-  - 全仓 `pytest -q` 实测 `982 passed, 9 skipped`；
+  - 全仓 `pytest -q` 实测 `984 passed, 9 skipped`；
   - 全仓 `ruff check` 零告警；
   - 纯 stdlib 契约快测 `pytest tests/lifecycle/test_contracts_fast.py -m fast -q` 实测 `19 passed`；
-  - 合成生命周期套件 `pytest tests/lifecycle -q` 实测 `149 passed`；
+  - 合成生命周期套件 `pytest tests/lifecycle -q` 实测 `151 passed`；
   - 统一验收脚本 `python scripts/lifecycle_verify.py` 执行 15/15 项验收（含 10 项安全负例全部拦截，实测 `OVERALL: PASS`）。
 - **CI 与环境适配**：[.github/workflows/ci.yml](.github/workflows/ci.yml) 设 4 个 jobs（fast contracts 覆盖 Py3.11/3.12/3.13，synthetic E2E 覆盖 Py3.11/3.13，frozen-lines 冻结研究线回归、no-torch 诚实 skip 验证）。因 `pyproject.toml` 未声明 `[build-system]`，CI 显式声明 `PYTHONPATH: "src:."`；`core/__init__.py` 采用 PEP 562 惰性解析 Torch 相关符号，确保无 Torch 环境下导入纯标准库 `core.specs` 与 `lifecycle.contracts` 畅通无阻；`python scripts/lifecycle_verify.py --torch-free-smoke` 验证无 Torch 纯契约可导入性。无私有数据、无厂商网络服务、无 GPU。
 - **数据纪律与持续迭代**：raw 只读、派生可重建；缓存键 = 源 hash + 代码版本 + 配置 + 规则版本；被拒行必须带理由进隔离区，禁止 silent skip；新数据只自动刷新导入/QC/特征，绝不自动触发训练、模型提升或部署发布。

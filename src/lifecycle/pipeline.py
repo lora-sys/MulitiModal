@@ -274,6 +274,8 @@ class _Workspace:
     duplicates: int = 0
     imputed: int = 0
     input_rows: int = 0
+    batch_input_counts: dict[str, int] = field(default_factory=dict)
+    batch_duplicate_counts: dict[str, int] = field(default_factory=dict)
     batches_new: list[str] = field(default_factory=list)
 
 
@@ -434,14 +436,22 @@ def _ingest(
         if key in processed:
             ws.duplicates += 1
             continue
-        collisions = [old for old in processed if old.startswith(f"{batch.batch_id}:")]
+        collisions = [
+            old for old in processed
+            if old.rsplit(":", 1)[0] == batch.batch_id
+        ]
         if collisions:
             ws.drift.add(
                 f"{batch.batch_id}: re-issued with a different sha256; "
                 "previous bytes replaced after explicit quarantine"
             )
-            removed = sum(1 for row in ws.rows.values() if row.batch_id == batch.batch_id)
-            ws.input_rows = max(ws.input_rows - removed, 0)
+            # Roll back exactly the raw rows this batch contributed, including
+            # rejected and duplicate ones, so QC conservation and bad_fraction
+            # stay correct (N1).
+            removed_input = ws.batch_input_counts.pop(batch.batch_id, 0)
+            ws.input_rows = max(ws.input_rows - removed_input, 0)
+            removed_duplicates = ws.batch_duplicate_counts.pop(batch.batch_id, 0)
+            ws.duplicates = max(ws.duplicates - removed_duplicates, 0)
             ws.rejections = [r for r in ws.rejections if r.get("batch_id") != batch.batch_id]
             ws.quarantine = [
                 q for q in ws.quarantine if q.get("batch_id") != batch.batch_id
@@ -460,7 +470,11 @@ def _ingest(
             }
             for old_key in collisions:
                 processed.discard(old_key)
-        for raw in _read_rows(batch, ws):
+        before = ws.input_rows
+        duplicates_before = ws.duplicates
+        raw_rows = _read_rows(batch, ws)
+        ws.batch_input_counts[batch.batch_id] = ws.input_rows - before
+        for raw in raw_rows:
             row = _normalize_row(raw, batch)
             if row.key in ws.rows:
                 ws.duplicates += 1
@@ -474,6 +488,7 @@ def _ingest(
                     )
                 continue
             ws.rows[row.key] = row
+        ws.batch_duplicate_counts[batch.batch_id] = ws.duplicates - duplicates_before
         processed.add(key)
         ws.batches_new.append(batch.batch_id)
 
