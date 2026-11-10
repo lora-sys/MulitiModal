@@ -358,8 +358,9 @@
 ### 首轮评审状态
 
 三模型评审团（Gemini 3.8 Flash / Step 5 Preview / Claude Opus 5.5）要求质量与实现程度两轴均 ≥9.0。
-Step 5 Preview 首轮给出 8.7 / 8.6 → **8.6**，13 项 finding 已全部处置（`e334cb0`），
-另两份评分与最终复评进行中。**首轮未达标前本分支不合并**，评分与处置记录见
+Step 5 Preview 首轮给出 8.7 / 8.6 → **8.6**，13 项 finding 已全部处置（`e334cb0`）；
+Gemini 3.8 Flash 给出 9.6 / 9.8 → **9.6**，G1–G5 五个 P3 已全部处置（`02c7e25`）；
+Claude Opus 5.5 仍在运行。**首轮未达标项尚未复评前本分支不合并**，评分与处置记录见
 [docs/reports/ml-lifecycle-audit.md](../reports/ml-lifecycle-audit.md) 第 10 节。
 
 ---
