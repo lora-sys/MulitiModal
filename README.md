@@ -161,6 +161,21 @@ python -m syndrome.delivery \
 
 ---
 
+## ML 生命周期工程入口
+
+```bash
+python scripts/lifecycle_verify.py          # 统一验收：fast 契约 + 合成 E2E + 全仓 lint + 10 项检查
+python -m pytest -m fast -q                # 纯 stdlib 契约快测（CI 第一道门禁）
+python -m pytest tests/lifecycle -q         # 合成生命周期套件
+python scripts/lifecycle_verify.py --torch-free-smoke   # 证明无 torch 时纯契约可导入
+```
+
+`src/lifecycle/` 为薄编排层，`src/physio/`、`src/core/`、`src/runtime/` 的研究线与冻结评估器
+**不被改写**。三门禁独立：`GO_ENGINEERING` 通过绝不提权 `GO_REAL_DATA_TRAINING` /
+`GO_RESEARCH_CLAIMS`。详见唯一索引 [docs/design/ml-lifecycle.md](docs/design/ml-lifecycle.md)。
+
+---
+
 ## 科学证据边界与硬性红线
 
 1. **证据分级明确**：开发机本地跑出的所有指标均标注为 `LOCAL_EXPERIMENTAL`，隔离级别标识为 `AGENT_ISOLATION_UNVERIFIED`。未经独立可信评价服务（见 [docs/trusted-evaluator.md](docs/trusted-evaluator.md)）验签与异源数据复现的结果，不得作为正式学术定论。
@@ -179,6 +194,9 @@ python -m syndrome.delivery \
 - [docs/autoresearch-brief.md](docs/autoresearch-brief.md)：新实验立项必须填写的科研简报模板。
 - [docs/autoresearch-design.md](docs/autoresearch-design.md)：AutoResearch 架构设计理念与边界阐述。
 - [docs/trusted-evaluator.md](docs/trusted-evaluator.md)：独立可信评价环境部署契约。
+- **[docs/design/ml-lifecycle.md](docs/design/ml-lifecycle.md)：ML 生命周期唯一索引**（7 阶段能力矩阵、Go/No-Go 表、可复现命令；#104–#112）。
+- [docs/reports/ml-lifecycle-audit.md](docs/reports/ml-lifecycle-audit.md)：生命周期现状审计与真实缺陷清单。
+- [docs/reports/ml-lifecycle-acceptance.md](docs/reports/ml-lifecycle-acceptance.md)：端到端验收与三门禁结论。
 - [docs/design/physio-realtime-v1.md](docs/design/physio-realtime-v1.md)：实时生理疲劳与安全推荐的统一事件/窗口/推荐契约（工程实现，`NOT_VALIDATED`）。
 - [docs/design/physio-next-phase-plan.md](docs/design/physio-next-phase-plan.md)：按摩前生理预测模型下一阶段最小实施方案（`NOT_VALIDATED`，是设计不是结果）。
 - [docs/design/autoresearch-rsi-v1.md](docs/design/autoresearch-rsi-v1.md)：AutoResearch 自主循环的历史设计，仅作沿革参考。

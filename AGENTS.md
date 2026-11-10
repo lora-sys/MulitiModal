@@ -69,7 +69,14 @@
 - **门禁与安全边界**：在真实配对标签、独立验证和厂家控制 API 到位前，疲劳预测固定 `NOT_AVAILABLE`，推荐只给经审查的静态候选，设备控制固定 `NOT_CONNECTED`；不得用合成模型分数冒充实测，也不得按未经验证的“疲劳下降”排序或宣称某程序最优。
 - **防越界护栏**：实时知识模式绝不从生理数值推断中医证候或体质，严格切断生理数值与疾病/证候的伪造关联；当前未配对真值数据状态为 `BLOCKED`。历史 Pre-only `PhysioBPSIEFRIModel` 研究继续归档，不定义产品主线，也不修改其冻结实验语义。
 
-### 4. 辅助验收与演示工具
+### 4. ML 生命周期工程层（#104–#112）
+- **唯一索引**：[docs/design/ml-lifecycle.md](docs/design/ml-lifecycle.md)（7 阶段能力矩阵、Go/No-Go 表、可复现命令），审计见 [docs/reports/ml-lifecycle-audit.md](docs/reports/ml-lifecycle-audit.md)，验收见 [docs/reports/ml-lifecycle-acceptance.md](docs/reports/ml-lifecycle-acceptance.md)。
+- **薄编排层**：[src/lifecycle/](src/lifecycle/) 提供不可变契约、增量幂等数据管道、源能力、特征/目标注册、训练前工程、工件原子提升与回滚、薄推理网关、监控哈希链、统一验收。不改写 `src/physio/`、`src/core/`、`src/runtime/` 的研究线与冻结评估器。
+- **三门禁独立**：`GO_ENGINEERING` / `GO_REAL_DATA_TRAINING` / `GO_RESEARCH_CLAIMS` 由 `contracts.gate_bundle` 强制分离；测试通过不提权后两者。真实训练需 `APPROVED` + `TRUSTED` + `frozen` + 非 SMOKE 证据。
+- **CI**：[.github/workflows/ci.yml](.github/workflows/ci.yml) 无需私有数据、联网厂商服务或 torch；`python scripts/lifecycle_verify.py` 为统一验收入口。
+- **数据纪律**：raw 只读、派生可重建；缓存键 = 源 hash + 代码版本 + 配置 + 规则版本；被拒行必须带理由进隔离区，禁止 silent skip；新数据只自动刷新导入/QC/特征，绝不自动训练/提升/发布。
+
+### 5. 辅助验收与演示工具
 - **双轨最小演示入口**：[scripts/tcm_minimal_demo.py](scripts/tcm_minimal_demo.py)（加载真实工件与冻结特征，体验端到端推理、异常拒判与生理防越界护栏）；
 - **实际输入场景鲁棒性套件**：[scripts/tcm_input_scenarios.py](scripts/tcm_input_scenarios.py)（覆盖日常口语表达、特征全缺/部分缺、极端合理值与矛盾症状 4 类场景；仅做鲁棒性检查，显式标为 `SMOKE_ONLY`，严禁产出准确率）；
 - **实时生理模拟入口**：[scripts/physio_realtime_demo.py](scripts/physio_realtime_demo.py)（按事件时间逐步回放设备流、断线恢复、窗口推理门禁、静态候选与中医侧车；`SMOKE_ONLY`，未对真实设备验证）；

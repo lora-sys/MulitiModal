@@ -1,0 +1,116 @@
+# ML 生命周期现状审计（#112）
+
+**状态**：`LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`
+**性质**：工程基线审计，不是结果报告。未宣称任何预测性能、疲劳改善、因果效应或临床有效性。
+**基线**：PR #101（`95788fb`）与 PR #103（`e76e2b3`）均已合并；Epic #104 定义唯一生命周期。
+**审计时点**：`src/lifecycle/` 工程层落地后、`docs/design/ml-lifecycle.md` 单一索引建立后。
+
+## 1. 方法
+
+按 #112 要求逐路径审计：已合并代码、`AGENTS.md`、PDF 原方案、研发/产品/TCM 三条未完成线，
+输出"现有 / 缺失 / 重复 / 冻结 / blocked"矩阵。审计以**实测**为准：所有"通过"数字都来自
+本机实际执行的命令，不以测试数量本身当作质量证据。
+
+复现命令：
+
+```bash
+python -m pytest -m fast -q                  # 纯 stdlib 契约门禁
+python -m pytest tests/lifecycle -q           # 合成生命周期套件
+python -m ruff check src tests scripts        # 全仓 lint
+python scripts/lifecycle_verify.py            # 统一验收（含 10 项检查 / 5 项负例）
+python scripts/lifecycle_verify.py --torch-free-smoke   # 无 torch 时纯契约可导入
+```
+
+## 2. 七阶段状态矩阵
+
+| 阶段 | Issue | 现有（合并前） | 本次新增 | 缺失 / 冻结 / blocked |
+|---|---|---|---|---|
+| 1 任务与标签协议 | #104 | `src/core/specs.py`（Pre-only BPSI/EFRI 契约）、`src/physio/schema.py`、`evidence/registry.py` | `src/lifecycle/contracts.py`：12 类不可变 manifest/spec + 三门禁 + evidence 级 | **冻结**：`src/research/constitution.py` / `prepare.py` 评估器、两条冠军线；`y_pri` 恒不可用；真实标签 BLOCKED |
+| 2 数据源与管道 | #105 | `src/physio/{adapters,legacy_export,real_export,real_data_audit}.py`（94 字段映射与逐列审计） | `src/lifecycle/pipeline.py`：增量幂等六阶段、checkpoint/cursor、缓存键、隔离区、ready-gate | **blocked**：厂商字段字典、`脑波` 选择规则、`is_complete` 语义、`response_hash` 构造、`15.41` 补值来源 |
+| 3 特征与标签 | #107 | `src/physio/dataset.py`（observed/valid/imputed mask、FoldImputer）、`src/physio/metrics.py` | `src/lifecycle/features.py`：版本化注册表、BPSI/EFRI 声明规则、target/head 兼容检查 | **冻结**：`PhysioBPSIEFRIModel` 输入契约（BODY_DIM=12 / PHYSIO_DIM=7）；不得改冻结模型去迁就不相容目标 |
+| 4 训练与评估 | #108 | `src/physio/{model,training,evaluation,artifacts}.py`、`src/core/models.py`、`src/runtime/*`、AutoResearch Skill | `src/lifecycle/training.py`：prepare→train→validate→compare→package、RunManifest、合成 smoke | **冻结**：真实训练 `GO_REAL_DATA_TRAINING=NOT_GRANTED`；历史 holdout 预算耗尽；无 AutoResearch champion 提升 |
+| 5 工件与部署 | #109 | `src/physio/artifacts.py`（ModelArtifact sha256 绑定、篡改检测） | `src/lifecycle/release.py`：ArtifactBundle、原子 candidate→champion、rollback、实测 benchmark | **blocked**：无 VALIDATED 真实工件；`validation_status=VALIDATED` 需 APPROVED + 非合成证据 |
+| 6 网关与实时服务 | #110 | `src/physio/{inference,recommendation,tcm_exam}.py`、`src/syndrome/service.py` | `src/lifecycle/gateway.py`：薄版本化 envelope、三模式隔离、幂等/超时/节流、fail-closed | **冻结**：`control_command` 恒 null；`NOT_CONNECTED`；C 模式不得从生理数值推断证候 |
+| 7 监控与迭代 | #111 | `src/research/dashboard.py`、`scripts/physio_benchmark.py` | `src/lifecycle/observe.py`：append-only 哈希链、匿名聚合、数据触发仅刷新、KEEP/REVERT/CRASH 记录 | **blocked**：自动训练 / 自动提升 / 自动发布一律禁止 |
+
+## 3. 重复与收敛
+
+| 重复面 | 处理 |
+|---|---|
+| 数据字典 / 版本化 spec 散落在 `core/specs.py`、`physio/model.py`、`physio/dataset.py` | `contracts.py` 提供**唯一词汇**；其余模块保持原样不改写，避免动冻结研究线 |
+| 工件哈希绑定同时存在于 `physio/artifacts.py` 与 `lifecycle/release.py` | 前者是推理时 fail-closed 绑定，后者是发布期原子提升/回滚；职责不同，不合并 |
+| `src/physio/acceptance.py`（16/16）与 `src/lifecycle/acceptance.py`（10/10） | 分别是生理工程验收与生命周期验收；`lifecycle_verify.py` 不重复跑前者，`physio_verify.py` 仍独立 |
+| 旧 `src/data/*` 与 `src/lifecycle/pipeline.py` | 前者是既有研究线数据读取；后者是生命周期增量编排，不复制其实现 |
+
+## 4. 审计发现的真实缺陷与修复（禁止为了让 CI 绿而扩大假通过）
+
+| ID | 严重度 | 问题 | 修复 |
+|---|---|---|---|
+| A1 | **P1** | `src/core/__init__.py` 顶层 eager 导入 `.models`（后者 `import torch`），干净 CI 无 torch 时连**纯 stdlib** 的 `core.specs` 都无法 import。实测：屏蔽 torch 后 `import core.specs` 抛 `ModuleNotFoundError` | 改为 PEP 562 `__getattr__` 惰性解析 torch 相关符号；`specs` 仍顶层导出。实测：无 torch 时 `core.specs` 可用、`core.ModelBatch` 明确拒绝；有 torch 时 `from core import ModelBatch, PhysioBPSIEFRIModel` 与 `dir(core)` 语义不变 |
+| A2 | P2 | 全局 `ruff check src tests scripts` 有 8 处遗留错误（6×E501、1×B905、1×I001） | 逐处机械修复：长字符串改为相邻字面量、`zip(..., strict=True)`、import 排序。研究线 281 passed / 7 skipped 确认字符串值未变 |
+| A3 | P2 | `pyproject.toml` 声明了 `fast`/`slow` 标记，但**全仓 0 个测试**使用 `fast`，`pytest -m fast` 会 NO_TESTS_COLLECTED | 新增 `tests/lifecycle/test_contracts_fast.py`（19 项纯 stdlib 契约测试，标 `fast`）；启用 `--strict-markers`；新增 `real_data` 标记说明 |
+| A4 | P2 | 新增 `tests/lifecycle/test_training.py` 与既有 `tests/physio/test_training.py` basename 撞名，pytest 收集期 `import file mismatch` | 改名 `test_train_ready.py`；未加 `tests/lifecycle/__init__.py`，避免遮蔽 `src/lifecycle` 包 |
+| A5 | P2 | 无 `.github/workflows`，无法证明干净环境可复现 | 新增 `ci.yml`：3 层 job（fast 契约 × Py3.11/3.12/3.13、合成 E2E × Py3.11/3.13、无 torch 诚实 skip），无私有数据、无联网厂商服务、无 GPU |
+| A6 | P3 | 管道 `snapshot.created_at` 取墙钟时间，导致同一输入两次运行 snapshot hash 不同；`PipelineState` 的 `run_id`/时间戳同理 | `created_at` 改为数据内最早 `event_time`（确定性 as-of）；缓存命中时继承 prior 的 run 身份与时间戳，state 文件逐字节一致。由 `test_repeated_run_is_byte_identical_and_has_no_duplicates` 钉住 |
+| A7 | P3 | 训练 `stage="validate"` 与管道数据校验阶段同名，语义冲突 | 训练侧改 `validate_model`，`STAGES` 增 `prepare` |
+
+## 5. 测试基线分层（不膨胀通过数）
+
+| 层 | 标记 | 命令 | 内容 |
+|---|---|---|---|
+| 快测 | `fast` | `pytest -m fast` | 纯 stdlib 不可变契约：门禁独立、假设备拒判、受试者泄漏、VALIDATED 证据约束、cache key 依赖、QC 无静默跳过 |
+| 合成 E2E | `synthetic` | `pytest tests/lifecycle` | 增量幂等、乱序/迟到收敛、失败恢复、drift 阻断、折内拟合、release 原子提升/回滚、gateway 负例、observe 哈希链 |
+| 安全负例 | — | `lifecycle_verify.py` | 10 项统一检查含 5 项负例：注入失败、ready-gate 拒判、坏行带理由、训练不自动提升、工件不自提升 |
+| 慢测 | `slow` | `pytest -m slow` | 长耗时集成/Bootstrap；CI 按需启用，未纳入常规通过数 |
+| 真实数据 | `real_data` | 默认跳过 | 需 `data/local/` 私有数据；**不计入常规 CI 通过数** |
+
+**明确不做的假通过**：不把 skip 计入通过；不因测试变绿而提权 `GO_REAL_DATA_TRAINING` /
+`GO_RESEARCH_CLAIMS`；不为了让 lint 干净而放宽规则；不把 synthetic golden 写成真实结论。
+
+## 6. 三门禁与逐阶段 GO/NO-GO
+
+| 门禁 | 判定 | 依据 |
+|---|---|---|
+| `GO_ENGINEERING` | **GRANTED**（本次工程 PR） | 合成 CI + 本地安全负例通过；`lifecycle_verify.py` OVERALL PASS |
+| `GO_REAL_DATA_TRAINING` | **NOT_GRANTED** | 无独立可信配对标签、无生理受试者身份字典、历史 holdout 预算耗尽 |
+| `GO_RESEARCH_CLAIMS` | **NOT_GRANTED** | 无独立验证、无真实模型、无外部数据 |
+
+`gate_bundle(engineering_go=True)` 在本层强制后两者为 `NOT_GRANTED`，且 `DatasetManifest.trainable()`
+以 `approval=APPROVED` + `identity_trust=TRUSTED` + `frozen=True` + 非 SMOKE 证据为硬门禁。
+测试通过**不会**改变这三者。
+
+## 7. 干净环境 / 版本 / 平台差异
+
+- `requirements-dev.txt` 声明 `pytest>=8`、`ruff>=0.6`、`numpy>=1.26`、`scikit-learn>=1.5`、
+  `joblib>=1.3`、`xlrd>=2.0`、`openpyxl>=3.1`、`transformers>=4.40`；**torch 不在其中**，
+  仓库约定神经栈只在专用训练机安装，本地缺 torch 时对应用例 skip。
+- CI 固定 `actions/checkout@v4` + `actions/setup-python@v5`，矩阵 Py3.11/3.12/3.13，
+  并打印 `pip freeze` 与 `python --version` 供复现。
+- 无 torch 环境：`lifecycle.contracts` / `lifecycle.pipeline` / `core.specs` 实测可导入；
+  神经测试以 `pytest.importorskip("torch")` 显式 skip，不伪装通过。
+- **已知未固定**：`requirements-dev.txt` 用 `>=` 下界而非精确 pin，CI 会随上游小版本漂移。
+  这是当前依赖管理的真实缺口，已在 `docs/reports/ml-lifecycle-acceptance.md` 列为遗留项，
+  未通过放宽 lint 或跳过测试掩盖。
+
+## 8. 旧 Issue 迁移核对（#104 表）
+
+| 旧 Issue 组 | 接替者 | 状态 |
+|---|---|---|
+| #22 旧总控 | #104 Epic | superseded |
+| #23–#31 physio 契约/数据/标签/模型 | #105/#106/#107/#108 | superseded |
+| #34–#36 QA / 验收 / 研究阻塞 | #112 + 三门禁 | superseded |
+| #41–#43 BPSI/EFRI 规则与双分支 | #107（声明规则，非临床真值）+ #108（合成 smoke） | superseded |
+| #46 端到端运行验收 | #112 生命周期验收 | superseded |
+
+保留独立 open：#52 / #54 / #90 / #91（TCM 产品与数据阻塞事项），本次不触碰。
+#102 已 CLOSED、#103 已 MERGED（`e76e2b3`），合并单独审查完成。
+
+**迁移未覆盖风险**：旧 #41–#43 的"真实 BPSI/EFRI 拟合"需求被拆到 #113/#114/#115 并标记
+BLOCKED，属**迁移而非实现**；本报告不声称每项历史要求已完成。
+
+## 9. 未解除边界
+
+- 真实 94 字段完整导出与厂商字段字典：`BLOCKED_BY_DATA_OR_DEVICE`
+- 独立配对疲劳标签 / 生理受试者隔离：`INSUFFICIENT_EVIDENCE` / `PHYSICAL_SUBJECT_ISOLATION_UNVERIFIED`
+- 真实设备控制：`NOT_CONNECTED`
+- 结论级别：`LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`

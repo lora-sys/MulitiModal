@@ -1,0 +1,109 @@
+name: lifecycle-ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+# Minimal CI: no private data, no network vendor services, no torch, no GPU.
+# The three GO gates stay independent; a green run never grants real-data training
+# or research claims.
+
+permissions:
+  contents: read
+
+env:
+  # No [build-system] in pyproject; make src/ importable for plain `python -c`
+  # and for scripts, not just for pytest.
+  PYTHONPATH: "src:."
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: fast contracts (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install pinned toolchain
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+      - name: Declare environment
+        run: |
+          python --version
+          python -m pip check
+          python -m pip freeze
+      - name: Verify the pure-stdlib contract layer needs no optional deps
+        run: |
+          python -c "import lifecycle.contracts as c; print(c.CONTRACTS_VERSION)"
+          python scripts/lifecycle_verify.py --torch-free-smoke
+      - name: Lint (whole repo)
+        run: python -m ruff check src tests scripts
+      - name: Fast contract gate
+        run: python -m pytest -m fast -q
+
+  synthetic:
+    name: synthetic lifecycle E2E (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: fast
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install pinned toolchain (no torch)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+      - name: Lifecycle synthetic suite
+        run: python -m pytest tests/lifecycle tests/physio -q
+      - name: Unified lifecycle acceptance
+        run: python scripts/lifecycle_verify.py --acceptance-only
+      - name: Assert no private data leaked into git
+        run: |
+          if git ls-files | grep -E '(^|/)data/(raw|local)/|runs/|artifacts/|\.pth$|\.pt$'; then
+            echo "private data or artifacts are tracked" && exit 1
+          fi
+          echo "no private data tracked"
+
+  no-torch:
+    name: optional-neural absence is honest
+    runs-on: ubuntu-latest
+    needs: fast
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install without torch
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip uninstall -y torch || true
+      - name: Confirm torch is genuinely absent
+        run: python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') is None else 1)"
+      - name: Pure contracts still importable
+        run: python -c "from core.specs import make_physio_input_spec; print(len(make_physio_input_spec(12, 7).modalities))"
+      - name: Neural tests skip without inflating pass counts
+        run: |
+          python -m pytest tests/physio -q -rs 2>&1 | tee /tmp/physio.log
+          grep -E 'SKIPPED.*torch|torch 未安装' /tmp/physio.log || (echo "expected a torch skip" && exit 1)
+      - name: Lifecycle suite remains green without torch
+        run: python -m pytest tests/lifecycle -q

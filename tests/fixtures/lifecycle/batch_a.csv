@@ -1,0 +1,5 @@
+batch_id,record_id,session_id,subject_ref,phase,metric,value,unit,quality,source_record,event_time,received_at,origin
+A,1,S1,P1,pre,heart_rate,70,bpm,ok,src-1,2026-11-01T09:00:00+00:00,2026-11-01T09:00:00+00:00,measured
+A,2,S1,P1,pre,spo2,97,%,ok,src-2,2026-11-01T09:00:00+00:00,2026-11-01T09:00:00+00:00,measured
+A,3,S2,P2,pre,heart_rate,72,bpm,ok,src-3,2026-11-01T09:00:00+00:00,2026-11-01T09:00:00+00:00,measured
+A,4,S2,P2,pre,spo2,96,%,ok,src-4,2026-11-01T09:00:00+00:00,2026-11-01T09:00:00+00:00,measured
