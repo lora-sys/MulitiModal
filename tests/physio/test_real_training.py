@@ -14,7 +14,6 @@ from physio.dataset import (
     FoldImputer,
     make_subject_folds,
 )
-from physio.preprocessing import WindowScaler
 from physio.real_export import import_real_export, session_feature_row
 from physio.real_training import (
     FOLD_SEED,
@@ -361,17 +360,51 @@ def test_fold_scaler_refuses_empty_training_rows():
 
 
 def test_fold_scaler_delegates_to_the_shared_window_scaler():
-    """One zero-variance and mask policy, not a second copy of it."""
+    """One zero-variance and mask policy, not a second copy of it.
+
+    Comparing numbers is not enough: a reintroduced local copy with identical
+    arithmetic would pass. This patches the shared function and asserts it is the
+    one that actually runs.
+    """
+    from physio import real_training
+
+    rows = [session_feature_row(session) for session in _sessions()]
+    calls: list[tuple[tuple[str, ...], ...]] = []
+    original = real_training.WindowScaler.fit
+
+    def spy(cls, windows):
+        calls.append(tuple(window.feature_names for window in windows))
+        return original(windows)
+
+    real_training.WindowScaler.fit = classmethod(spy)
+    try:
+        scaler = _fit_scaler(rows[:4])
+    finally:
+        real_training.WindowScaler.fit = original
+
+    assert calls, "WindowScaler.fit was never called: the statistics were recomputed locally"
+    assert calls[0] == tuple(row.feature_names for row in rows[:4])
+    assert scaler.feature_names == rows[0].feature_names
+    assert all(count >= 1 for count in scaler.observed_counts)
+
+
+def test_shared_scaler_adapter_preserves_the_observed_mask():
+    """The adapter must hand the scaler the observed mask, not the valid mask.
+
+    A fold-imputed position is valid but not observed; feeding the valid mask would
+    let imputed values enter the scaling statistics.
+    """
     from physio.real_training import _ScalerInput
 
     rows = [session_feature_row(session) for session in _sessions()]
-    delegated = _fit_scaler(rows[:4])
-    direct = WindowScaler.fit(
-        [_ScalerInput(row.feature_names, row.values, row.observed_mask) for row in rows[:4]]
+    imputer = FoldImputer.fit(rows[:4])
+    imputed = imputer.transform(rows[1])
+    adapter = _ScalerInput(imputed.feature_names, imputed.values, imputed.observed_mask)
+    assert adapter.mask == rows[1].observed_mask
+    assert adapter.mask != imputed.valid_mask or all(
+        observed == valid
+        for observed, valid in zip(imputed.observed_mask, imputed.valid_mask, strict=True)
     )
-    assert delegated.mean == direct.mean
-    assert delegated.std == direct.std
-    assert delegated.observed_counts == direct.observed_counts
 
 
 def test_ridge_is_fitted_on_the_training_fold_only():

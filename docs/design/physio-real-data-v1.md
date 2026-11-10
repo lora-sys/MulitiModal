@@ -42,9 +42,11 @@ Pre/Post 端点与 `y_delta_*` 标签；参考训练集只用于核对，不作�
 
 1. 端点模块记录按 `measured_at` 排序；
 2. Pre 组 = 距最早记录 `ENDPOINT_GROUP_WINDOW_S`(60 s) 内的记录，Post 组 = 距最晚记录 60 s 内的记录；
-3. 组内每个指标取**按时间序第一个可用值**：`rr=0` 在快照记录中表示"无信号"
-   （`respiration_rate` 零值策略 `ZERO_MISSING`），因此回落到同组的完成记录，
-   而 `hr`/`spo2`/`micro_hrv`/`fatigue_index`/`vendor_score` 仍取快照记录的值；
+3. 组内每个指标取**按时间序第一个可用值**：`rr=0` 被**假设**为"无信号"
+   （对应 `respiration_rate` 零值策略 `ZERO_MISSING`），因此回落到同组的下一条记录，
+   而 `hr`/`spo2`/`micro_hrv`/`fatigue_index`/`vendor_score` 仍取首条记录的值。
+   **这两条读数——`rr=0` 的语义与"完成记录"的身份——都是未经厂商字段字典确认的假设**，
+   不是已知语义；它们在该抽取集上复现了全部参考值，仅此而已。
 4. Pre/Post 各合成一个 `PhysioEventV1`，每指标至多一个 `MeasurementV1`，
    `provenance.source_record` 为组锚记录，保证端点独立；
 5. 时间戳为文件内裸本地时间：按 UTC 读取，**只用相对顺序与差值**，因此偏移不可能改变任何标签；
@@ -59,7 +61,7 @@ Pre/Post 端点与 `y_delta_*` 标签；参考训练集只用于核对，不作�
 | `systolic_bp` | `sys` | `y_delta_sbp` | 1 |
 | `diastolic_bp` | `dia` | `y_delta_dbp` | 1 |
 | `heart_rate` | `hr`（health 优先）/`pulse`（bp 交叉核对） | `y_delta_hr` | 1 |
-| `spo2` | `spo2` | `y_delta_spo2` | 0.01（百分数→分数） |
+| `spo2` | `spo2` | `y_delta_spo2` | 0.01（**假设**原始列为百分数整数，需缩放为参考所用分数；未经字典确认） |
 | `microcirculation_index` | `micro_hrv` | `y_delta_micro` | 1 |
 | `respiration_rate` | `rr` | `y_delta_rr`（**不在**参考契约内） | 1 |
 | `fatigue_index` | `fatigue_index` | `y_delta_vendor_fatigue` | 1 |

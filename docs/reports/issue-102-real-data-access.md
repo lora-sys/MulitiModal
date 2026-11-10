@@ -50,16 +50,19 @@
 `Δvendor_health = -2.50 / +6.76 / +2.93 / +0.74 / +2.02`。
 规则（端点 = 首末测量组、组内按时间取第一个可用值、`spo2` 按 0.01 缩放）见
 [docs/design/physio-real-data-v1.md](../design/physio-real-data-v1.md)。
+其中"组内第一个可用值"依赖两条**未经厂商字典确认的假设**：
+`rr=0` 表示无信号（故回落到同组完成记录）、以及 `spo2` 原始列为百分数整数需按 0.01 缩放。
+两条假设都在该抽取集上复现了全部参考值，但都不是已知语义。
 
 ## 3. 数据质量核对
 
 | QC 码 | 命中 | 说明 |
 |---|---|---|
-| `snapshot_endpoint` | 10 | 所有 Pre/Post 端点取自 `is_complete=否` 记录；完成态语义未公开 |
+| `snapshot_endpoint` | 10 | 所有 Pre/Post 端点取自 `is_complete=否` 记录；"快照"一词是**工作称呼**，`is_complete` 的语义未经厂商字典确认 |
 | `hr_cross_module_mismatch` | 7 | 血压 `pulse` 与健康 `hr` 心率不一致（最大 18 bpm，Session 3 pre） |
 | `missing_module` | 7 | 模块族缺失（`体脂`/`舌面`/`脑波`），在 Session 级登记而非只留到下游 |
 | `shared_account_identity` | 5 | 1 个 member hash → 5 个 subject key；受试者级泛化声明被拒 |
-| `invalid_value` | 6 | `rr=0` 在快照记录中表示"无信号"，该字段无可用值 |
+| `invalid_value` | 6 | `rr=0` 的记录被**假设**为"无信号"（`respiration_rate` 的 `ZERO_MISSING` 策略），该字段无可用值；此语义未经厂商字典确认，见第 5 节 |
 | `naive_timestamp` | 5 | 文件为裸本地时间，按 UTC 读取，仅用相对顺序 |
 | `coded_field_semantics_unverified` | 5 | `sex` 原始码 0/1 语义未验证，不派生特征 |
 | `declared_unusable_raw_column` | 5 | `fatigue_level` 已声明但本契约无可用语义，明确排除而非静默丢弃 |
@@ -141,7 +144,8 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在�
 1. **3 个标签判 `ABSTAIN`**：
    - Session 4 的 `y_delta_vendor_health`（`Δ=0.74`）：原始记录可产出，参考训练集与
      参考质量报告**一致**只列 4 个标签不含它；排除规则未说明。
-   - Session 1、2 的 `y_delta_rr`：可导出（17→17、15→15）但不在参考标签契约内。
+   - Session 1、2 的 `y_delta_rr`：可导出（Session 1 `rr_pre=18 → rr_post=16`，`Δ=-2.0`；
+     Session 2 `rr_pre=16 → rr_post=16`，`Δ=0.0`）但不在参考标签契约内。
    按 `规则缺项一律 ABSTAIN` 一律不判准入，派生值保留供审计，不按猜测修改重建。
 2. `脑波` 记录选择规则（多记录时选哪条）不可还原。
 3. `is_complete` 完成态语义未公开。
@@ -155,8 +159,8 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在�
 
 | 检查 | 结果 |
 |---|---|
-| `pytest tests`（本地，torch 2.15 已装） | **829 passed / 9 skipped** |
-| `pytest tests/physio` | 369 passed / 0 skipped |
+| `pytest tests`（本地，torch 2.15 已装） | **833 passed / 9 skipped** |
+| `pytest tests/physio` | 373 passed / 0 skipped |
 | `ruff check src/physio tests/physio scripts/physio_real_data_check.py` | PASS |
 | `run_acceptance()` | **16/16 PASS**（新增 `real_export_mapping`、`real_data_audit`、`real_training_pipeline` 三项 #102 检查）。报告另含独立字段 `real_data_mapping_status = MAPPING_NOT_VERIFIED`（合成 fixture 上为 10 项 blocker，真实导出上为 9 项——合成 fixture 多出的 1 项是 `SYNTH-C` 上复现真实 Session 4 情形的 `ABSTAIN`），**工程 PASS 不等于 94 字段映射已核实** |
 | `scripts/physio_verify.py` | **OVERALL PASS** |
@@ -215,7 +219,7 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在�
 
 ## 9. 评审
 
-### 9.1 多 provider 评审团：19 次尝试，取得 8 份独立评审
+### 9.1 多 provider 评审团：20 次尝试，取得 9 份独立评审
 
 用户要求"开个评审团，跟 claude code 好好讨论"。实际尝试 10 个 provider/模型组合：
 
@@ -233,7 +237,7 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在�
 失败原因是账号额度/配额/限流/传输错误，**不是代码或环境问题**；重开评审团需要等对应
 provider 的额度恢复。
 
-**共取得 8 份来自 2 个不同 provider（`pi`、`claudeAgent`）的独立评审，仍未满足三个不同
+**共取得 9 份来自 2 个不同 provider（`pi`、`claudeAgent`）的独立评审，仍未满足三个不同
 provider 的 council 要求**，因此 council 不记为"通过"。
 
 - **第 1 份**（`pi` / default，task `2031a6d0-…`）：**8 / 10**，结论
@@ -303,7 +307,7 @@ than it first appears."*
 | R3-F1 | **P2** | `_scaled_row` 比 `WindowScaler.transform` 宽松：当 `observed_counts[i] == 0` 时共享策略**拒绝**（"refusing to fabricate a normalization"），而 `_scaled_row` 计算 `(value - 0.0)/1.0`，把原始未标准化值当"已标准化"值放行。真实数据第 3 折实测泄漏 `weight_kg=65.6`、`bmi=23.2` | **已修**：`_scaled_row` 在该位置改为抛 `RealTrainingError`，与共享策略一致；调用方把该折记为**已拒绝**（带理由、predictions/targets 清空、MAE 全 `None`）而非降级运行。真实数据因此为 **4/5 折**（`refused_folds=(3,)`），MAE 已更正 |
 | R3-F2 | P2 | `RealDataAudit.to_dict()` 不含 `mapping_status`/`mapping_blockers`/`mapping_verified`/`passed`，持久化的 `audit.json` 读起来像无限定的一致通过 | **已修**：四个字段全部进入 `to_dict()` |
 | R3-F3 | P2 | 报告 §6 "51 列"错误，实际 50 列（48 + `brain_record_id` + `response_hash`），且 `response_hash` 在 5 个逐 Session 条目与 1 条汇总项中重复出现 | **已修**：改为 50 列并给出构成；说明汇总项是列级事实、逐 Session 条目是行级事实，不是重复计数 |
-| R3-F4 | P2 | 报告 §2 "38 个标签值"错误，实际审计 35 个 `y_delta_*` 单元格（5×7） | **已修**：改为 35/35 `match` |
+| R3-F4 | P2 | 报告 §2 "38 个标签值"错误，实际审计 35 个 `y_delta_*` 单元格（5×7） | **已修**：改为 35/35 `match`（第七轮再次独立复算确认为 35，非 38） |
 | R3-F5 | P2 | 报告 §2 "7 项可比对交叉核对"错误，实际 8 项，且 `qc_status` 不属于这 8 项 | **已修**：改为 8 项并说明 `qc_status` 是跨文档一致性核对 |
 | R3-F6 | P2 | C1 修复未被端到端钉住——把调用点改回 `scaled = imputed` 时全部测试仍通过 | **已修**：新增 `test_pooled_mae_uses_the_scaled_design_matrix`，断言 pooled MAE 等于显式缩放矩阵独立重算值、且不等于未缩放矩阵重算值 |
 | R3-F7 | P2 | `neural_status` 汇总把被拒绝折的默认状态算进去，4 折完成却报 `torch_unavailable` | **已修**：`_neural_status` 只统计实际跑过的折；报告新增 `refused_folds` |
@@ -376,7 +380,39 @@ ridge 系数 / 折指派；`_fit_scaler` 委托的均值、标准差、计数、
 该轮评审者披露：一次诊断调用用了默认输出目录，写入了 gitignore 的
 `runs/physio-real-data/`；被跟踪工作树保持干净，未再重跑该命令。
 
-### 9.4 六轮独立评审确认正确的部分
+#### 第七轮复核（`claudeAgent` / claude-opus-5-5，7/10，审 `57c37f6`）
+
+该轮确认 C1/C2/C5/C6/C7 已修、C3/C4 基本已修、C8/C9 部分已修，并用内存探针复算全部数字。
+它最重要的发现是**本报告自身的一处伪造数字**：
+
+| ID | 严重度 | 问题 | 处置 |
+|---|---|---|---|
+| R2 | **P1** | 报告 §5 写"Session 1、2 的 `y_delta_rr`：可导出（17→17、15→15）"。**实际是 `18→16`（Δ=-2.0）与 `16→16`（Δ=0.0）**——`17` 与 `15` 在任何端点里都不存在。一个通篇主张"不产生虚假数据"的审计工件里出现编造数字 | **已修**：改为实测端点与 Δ；§2 的"38 个标签值"此前已改为 35/35；§9.4 的历史记录加更正说明 |
+| R4 | P2 | `rr=0` "表示无信号"、`is_complete=否` 称"快照"被当作已知语义陈述，而 §5 自己说这些语义未公开 | **已修**：报告 §3 两张表、§2 规则段、设计文档 §3 全部改为"**假设**/工作称呼/未经厂商字典确认/不是已知语义" |
+| R6 | P2 | 五个测试对各自修复的复发不敏感（见下表） | **已修**：逐个补齐并突变验证 |
+| R7 | P3 | C2/C6/C7 是纯文档修复，无任何回归守卫，可无声腐烂 | **已修**：新增 `test_disclosure_text_has_not_regressed` |
+
+R6 逐项处置：
+
+| 修复 | 原测试为何可被复发绕过 | 新测试 |
+|---|---|---|
+| C3 acceptance 字段 | 无测试断言 `run_acceptance()["real_data_mapping_status"]` 存在，删掉该字段全套绿 | `test_acceptance_exposes_an_independent_real_data_mapping_verdict`：字段存在、以 `MAPPING_NOT_VERIFIED` 开头、含 blocker 数，且与 `status=PASS` 并存。**突变：删除该字段 → 失败** |
+| C5 委托 | 只比较数值，重新引入一份算术相同的本地实现也能通过 | `test_fold_scaler_delegates_to_the_shared_window_scaler` 用 monkeypatch 包住 `WindowScaler.fit` 并断言它**被调用过**、收到的特征名正确；另加 `test_shared_scaler_adapter_preserves_the_observed_mask` 断言适配器交出去的是 `observed_mask` 而非 `valid_mask` |
+| C8 manifest 守卫 | 无测试构造 `final_loss=nan/inf` | `test_manifest_rejects_a_non_finite_final_loss` 对三种非有限值断言 `ValueError`。**突变：删除 `math.isfinite` 守卫 → 失败** |
+| C4 报告字段 | 原断言 `isinstance(tuple)` + 子集，空元组也通过 | `4830f68`/`4e9dc16` 已改为与独立计算比对；`SYNTH-E` 去掉 `体脂` 记录后该字段在合成 fixture 上非空 |
+| C9 列序 | 只查数量与 8 个哨兵名 | `332fa12` 已改为 tuple 全等；本轮把 `EXTRACT-FITTED HYPOTHESIS` 断言改为计数 ≥3，**突变：删掉任意一个标签 → 失败** |
+
+该轮还确认：**未找到任何泄漏路径**（极端留出值不改训练统计量、重复受试者行只落一折、
+插补位置不进缩放统计量、`Ridge`/`train_realtime_smoke` 只拿训练行、每折独立 checkpoint、
+`None` 目标被排除、`y_pri` 恒空、共享身份 `SHARED_ACCOUNT_UNKNOWN`）；
+并确认 R1 类残留是**标准化绕过而非统计泄漏**。其复算的 190/22/196/0、40/0/25、
+9/10 blocker、35 个 `y_delta` 单元格、`BODY_DIM=12`/`PHYSIO_DIM=7` → 9/19、56 条 QC 问题
+全部与代码一致。
+
+该轮披露：执行 pytest/verify 与预实验会写 gitignore 的 `runs/` 产物与 Python 缓存，
+不完全只读；未做任何源码编辑、提交、PR、评论或启动子代理。
+
+### 9.4 七轮独立评审确认正确的部分
 
 第一轮（`pi`）：独立重算 5 条真实 Session 的 `y_delta` 值与参考完全一致；
 未找到另一条同样简洁且能复现的规则；折内拟合经 observed counts 验证无泄漏；
@@ -405,5 +441,6 @@ C1 修复可被 mutation 检测；
 - 第四、五、六轮评审者均**未执行** pytest / ruff / acceptance（第六轮只跑聚焦测试与
   `run_acceptance()`），因此报告中的测试与验收总数在其审阅时点是源码与产物声明，
   不是独立复跑结果；第五轮评审者本地缺 `sklearn`。
-- 五轮评审均无法验证 `fatigue_level`、`脑波` 记录选择规则、`is_complete` 语义、
-  以及 5 个 `subject_key` 是否为 5 个生理受试者（需厂商字段字典）。
+- 七轮评审均无法验证 `fatigue_level`、`脑波` 记录选择规则、`is_complete` 语义、
+  `rr=0` 语义、`response_hash` 构造、`15.41` 补值来源，以及 5 个 `subject_key`
+  是否为 5 个生理受试者（需厂商字段字典）。

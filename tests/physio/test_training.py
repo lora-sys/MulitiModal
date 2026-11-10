@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -216,3 +218,29 @@ def test_smoke_manifest_cannot_be_promoted_to_validated(tmp_path):
         ModelArtifact.from_manifest(
             manifest, scaler, validation_status=VALIDATION_VALIDATED
         )
+
+
+def test_manifest_rejects_a_non_finite_final_loss():
+    """The C8 guard: a NaN/inf loss must not be persistable.
+
+    Without this, deleting ``math.isfinite(self.final_loss)`` from
+    ``TrainingManifest.__post_init__`` would leave the whole suite green.
+    """
+    rows = _rows()
+    scaler = _scaler(rows)
+    good = train_realtime_smoke(
+        rows,
+        [10.0, 20.0, 30.0, 40.0],
+        scaler=scaler,
+        config=TrainingConfig(epochs=1, seed=9, hidden_dim=8, fusion_dim=8),
+        out_dir=_scratch_dir(),
+    )
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="final_loss must be finite"):
+            replace(good, final_loss=bad)
+
+
+def _scratch_dir() -> Path:
+    import tempfile
+
+    return Path(tempfile.mkdtemp(prefix="physio-manifest-"))

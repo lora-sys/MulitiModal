@@ -381,3 +381,45 @@ def test_a_refused_fold_never_reaches_the_models():
     # row supplied it; the refusal has to come from the scaler, not the imputer.
     imputer = FoldImputer.fit(training)
     assert imputer.transform(held_out).valid_mask[0] is True
+
+
+def test_disclosure_text_has_not_regressed():
+    """C2/C6/C7 are documentation fixes; a test keeps them from silently rotting.
+
+    Each assertion targets a phrase a reviewer relied on, so deleting the sentence
+    fails here rather than passing unnoticed.
+    """
+    from physio import real_training
+
+    script = (FIXTURES.parents[1] / "scripts" / "physio_real_data_check.py").read_text(
+        encoding="utf-8"
+    )
+    design = (FIXTURES.parents[1] / "docs" / "design" / "physio-real-data-v1.md").read_text(
+        encoding="utf-8"
+    )
+    report = (FIXTURES.parents[1] / "docs" / "reports" / "issue-102-real-data-access.md").read_text(
+        encoding="utf-8"
+    )
+
+    # C2: no model-comparison framing.
+    assert "NOT a model comparison" in script
+    assert "model ranking" in script and "not reported" in script
+
+    # C6: reverse-engineered constants are labelled as hypotheses.
+    source = (FIXTURES.parents[1] / "src" / "physio" / "real_export.py").read_text(
+        encoding="utf-8"
+    )
+    # One label per reverse-engineered constant group: endpoint rule, BP guardrails
+    # and heart-rate tolerance. Asserting the count makes each label individually
+    # mutation-sensitive.
+    assert source.count("EXTRACT-FITTED HYPOTHESIS") >= 3
+    assert "抽取集反推假设" in design
+    assert "不是冻结规范" in design
+
+    # C7: near-autoregressive targets are disclosed in code and in the report.
+    assert "near-autoregressive" in (real_training.__doc__ or "")
+    assert "near-autoregressive" in report or "近似自回归" in report
+
+    # R4: the rr=0 and completion-flag readings are hypotheses, not known semantics.
+    assert "未经厂商字典确认" in report
+    assert "不是已知语义" in design
