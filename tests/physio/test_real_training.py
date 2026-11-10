@@ -7,13 +7,21 @@ from pathlib import Path
 
 import pytest
 
-from physio.dataset import IDENTITY_TRUSTED, FeatureRow, FoldImputer
+from physio.dataset import (
+    IDENTITY_SHARED,
+    IDENTITY_TRUSTED,
+    FeatureRow,
+    FoldImputer,
+    make_subject_folds,
+)
 from physio.preprocessing import WindowScaler
 from physio.real_export import import_real_export, session_feature_row
 from physio.real_training import (
+    FOLD_SEED,
     MODEL_MEAN,
     MODEL_NEURAL,
     MODEL_RIDGE,
+    MODELS,
     NEURAL_COMPLETED,
     NEURAL_UNAVAILABLE,
     STATUS_INSUFFICIENT,
@@ -21,6 +29,7 @@ from physio.real_training import (
     TARGET_POST_STATE,
     RealTrainingError,
     _fit_scaler,
+    _ridge_predict,
     _scaled_row,
     build_targets,
     run_real_pre_experiment,
@@ -125,7 +134,9 @@ def test_imputed_positions_never_enter_the_scaler_statistics():
     scaler = _fit_scaler(imputed[:4])
     weight_index = rows[0].feature_names.index("weight_kg")
     assert all(imputed[1].imputed_mask[index] for index in (0, 1))
-    assert all(imputed[4].observed_mask[index] for index in (0, 1))
+    assert all(imputed[2].imputed_mask[index] for index in (0, 1))
+    assert all(imputed[4].imputed_mask[index] for index in (0, 1))
+    assert all(imputed[0].observed_mask[index] for index in (0, 1))
     assert scaler.observed_counts[weight_index] == 2
     assert scaler.mean[weight_index] == pytest.approx(sum(observed) / 2.0)
     assert scaler.observed_counts == tuple(
@@ -173,11 +184,141 @@ def test_scaler_statistics_come_from_the_training_fold_only():
     assert fold_scaler.observed_counts != whole_scaler.observed_counts
 
 
-def test_masked_placeholder_features_are_named():
+def test_pooled_mae_uses_the_scaled_design_matrix():
+    """End-to-end guard: reverting the call site must change the reported MAE.
+
+    The three scaler unit tests exercise `_scaled_row` directly and would still
+    pass if the caller handed the raw imputed rows to the models instead. This
+    asserts the published pooled MAE equals an independently recomputed one built
+    from an explicitly scaled design matrix.
+    """
+    sessions = _sessions()
+    rows = [session_feature_row(session) for session in sessions]
+    targets = list(build_targets(sessions, TARGET_POST_STATE))
+    subjects = [session.subject_ref for session in sessions]
+    folds = make_subject_folds(
+        subjects,
+        n_folds=len(set(subjects)),
+        seed=FOLD_SEED,
+        identity_trust=IDENTITY_SHARED,
+        allow_untrusted=True,
+    )
+
+    expected_errors: list[float] = []
+    for fold_index in range(folds.n_folds):
+        train_idx = [
+            i
+            for i in range(len(rows))
+            if folds.folds[subjects[i]] != fold_index and targets[i] is not None
+        ]
+        test_idx = [
+            i
+            for i in range(len(rows))
+            if folds.folds[subjects[i]] == fold_index and targets[i] is not None
+        ]
+        if not train_idx or not test_idx:
+            continue
+        imputer = FoldImputer.fit([rows[i] for i in train_idx])
+        imputed = [imputer.transform(row) for row in rows]
+        scaler = _fit_scaler([imputed[i] for i in train_idx])
+        scaled = [_scaled_row(imputed[i], scaler) for i in range(len(rows))]
+        train_targets = [float(targets[i]) for i in train_idx]
+        predicted = _ridge_predict(
+            [scaled[i] for i in train_idx], train_targets, [scaled[i] for i in test_idx]
+        )
+        expected_errors.extend(
+            abs(value - float(targets[i])) for value, i in zip(predicted, test_idx, strict=True)
+        )
+
+    report = _report(target=TARGET_POST_STATE)
+    expected = sum(expected_errors) / len(expected_errors)
+    assert report.model_mae[MODEL_RIDGE] == pytest.approx(expected)
+    # And it must not equal the unscaled variant.
+    unscaled: list[float] = []
+    for fold_index in range(folds.n_folds):
+        train_idx = [
+            i
+            for i in range(len(rows))
+            if folds.folds[subjects[i]] != fold_index and targets[i] is not None
+        ]
+        test_idx = [
+            i
+            for i in range(len(rows))
+            if folds.folds[subjects[i]] == fold_index and targets[i] is not None
+        ]
+        if not train_idx or not test_idx:
+            continue
+        imputer = FoldImputer.fit([rows[i] for i in train_idx])
+        imputed = [imputer.transform(row) for row in rows]
+        train_targets = [float(targets[i]) for i in train_idx]
+        predicted = _ridge_predict(
+            [imputed[i] for i in train_idx], train_targets, [imputed[i] for i in test_idx]
+        )
+        unscaled.extend(
+            abs(value - float(targets[i])) for value, i in zip(predicted, test_idx, strict=True)
+        )
+    unscaled_mae = sum(unscaled) / len(unscaled)
+    assert report.model_mae[MODEL_RIDGE] != pytest.approx(unscaled_mae)
+
+
+def test_a_refused_fold_is_recorded_not_dropped():
+    """A fold whose scaler cannot be fitted is reported with its reason."""
     report = _report()
-    # A masked placeholder is a zero in the design matrix, never a measurement.
+    assert report.folds
+    for fold in report.folds:
+        if fold.refusal:
+            assert fold.predictions == {name: () for name in MODELS}
+            assert fold.targets == ()
+            assert all(value is None for value in fold.mae.values())
+            assert "refusing to fabricate a normalization" in fold.refusal
+
+
+def test_masked_placeholder_features_are_named():
+    """The report field must be derived, not vacuously empty.
+
+    The synthetic fixture happens to impute every missing feature, so the field is
+    empty there. That must be a property of the data, not of a deleted
+    computation: the same helper is asserted to populate the field when a feature
+    really cannot be imputed.
+    """
+    report = _report()
     assert isinstance(report.masked_placeholder_features, tuple)
     assert set(report.masked_placeholder_features) <= set(report.imputed_features)
+
+    # Now force the situation: one session's weight_kg is the only observation, so
+    # a fold holding it out leaves the feature unimputable.
+    sessions = list(_sessions())
+    rows = [session_feature_row(session) for session in sessions]
+    targets = list(build_targets(sessions, TARGET_POST_STATE))
+    subjects = [session.subject_ref for session in sessions]
+    folds = make_subject_folds(
+        subjects,
+        n_folds=len(set(subjects)),
+        seed=FOLD_SEED,
+        identity_trust=IDENTITY_SHARED,
+        allow_untrusted=True,
+    )
+    masked: set[str] = set()
+    for fold_index in range(folds.n_folds):
+        train_idx = [
+            i
+            for i in range(len(rows))
+            if folds.folds[subjects[i]] != fold_index and targets[i] is not None
+        ]
+        if not train_idx:
+            continue
+        imputer = FoldImputer.fit([rows[i] for i in train_idx])
+        for row in rows:
+            transformed = imputer.transform(row)
+            masked |= {
+                name
+                for name, valid in zip(
+                    transformed.feature_names, transformed.valid_mask, strict=True
+                )
+                if not valid
+            }
+    assert masked, "the synthetic fixture should leave at least one feature unimputable"
+    assert set(report.masked_placeholder_features) == masked
 
 
 def test_a_feature_with_too_few_training_observations_stays_masked():

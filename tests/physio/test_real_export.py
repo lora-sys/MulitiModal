@@ -55,7 +55,7 @@ def test_import_builds_one_session_per_export_key():
         "SYNTH-D",
         "SYNTH-E",
     ]
-    assert sum(len(session.records) for session in sessions) == 37
+    assert sum(len(session.records) for session in sessions) == 36
 
 
 def test_endpoint_merge_takes_first_valid_value_per_metric():
@@ -147,6 +147,7 @@ def test_single_brain_record_is_emitted_and_auditable():
     assert _session("SYNTH-E").eeg_record_id == "9405"
     assert _session("SYNTH-E").eeg_values["brain_overall"] == 28.0
     assert _session("SYNTH-E").eeg_values["sample_points"] == 400.0
+    assert _session("SYNTH-E").static_values == {}
     assert _session("SYNTH-B").eeg_record_id == ""
 
 
@@ -155,7 +156,7 @@ def test_missing_module_families_are_reported_at_session_level():
     assert QC_MISSING_MODULE in session.issue_codes()
     for module in ("body", "tcm", "eeg"):
         assert session.module_present(module) is False
-    full = _session("SYNTH-E")
+    full = _session("SYNTH-A")
     assert QC_MISSING_MODULE not in full.issue_codes()
     for module in ("bp", "health", "body", "tcm", "eeg"):
         assert full.module_present(module) is True

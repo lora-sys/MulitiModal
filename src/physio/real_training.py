@@ -132,6 +132,7 @@ class RealTrainingReport:
     imputed_features: tuple[str, ...]
     feature_missing_counts: dict[str, int]
     masked_placeholder_features: tuple[str, ...]
+    refused_folds: tuple[int, ...]
     evaluation_status: str
     evaluation_metrics: dict[str, float | None] = dataclass_field(default_factory=dict)
     notes: tuple[str, ...] = ()
@@ -156,6 +157,7 @@ class RealTrainingReport:
             "imputed_features": list(self.imputed_features),
             "feature_missing_counts": dict(self.feature_missing_counts),
             "masked_placeholder_features": list(self.masked_placeholder_features),
+            "refused_folds": list(self.refused_folds),
             "evaluation_status": self.evaluation_status,
             "evaluation_metrics": dict(self.evaluation_metrics),
             "folds": [fold.to_dict() for fold in self.folds],
@@ -220,15 +222,25 @@ def _scaled_row(row: FeatureRow, scaler: WindowScaler) -> FeatureRow:
     stays ``0.0`` with ``valid_mask`` false: that zero is a masked placeholder,
     never a measurement, and ``masked_placeholder_features`` names the columns
     where it still occurs.
+
+    A position that *is* valid but was never observed while the scaler was fitted
+    is refused, exactly as ``WindowScaler.transform`` refuses it: normalizing it
+    would publish a raw, unstandardized value that looks standardized. Callers
+    record the refusal instead of silently degrading the fold.
     """
     if row.feature_names != scaler.feature_names:
         raise RealTrainingError("row does not share the scaler feature contract")
-    values = [
-        (float(value) - mean) / std if valid else 0.0
-        for value, valid, mean, std in zip(
-            row.values, row.valid_mask, scaler.mean, scaler.std, strict=True
-        )
-    ]
+    values: list[float] = []
+    for index, (value, valid) in enumerate(zip(row.values, row.valid_mask, strict=True)):
+        if not valid:
+            values.append(0.0)
+            continue
+        if scaler.observed_counts[index] == 0:
+            raise RealTrainingError(
+                f"feature {scaler.feature_names[index]!r} is valid in this row but was never "
+                "observed while fitting the fold scaler; refusing to fabricate a normalization"
+            )
+        values.append((float(value) - scaler.mean[index]) / scaler.std[index])
     return FeatureRow(
         feature_names=row.feature_names,
         values=tuple(values),
@@ -318,6 +330,7 @@ def run_real_pre_experiment(
         raise RealTrainingError(f"subject-level folds refused: {exc}") from exc
 
     fold_results: list[FoldResult] = []
+    masked: set[str] = set()
     for fold_index in range(folds.n_folds):
         train_idx = [
             index
@@ -331,98 +344,47 @@ def run_real_pre_experiment(
         ]
         if not train_idx or not test_idx:
             continue
-        imputer = FoldImputer.fit([rows[index] for index in train_idx])
-        imputed = [imputer.transform(row) for row in rows]
-        scaler = _fit_scaler([imputed[index] for index in train_idx])
-        scaled = [_scaled_row(imputed[index], scaler) for index in range(len(rows))]
-
-        train_rows = [scaled[index] for index in train_idx]
-        test_rows = [scaled[index] for index in test_idx]
-        train_targets = [float(targets[index]) for index in train_idx]
-        test_targets = [float(targets[index]) for index in test_idx]
-
-        predictions: dict[str, tuple[float, ...]] = {
-            MODEL_MEAN: tuple(float(np.mean(train_targets)) for _ in test_targets),
-            MODEL_RIDGE: _ridge_predict(train_rows, train_targets, test_rows),
-        }
-        mae: dict[str, float | None] = {
-            MODEL_MEAN: _mae(predictions[MODEL_MEAN], test_targets),
-            MODEL_RIDGE: _mae(predictions[MODEL_RIDGE], test_targets),
-        }
-        neural_status = NEURAL_UNAVAILABLE
-        final_loss: float | None = None
-        refusal = ""
         try:
-            assert_trainable(
-                train_rows,
-                train_targets,
-                config=CONFIG,
-                identity_trust=IDENTITY_SHARED,
-                allow_untrusted_pipeline=True,
+            fold_result, fold_masked = _run_fold(
+                fold_index=fold_index,
+                rows=rows,
+                targets=targets,
+                subjects=subjects,
+                train_idx=train_idx,
+                test_idx=test_idx,
+                out_dir=out_dir,
             )
-        except TrainingRefused as exc:
-            neural_status = NEURAL_REFUSED
-            refusal = str(exc)
-        else:
-            fold_dir = _fold_checkpoint_dir(out_dir, fold_index)
-            try:
-                manifest = train_realtime_smoke(
-                    train_rows,
-                    train_targets,
-                    scaler=scaler,
-                    config=CONFIG,
-                    identity_trust=IDENTITY_SHARED,
-                    allow_untrusted_pipeline=True,
-                    out_dir=fold_dir,
+        except RealTrainingError as exc:
+            # A refused fold is recorded, never silently dropped or degraded.
+            fold_results.append(
+                FoldResult(
+                    fold=fold_index,
+                    train_subjects=tuple(sorted({subjects[i] for i in train_idx})),
+                    test_subjects=tuple(sorted({subjects[i] for i in test_idx})),
+                    n_train=len(train_idx),
+                    n_test=len(test_idx),
+                    predictions={name: () for name in MODELS},
+                    targets=(),
+                    mae={name: None for name in MODELS},
+                    refusal=str(exc),
                 )
-            except TrainingUnavailable:
-                neural_status = NEURAL_UNAVAILABLE
-            except TrainingRefused as exc:
-                neural_status = NEURAL_REFUSED
-                refusal = str(exc)
-            else:
-                neural_status = NEURAL_COMPLETED
-                final_loss = manifest.final_loss
-                predictions[MODEL_NEURAL] = predict_masked(
-                    test_rows,
-                    checkpoint=fold_dir / "model_state.pt",
-                    scaler=scaler,
-                    hidden_dim=CONFIG.hidden_dim,
-                    fusion_dim=CONFIG.fusion_dim,
-                    dropout=CONFIG.dropout,
-                )
-                mae[MODEL_NEURAL] = _mae(predictions[MODEL_NEURAL], test_targets)
-
-        if MODEL_NEURAL not in predictions:
-            predictions[MODEL_NEURAL] = ()
-            mae[MODEL_NEURAL] = None
-
-        fold_results.append(
-            FoldResult(
-                fold=fold_index,
-                train_subjects=tuple(sorted({subjects[index] for index in train_idx})),
-                test_subjects=tuple(sorted({subjects[index] for index in test_idx})),
-                n_train=len(train_idx),
-                n_test=len(test_idx),
-                predictions=predictions,
-                targets=tuple(test_targets),
-                mae=mae,
-                final_loss=final_loss,
-                neural_status=neural_status,
-                refusal=refusal,
             )
-        )
+            continue
+        masked |= fold_masked
+        fold_results.append(fold_result)
 
-    pooled_predictions = {
-        name: [value for fold in fold_results for value in fold.predictions.get(name, ())]
-        for name in MODELS
-    }
-    pooled_targets = [value for fold in fold_results for value in fold.targets]
-    pooled_subjects = [
-        subject
-        for fold in fold_results
-        for subject in fold.test_subjects
-    ]
+    # Pool only folds that produced a target, so predictions, targets and subjects
+    # stay in lockstep and a refused fold never desynchronises the arrays.
+    pooled_predictions: dict[str, list[float]] = {name: [] for name in MODELS}
+    pooled_targets: list[float] = []
+    pooled_subjects: list[str] = []
+    for fold in fold_results:
+        if not fold.targets:
+            continue
+        for name in MODELS:
+            pooled_predictions[name].extend(fold.predictions.get(name, ()))
+        pooled_targets.extend(fold.targets)
+        pooled_subjects.extend(fold.test_subjects)
     model_mae: dict[str, float | None] = {}
     for name in MODELS:
         values = pooled_predictions[name]
@@ -443,25 +405,6 @@ def run_real_pre_experiment(
             if not valid:
                 missing_by_feature[name] = missing_by_feature.get(name, 0) + 1
     imputed_features = tuple(sorted(missing_by_feature))
-
-    # After fold imputation some positions may still be invalid: the training
-    # fold had too few observations for a median. Those become 0.0 placeholders
-    # in the design matrix and must be named, never mistaken for measurements.
-    masked: set[str] = set()
-    for fold_index in range(folds.n_folds):
-        train_idx = [
-            index
-            for index in range(len(rows))
-            if folds.folds[subjects[index]] != fold_index and targets[index] is not None
-        ]
-        if not train_idx:
-            continue
-        imputer = FoldImputer.fit([rows[index] for index in train_idx])
-        for index in range(len(rows)):
-            transformed = imputer.transform(rows[index])
-            for name, valid in zip(transformed.feature_names, transformed.valid_mask, strict=True):
-                if not valid:
-                    masked.add(name)
     masked_placeholder_features = tuple(sorted(masked))
 
     return RealTrainingReport(
@@ -480,9 +423,111 @@ def run_real_pre_experiment(
         imputed_features=imputed_features,
         feature_missing_counts=dict(sorted(missing_by_feature.items())),
         masked_placeholder_features=masked_placeholder_features,
+        refused_folds=tuple(fold.fold for fold in fold_results if fold.refusal),
         evaluation_status=report.status,
         evaluation_metrics=report.metrics,
         notes=tuple(notes),
+    )
+
+
+def _run_fold(
+    *,
+    fold_index: int,
+    rows: Sequence[FeatureRow],
+    targets: Sequence[float | None],
+    subjects: Sequence[str],
+    train_idx: Sequence[int],
+    test_idx: Sequence[int],
+    out_dir: Path | None,
+) -> tuple[FoldResult, set[str]]:
+    """Run one leave-one-subject-out fold and report its masked placeholder columns."""
+    imputer = FoldImputer.fit([rows[index] for index in train_idx])
+    imputed = [imputer.transform(row) for row in rows]
+    scaler = _fit_scaler([imputed[index] for index in train_idx])
+    scaled = [_scaled_row(imputed[index], scaler) for index in range(len(rows))]
+    masked = {
+        name
+        for row in imputed
+        for name, valid in zip(row.feature_names, row.valid_mask, strict=True)
+        if not valid
+    }
+
+    train_rows = [scaled[index] for index in train_idx]
+    test_rows = [scaled[index] for index in test_idx]
+    train_targets = [float(targets[index]) for index in train_idx]
+    test_targets = [float(targets[index]) for index in test_idx]
+
+    predictions: dict[str, tuple[float, ...]] = {
+        MODEL_MEAN: tuple(float(np.mean(train_targets)) for _ in test_targets),
+        MODEL_RIDGE: _ridge_predict(train_rows, train_targets, test_rows),
+    }
+    mae: dict[str, float | None] = {
+        MODEL_MEAN: _mae(predictions[MODEL_MEAN], test_targets),
+        MODEL_RIDGE: _mae(predictions[MODEL_RIDGE], test_targets),
+    }
+    neural_status = NEURAL_UNAVAILABLE
+    final_loss: float | None = None
+    refusal = ""
+    try:
+        assert_trainable(
+            train_rows,
+            train_targets,
+            config=CONFIG,
+            identity_trust=IDENTITY_SHARED,
+            allow_untrusted_pipeline=True,
+        )
+    except TrainingRefused as exc:
+        neural_status = NEURAL_REFUSED
+        refusal = str(exc)
+    else:
+        fold_dir = _fold_checkpoint_dir(out_dir, fold_index)
+        try:
+            manifest = train_realtime_smoke(
+                train_rows,
+                train_targets,
+                scaler=scaler,
+                config=CONFIG,
+                identity_trust=IDENTITY_SHARED,
+                allow_untrusted_pipeline=True,
+                out_dir=fold_dir,
+            )
+        except TrainingUnavailable:
+            neural_status = NEURAL_UNAVAILABLE
+        except TrainingRefused as exc:
+            neural_status = NEURAL_REFUSED
+            refusal = str(exc)
+        else:
+            neural_status = NEURAL_COMPLETED
+            final_loss = manifest.final_loss
+            predictions[MODEL_NEURAL] = predict_masked(
+                test_rows,
+                checkpoint=fold_dir / "model_state.pt",
+                scaler=scaler,
+                hidden_dim=CONFIG.hidden_dim,
+                fusion_dim=CONFIG.fusion_dim,
+                dropout=CONFIG.dropout,
+            )
+            mae[MODEL_NEURAL] = _mae(predictions[MODEL_NEURAL], test_targets)
+
+    if MODEL_NEURAL not in predictions:
+        predictions[MODEL_NEURAL] = ()
+        mae[MODEL_NEURAL] = None
+
+    return (
+        FoldResult(
+            fold=fold_index,
+            train_subjects=tuple(sorted({subjects[index] for index in train_idx})),
+            test_subjects=tuple(sorted({subjects[index] for index in test_idx})),
+            n_train=len(train_idx),
+            n_test=len(test_idx),
+            predictions=predictions,
+            targets=tuple(test_targets),
+            mae=mae,
+            final_loss=final_loss,
+            neural_status=neural_status,
+            refusal=refusal,
+        ),
+        masked,
     )
 
 
@@ -497,9 +542,15 @@ def _fold_checkpoint_dir(out_dir: Path | None, fold_index: int) -> Path:
 
 
 def _neural_status(fold_results: Sequence[FoldResult]) -> str:
-    statuses = {fold.neural_status for fold in fold_results}
-    if not statuses:
+    """Neural status over the folds that actually ran.
+
+    A refused fold never reached training, so its default status must not drag the
+    summary to ``torch_unavailable`` and hide that the other folds completed.
+    """
+    ran = [fold for fold in fold_results if fold.targets]
+    if not ran:
         return NEURAL_UNAVAILABLE
+    statuses = {fold.neural_status for fold in ran}
     if statuses == {NEURAL_COMPLETED}:
         return NEURAL_COMPLETED
     if NEURAL_REFUSED in statuses:

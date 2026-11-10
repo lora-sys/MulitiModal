@@ -118,6 +118,8 @@ def main(argv: list[str] | None = None) -> int:
         "evaluation_reason": training.reason,
         "model_mae": training.model_mae,
         "neural_status": training.neural_status,
+        "refused_folds": list(training.refused_folds),
+        "masked_placeholder_features": list(training.masked_placeholder_features),
         "passed": audit.passed
         and training.evaluation_status in {"EVALUATED", "INSUFFICIENT_EVIDENCE"},
         "mapping_verified": audit.mapping_verified,
@@ -138,7 +140,9 @@ def main(argv: list[str] | None = None) -> int:
               for name, value in training.model_mae.items()
           )
           + "  <- pipeline regression only, NOT a model comparison")
-    print(f"neural path     : {training.neural_status}")
+    print(f"neural path     : {training.neural_status}"
+          f" (folds run: {len(training.folds) - len(training.refused_folds)}/{len(training.folds)}"
+          + (f", refused: {list(training.refused_folds)}" if training.refused_folds else "") + ")")
     print("model ranking   : not reported; "
           f"{training.n_sessions} sessions with one test row per fold cannot rank models")
     for item in audit.open_items:
@@ -146,9 +150,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"reports         : {out_dir}")
     print(f"evidence        : {EVIDENCE_LEVEL} / {ISOLATION_LEVEL}")
     print("gates           : " + ", ".join(NOT_GRANTED_GATES))
-    print(f"mapping verified: {audit.mapping_status} — engineering PASS does not verify the "
-          "94-field mapping")
     print("OVERALL:", "PASS" if report["passed"] else "FAIL")
+    print(f"mapping verified: {audit.mapping_status} ({len(audit.mapping_blockers)} blockers) — "
+          "engineering PASS does not verify the 94-field mapping")
     return 0 if report["passed"] else 1
 
 

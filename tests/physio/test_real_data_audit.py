@@ -45,7 +45,7 @@ def test_every_reference_field_is_accounted_for():
     assert counts[VERDICT_EXPLAINED] > 0
     assert counts[VERDICT_NOT_RECOVERABLE] > 0
     assert audit.sessions == 5
-    assert audit.records == 37
+    assert audit.records == 36
 
 
 def test_provenance_covers_exactly_the_provided_records():
@@ -109,7 +109,7 @@ def test_qc_status_is_reconstructed_from_module_presence():
     statuses = {f.session_id: f.reconstructed for f in audit.findings if f.field == "qc_status"}
     assert statuses["SYNTH-A"] == "COMPLETE"
     assert statuses["SYNTH-B"] == "INCOMPLETE"
-    assert statuses["SYNTH-E"] == "COMPLETE"
+    assert statuses["SYNTH-E"] == "INCOMPLETE"
     assert all(f.verdict == VERDICT_MATCH for f in audit.findings if f.field == "qc_status")
 
 
@@ -202,13 +202,30 @@ def test_summarize_findings_groups_by_verdict():
 
 def test_synthetic_fixture_carries_the_full_94_column_shape():
     """The fixture must exercise the real reference shape, not a reduced one."""
-    columns = set(load_reference_rows(REFERENCE)[0])
+    columns = list(load_reference_rows(REFERENCE)[0])
     real_shape = {
         "y_delta_sbp", "brain_record_id", "feature_route", "response_hash",
         "brain_neutral_pct", "sublingual_vein", "impedance", "age_group",
     }
     assert len(columns) == 94
-    assert real_shape <= columns
+    assert len(set(columns)) == 94
+    assert real_shape <= set(columns)
+
+
+def test_synthetic_fixture_column_order_matches_the_reference():
+    """Column order is part of the frozen shape, so it is asserted, not assumed.
+
+    The private reference is the only source of the real order; when it is absent
+    the test skips rather than passing on an unchecked assumption.
+    """
+    private = FIXTURES.parent.parent / "data" / "local" / "physio-legacy" / (
+        "reference_train94_5sessions.csv"
+    )
+    if not private.is_file():
+        pytest.skip("private reference export is not present on this host")
+    expected = list(load_reference_rows(private)[0])
+    actual = list(load_reference_rows(REFERENCE)[0])
+    assert actual == expected
 
 
 def test_mapping_status_is_not_verified_while_blockers_remain():

@@ -31,9 +31,11 @@
 | `not_recoverable` | **196** | 本脱敏抽取集不含该列，不假设、不补造 |
 | `mismatch` | **0** | 无值级不一致 |
 
-参考质量报告有 7 项可比对交叉核对：`健康完成态数`（含 `0(仅快照)` 的前导整数）、
-`窗口`、`缺失字段`（bodyfat / tongue / brain / rr 四项）、`异常`、`label_masks`、
-`qc_status`（与参考自身的 `缺失字段` 列对照），共 **40 项 `match` / 0 项 `mismatch`**。
+参考质量报告有 **8 项可比对交叉核对**：`健康完成态数`（含 `0(仅快照)` 的前导整数）、
+`窗口`、`缺失字段` 四项（bodyfat / tongue / brain / rr）、`异常`、`label_masks`，
+共 **40 项 `match` / 0 项 `mismatch`**。`qc_status` 属于训练集与质量报告之间的
+**跨文档一致性核对**（用训练集的 `qc_status` 对照质量报告自身的 `缺失字段` 列），
+不计入上述 8 项。
 另有 5 项重建观察（共用账号身份、快照端点、点级流排除、跨模块心率、模块族覆盖）
 参考报告没有对应列，记为 `observation`，**不计入一致数**。
 
@@ -43,8 +45,9 @@
 `date`/`batch_date`、`protocol_version`/`pipeline_version`/`score_version`/`label_version`
 常量、`y_pri` 恒空、`qc_status`、`label_masks`（5/5 条）。
 
-**`y_delta_*` 重建结论**：5 条 Session 共 38 个标签值，全部与参考一致，含
-`ΔSBP = -7 / -17 / +3 / -52 / -1`、`Δvendor_health = -2.50 / +6.76 / +2.93 / +0.74 / +2.02`。
+**`y_delta_*` 重建结论**：审计对 35 个 `y_delta_*` 单元格（5 条 Session × 7 个契约键）
+逐值比对，**35/35 `match`**，含 `ΔSBP = -7 / -17 / +3 / -52 / -1`、
+`Δvendor_health = -2.50 / +6.76 / +2.93 / +0.74 / +2.02`。
 规则（端点 = 首末测量组、组内按时间取第一个可用值、`spo2` 按 0.01 缩放）见
 [docs/design/physio-real-data-v1.md](../design/physio-real-data-v1.md)。
 
@@ -84,8 +87,13 @@
 
 | 目标 | 训练折均值基线 | 岭回归（sklearn `Ridge`） | realtime MLP（torch 2.15） |
 |---|---|---|---|
-| `post_state`（厂商疲劳指数/100） | MAE 0.0790 | 0.1320 | 50.4151（末损 1946–2001） |
-| `delta_vendor_fatigue`（厂商分） | MAE 5.8000 | 3.1723 | 57.9401（末损 2457–2941） |
+| `post_state`（厂商疲劳指数/100） | MAE 0.08563 | 0.14851 | 44.78747（末损 1946–2001） |
+| `delta_vendor_fatigue`（厂商分） | MAE 6.8750 | 3.50529 | 52.62228（末损 2457–2941） |
+
+上表基于 **4/5 折**（`refused_folds = (3,)`）。第 3 折被**拒绝**而非降级运行：
+该折的留出受试者是唯一有实测体成分的 Session，训练折从未观测 `weight_kg`/`bmi`，
+`_scaled_row` 按 `WindowScaler.transform` 的同一策略拒绝伪造标准化，而不是把
+`65.6 / 23.2` 当"已标准化"值放行。
 
 上表**不排序、不可比**。每折只有 1 个测试行，三个基线之间不存在有意义的先后；
 加粗最小值已移除。MLP 的末损与 MAE 只证明链路跑通（掩码损失、有限梯度、
@@ -100,10 +108,10 @@ checkpoint 保存/重载、每折独立目录、预测），不证明它更好�
 Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在厂商分上近似自回归，
 不能说明"能否从独立生理量预测疲劳"。
 
-**设计矩阵里的 0 是掩码占位符，不是测量值**：`weight_kg`、`bmi`、`respiration_rate`
-在全部折内训练集里的观测数都不足 `FoldImputer.min_observed=2`，因此**每一折**
-都无法为它们建立中位数，进入 `ridge`/MLP 设计矩阵的是 0.0 占位符。
-`RealTrainingReport.masked_placeholder_features` 显式列出这些列，
+**设计矩阵里的 0 是掩码占位符，不是测量值**：`weight_kg`（4/5 条无 `体脂` 记录）、
+`bmi`（4/5）、`respiration_rate`（3/5）在部分折内训练集的观测数不足
+`FoldImputer.min_observed=2`，因此无法建立中位数，进入 `ridge`/MLP 设计矩阵的是
+0.0 占位符。`RealTrainingReport.masked_placeholder_features` 显式列出这些列，
 MAE 无法区分它们与真实零值。
 
 ## 5. 开放项（必须带回厂商字段字典）
@@ -116,36 +124,54 @@ MAE 无法区分它们与真实零值。
 2. `脑波` 记录选择规则（多记录时选哪条）不可还原。
 3. `is_complete` 完成态语义未公开。
 4. 参考行 `response_hash` 的构造方式未声明 → 参考无法被端到端独立验证。
-5. 呼吸率补值 15.41 的来源样本集、`age`/`height_cm`/体成分其余 12 列
+5. 呼吸率补值 15.41 的来源样本集、`age`/`height_cm`/体成分其余 11 列
+   （`body_fat_pct`、`muscle_kg`、`protein_kg`、`bone_mineral_kg`、`skeletal_muscle_kg`、
+   `water_pct`、`visceral_fat`、`impedance`、`body_bmr_kcal`、`body_age`、`body_score`）
    不在本脱敏抽取集内。
 
 ## 6. 自动化验收
 
 | 检查 | 结果 |
 |---|---|
-| `pytest tests`（本地，torch 2.15 已装） | **819 passed / 9 skipped** |
-| `pytest tests/physio` | 359 passed / 0 skipped |
+| `pytest tests`（本地，torch 2.15 已装） | **822 passed / 9 skipped** |
+| `pytest tests/physio` | 362 passed / 0 skipped |
 | `ruff check src/physio tests/physio scripts/physio_real_data_check.py` | PASS |
-| `run_acceptance()` | **16/16 PASS**（新增 `real_export_mapping`、`real_data_audit`、`real_training_pipeline` 三项 #102 检查）。报告另含独立字段 `real_data_mapping_status = MAPPING_NOT_VERIFIED (10 blockers)`，**工程 PASS 不等于 94 字段映射已核实** |
+| `run_acceptance()` | **16/16 PASS**（新增 `real_export_mapping`、`real_data_audit`、`real_training_pipeline` 三项 #102 检查）。报告另含独立字段 `real_data_mapping_status = MAPPING_NOT_VERIFIED`（合成 fixture 上为 10 项 blocker，真实导出上为 9 项——合成 fixture 多出的 1 项是 `SYNTH-C` 上复现真实 Session 4 情形的 `ABSTAIN`），**工程 PASS 不等于 94 字段映射已核实** |
 | `scripts/physio_verify.py` | **OVERALL PASS** |
-| `scripts/physio_real_data_check.py`（私有导出） | 工程 OVERALL PASS + `mapping status: MAPPING_NOT_VERIFIED (9 blockers)`，报告落盘 `runs/physio-real-data/` |
+| `scripts/physio_real_data_check.py`（私有导出） | 工程 OVERALL PASS + `mapping status: MAPPING_NOT_VERIFIED (9 blockers)`，报告落盘 `runs/physio-real-data/`（`audit.json` 含 `mapping_status` / `mapping_blockers` / `mapping_verified` / `passed`） |
 
 **两类结论必须分开读**：
 
 | 结论 | 状态 | 含义 |
 |---|---|---|
 | 工程路径 | **PASS** | 导入→端点→标签→折内拟合→训练→checkpoint→预测全链路跑通，且与参考无矛盾 |
-| 94 字段映射 | **NOT_VERIFIED** | 9 项 blocker：3 个 `ABSTAIN` 标签、`response_hash` 不可独立验证、51 列抽取集未含 |
+| 94 字段映射 | **NOT_VERIFIED** | 9 项 blocker：3 个 `ABSTAIN` 标签、5 个 `response_hash` 不可独立验证、1 条汇总项列出 50 个抽取集未含列 |
 
-新增测试 66 项（`test_real_export.py` 25、`test_real_data_audit.py` 17、
-`test_real_training.py` 18、`test_real_training_torch.py` 6），
+`mapping_blockers` 的 9 项里，`response_hash` 同时出现在 5 个逐 Session 条目和
+50 列汇总项中——汇总是列级事实，逐 Session 条目是行级事实，不是重复计数。
+50 列 = `EXTRACT_ABSENT_REFERENCE_COLUMNS` 的 48 列 + `brain_record_id`
+（多 `脑波` 记录时选择规则不可还原）+ `response_hash`（构造方式未声明）。
+
+新增测试 80 项（`test_real_export.py` 25、`test_real_data_audit.py` 22、
+`test_real_training.py` 27、`test_real_training_torch.py` 6），
 全部只跑 `tests/fixtures/physio-legacy-*-synthetic.csv`（合成 fixture，带 synthetic 标记）。
 合成 fixture 覆盖：快照/完成健康记录对、`rr=0` 回落到完成记录、血压 delta 异常、
 共用账号身份、静态画像碰撞、`脑波逐点`、单/多 `脑波` 记录、缺失模块族、
 `fatigue_level` 无声明语义、未知 `source_type` 拒判、缺列拒判、空文件拒判、
-`ABSTAIN` 调和（含复现真实 Session 4 情形的 `SYNTH-C`）。
-折内拟合有专门负例：折内统计量必须与全集统计量不同、插补位置不得进入统计量、
-折内拟合的岭回归必须与全集拟合结果不同、每折必须有自己的 checkpoint 目录。
+`ABSTAIN` 调和（含复现真实 Session 4 情形的 `SYNTH-C`）、
+折内不可插补的掩码占位符（`SYNTH-E` 无 `体脂` 记录）。
+合成参考 fixture 为**完整 94 列**，列序与真实参考一致（有私有数据时逐列断言，
+无私有数据时跳过而非默认通过）。
+
+折内拟合与缩放的负例：
+- 折内统计量必须与全集统计量不同；
+- 插补位置不得进入统计量（期望中位数独立手算，不重建 imputer 后自我比较）；
+- 折内拟合的岭回归必须与全集拟合结果不同；
+- **端到端钉住**：报告的 pooled MAE 必须等于用显式缩放设计矩阵独立重算的值，
+  且必须不等于用未缩放矩阵重算的值——单独调用 `_scaled_row` 的单测无法发现
+  "调用点传了未缩放行"这类回归；
+- 被拒绝的折必须带理由记录， predictions / targets 清空，MAE 全 `None`；
+- 每折必须有自己的 checkpoint 目录。
 
 ## 7. 本地环境变更（需知悉）
 
@@ -163,7 +189,7 @@ MAE 无法区分它们与真实零值。
 
 ## 9. 评审
 
-### 9.1 多 provider 评审团：10 次尝试，取得 2 份独立评审
+### 9.1 多 provider 评审团：16 次尝试，取得 5 份独立评审
 
 用户要求"开个评审团，跟 claude code 好好讨论"。实际尝试 10 个 provider/模型组合：
 
@@ -181,8 +207,8 @@ MAE 无法区分它们与真实零值。
 失败原因是账号额度/配额/限流/传输错误，**不是代码或环境问题**；重开评审团需要等对应
 provider 的额度恢复。
 
-**共取得 2 份来自不同 provider 的独立评审，仍未满足三个不同 provider 的 council
-要求**，因此 council 不记为"通过"。
+**共取得 5 份来自 2 个不同 provider（`pi`、`claudeAgent`）的独立评审，仍未满足三个不同
+provider 的 council 要求**，因此 council 不记为"通过"。
 
 - **第 1 份**（`pi` / default，task `2031a6d0-…`）：**8 / 10**，结论
   "sound engineering work with honest, reproducible verification; no P0"。
@@ -231,14 +257,53 @@ than it first appears."*
 | C10 | P3 | `real_export.py` ~950 行做了太多事 | **接受为已知维护性风险**，本轮未拆分。理由：拆分是纯重构、无功能收益，且 C1/C5 已消除它造成的实际危害（缩放统计被复制）；按奥卡姆原则不增加无需求的结构。已在设计文档记录该风险 |
 | C11 | P3 | 报告 §6 "All green"紧邻§8 "BLOCKED_BY_DATA_OR_DEVICE"，未解 mismatch 与 PASS 并列 | **本轮新修**：§6 拆成两张表（工程路径 / 映射状态），不再用单一 "All green" |
 
-### 9.4 两轮独立评审确认正确的部分
+### 9.3b 第三轮复核（`57c37f6`）：5 份评审
 
-第一轮（`pi`）：独立重算 5 条真实 Session 的 38 个 `y_delta` 值与参考完全一致；
+| 轮次 | provider / 模型 | 评分 | 审的提交 |
+|---|---|---|---|
+| 3a | `pi` / default | 8.5/10 | `57c37f6` |
+| 3b | `antigravity` / gemini-3.8-flash-high | 9.6/10 | `57c37f6` |
+| 3c | `antigravity` / gemini-3.8-flash-high | 9.0/10 | `57c37f6` |
+| 3d | `antigravity` / gemini-3.8-flash-high | 9.2/10 | `57c37f6` |
+| 3e | `claudeAgent` / claude-opus-5-5 | no score | `57c37f6`（被循环检测停止，未发出评审） |
+
+`claudeAgent` 在第三轮连续三次因传输错误 `fetch failed` 未返回，一次因 Agent 循环调用
+同一命令被平台循环检测停止；其余 4 次重试中 3 次取得 Gemini 评审、1 次取得 `pi` 评审。
+
+#### 第三轮发现的问题及处置
+
+| ID | 严重度 | 问题 | 处置 |
+|---|---|---|---|
+| R3-F1 | **P2** | `_scaled_row` 比 `WindowScaler.transform` 宽松：当 `observed_counts[i] == 0` 时共享策略**拒绝**（"refusing to fabricate a normalization"），而 `_scaled_row` 计算 `(value - 0.0)/1.0`，把原始未标准化值当"已标准化"值放行。真实数据第 3 折实测泄漏 `weight_kg=65.6`、`bmi=23.2` | **已修**：`_scaled_row` 在该位置改为抛 `RealTrainingError`，与共享策略一致；调用方把该折记为**已拒绝**（带理由、predictions/targets 清空、MAE 全 `None`）而非降级运行。真实数据因此为 **4/5 折**（`refused_folds=(3,)`），MAE 已更正 |
+| R3-F2 | P2 | `RealDataAudit.to_dict()` 不含 `mapping_status`/`mapping_blockers`/`mapping_verified`/`passed`，持久化的 `audit.json` 读起来像无限定的一致通过 | **已修**：四个字段全部进入 `to_dict()` |
+| R3-F3 | P2 | 报告 §6 "51 列"错误，实际 50 列（48 + `brain_record_id` + `response_hash`），且 `response_hash` 在 5 个逐 Session 条目与 1 条汇总项中重复出现 | **已修**：改为 50 列并给出构成；说明汇总项是列级事实、逐 Session 条目是行级事实，不是重复计数 |
+| R3-F4 | P2 | 报告 §2 "38 个标签值"错误，实际审计 35 个 `y_delta_*` 单元格（5×7） | **已修**：改为 35/35 `match` |
+| R3-F5 | P2 | 报告 §2 "7 项可比对交叉核对"错误，实际 8 项，且 `qc_status` 不属于这 8 项 | **已修**：改为 8 项并说明 `qc_status` 是跨文档一致性核对 |
+| R3-F6 | P2 | C1 修复未被端到端钉住——把调用点改回 `scaled = imputed` 时全部测试仍通过 | **已修**：新增 `test_pooled_mae_uses_the_scaled_design_matrix`，断言 pooled MAE 等于显式缩放矩阵独立重算值、且不等于未缩放矩阵重算值 |
+| R3-F7 | P2 | `neural_status` 汇总把被拒绝折的默认状态算进去，4 折完成却报 `torch_unavailable` | **已修**：`_neural_status` 只统计实际跑过的折；报告新增 `refused_folds` |
+| R3-G1 | P3 | `test_realtime_model.py:62` 对 `requires_grad=True` 的张量做 `float()`，触发 PyTorch UserWarning | **已修**：加 `.detach()` |
+| R3-G2 | P3 | `masked_placeholder_features` 的断言在合成 fixture 上空转（该 fixture 全部特征可插补） | **已修**：`SYNTH-E` 去掉 `体脂` 记录，使 `weight_kg`/`bmi` 只在 2/5 条被观测，折内确实不可插补；断言改为与独立计算比对 |
+| R3-G3 | P3 | fixture 列序无断言 | **已修**：有私有参考时逐列断言列序，无私有参考时跳过而非默认通过 |
+| R3-G4 | P3 | "体成分其余 12 列"错误，实际 11 列 | **已修** |
+| R3-G5 | P3 | 合成 gate 报 10 项 blocker、真实 9 项，差异未说明 | **已修**：报告说明多出的 1 项是 `SYNTH-C` 复现真实 Session 4 的 `ABSTAIN` |
+| R3-G6 | P3 | 心率容差缺"抽取集反推假设"标注 | **已修**：设计文档 §4 补齐 |
+| R3-G7 | P3 | `masked_placeholder_features` 是跨折并集，无折级粒度 | **接受为已知限制**：并集已回答"哪些列在任一折里是占位符"；折级粒度需要改 `FoldResult` 结构，收益不足以抵偿重构风险 |
+| R3-G8 | P3 | `OVERALL: PASS` 是最后一行，读者容易停在绿色上 | **已修**：脚本把 `mapping verified: MAPPING_NOT_VERIFIED` 移到最后一行 |
+| R3-G9 | P3 | `real_export.py` ~1100 行 | **维持第三轮判断**：纯重构无功能收益，R3-F1/F2 已消除它造成的实际危害 |
+
+### 9.4 三轮独立评审确认正确的部分
+
+第一轮（`pi`）：独立重算 5 条真实 Session 的 `y_delta` 值与参考完全一致；
 未找到另一条同样简洁且能复现的规则；折内拟合经 observed counts 验证无泄漏；
-59 个新测试含负例与篡改→FAILED 路径。
+新测试含负例与篡改→FAILED 路径。
 
 第二轮（Claude Opus）：provenance、掩码、未知项与 `NOT_RECOVERABLE` 结果的处理
 "unusually disciplined"，报告避免了临床声明。
+
+第三轮（`pi` 8.5 + 三份 Gemini 9.6/9.0/9.2）：一致确认 C1–C9 全部修复到位，
+受试者级折边界、折内插补、折作用域 checkpoint 均保持；
+三份 Gemini 均独立重跑真实数据并确认报告数字与代码一致（在其审阅的时点）；
+`pi` 确认无 P0/P1，剩余问题集中在持久化工件与文档数字。
 
 ### 9.5 仍需第三方复核的事项
 
@@ -247,4 +312,7 @@ than it first appears."*
   配额 / 限流 / 传输错误，与代码无关。
 - 两轮评审均无法验证 `fatigue_level`、`脑波` 记录选择规则、`is_complete` 语义
   （需厂商字段字典）。
-- 第二轮评审者明确未审 `090a64b` 之后的提交；本轮修复需要一次新的独立复核。
+- 第三轮 `claudeAgent` 评审未实际发出（循环检测 + 传输错误），该 provider 的独立意见
+  在本轮缺失。
+- 三轮评审均无法验证 `fatigue_level`、`脑波` 记录选择规则、`is_complete` 语义
+  （需厂商字段字典）。
