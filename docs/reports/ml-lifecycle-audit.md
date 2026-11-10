@@ -25,7 +25,7 @@ python scripts/lifecycle_verify.py --torch-free-smoke   # 无 torch 时纯契约
 
 | 阶段 | Issue | 现有（合并前） | 本次新增 | 缺失 / 冻结 / blocked |
 |---|---|---|---|---|
-| 1 任务与标签协议 | #104 | `src/core/specs.py`（Pre-only BPSI/EFRI 契约）、`src/physio/schema.py`、`evidence/registry.py` | `src/lifecycle/contracts.py`：12 类不可变 manifest/spec + 三门禁 + evidence 级 | **冻结**：`src/research/constitution.py` / `prepare.py` 评估器、两条冠军线；`y_pri` 恒不可用；真实标签 BLOCKED |
+| 1 任务与标签协议 | #104 | `src/core/specs.py`（Pre-only BPSI/EFRI 契约）、`src/physio/schema.py`、`evidence/registry.py` | `src/lifecycle/contracts.py`：14 类不可变 manifest/spec + 三门禁 + evidence 级 | **冻结**：`src/research/constitution.py` / `prepare.py` 评估器、两条冠军线；`y_pri` 恒不可用；真实标签 BLOCKED |
 | 2 数据源与管道 | #105 | `src/physio/{adapters,legacy_export,real_export,real_data_audit}.py`（94 字段映射与逐列审计） | `src/lifecycle/pipeline.py`：增量幂等六阶段、checkpoint/cursor、缓存键、隔离区、ready-gate | **blocked**：厂商字段字典、`脑波` 选择规则、`is_complete` 语义、`response_hash` 构造、`15.41` 补值来源 |
 | 3 特征与标签 | #107 | `src/physio/dataset.py`（observed/valid/imputed mask、FoldImputer）、`src/physio/metrics.py` | `src/lifecycle/features.py`：版本化注册表、BPSI/EFRI 声明规则、target/head 兼容检查 | **冻结**：`PhysioBPSIEFRIModel` 输入契约（BODY_DIM=12 / PHYSIO_DIM=7）；不得改冻结模型去迁就不相容目标 |
 | 4 训练与评估 | #108 | `src/physio/{model,training,evaluation,artifacts}.py`、`src/core/models.py`、`src/runtime/*`、AutoResearch Skill | `src/lifecycle/training.py`：prepare→train→validate→compare→package、RunManifest、合成 smoke | **冻结**：真实训练 `GO_REAL_DATA_TRAINING=NOT_GRANTED`；历史 holdout 预算耗尽；无 AutoResearch champion 提升 |
@@ -52,7 +52,7 @@ python scripts/lifecycle_verify.py --torch-free-smoke   # 无 torch 时纯契约
 | A4 | P2 | 新增 `tests/lifecycle/test_training.py` 与既有 `tests/physio/test_training.py` basename 撞名，pytest 收集期 `import file mismatch` | 改名 `test_train_ready.py`；未加 `tests/lifecycle/__init__.py`，避免遮蔽 `src/lifecycle` 包 |
 | A5 | P2 | 无 `.github/workflows`，无法证明干净环境可复现 | 新增 `ci.yml`：3 层 job（fast 契约 × Py3.11/3.12/3.13、合成 E2E × Py3.11/3.13、无 torch 诚实 skip），无私有数据、无联网厂商服务、无 GPU |
 | A9 | **P1** | Step 5 Preview 评审复现：同一目录先跑默认配置、再把 `min_subjects` 改 3，第二次因 `processed` 游标仅按 `dataset_sha256` 继承而跳过全部批次，**把 7 行的好 snapshot 覆盖成 0 行**；`sources.py` 的 SIMULATED+CONNECTED 守卫条件写反，带空 conformance 的假真设备可构造成功 | **已修**：`deps_match` 必须同时匹配 dataset/schema/code/config/rules；SIMULATED+CONNECTED 无条件拒判；`_batch_key` 加入 raw sha256，同名不同内容按"修正"隔离登记并强制 re-ingest；缓存 QC 损坏时清空游标全量重算；6 个新回归测试逐个经突变验证 |
-| A8 | **P1** | 无 torch 时 `pytest -m fast` 会**收集全仓**，`tests/runtime/*` / `tests/core/*` 顶层 import torch-backed 模块 → 5 个 collection error，CI fast job 直接崩（实测） | fast 门禁改为明确路径 `pytest tests/lifecycle/test_contracts_fast.py -m fast -q`；fast 门禁本就只应跑 stdlib 契约文件，不是缩窄通过数。实测无 torch：fast 19 passed、lifecycle 149 passed（当时 121；补回归后为 155）、lifecycle+physio 全绿；本机有 torch 全仓 982 passed / 9 skipped（补测后为 988） |
+| A8 | **P1** | 无 torch 时 `pytest -m fast` 会**收集全仓**，`tests/runtime/*` / `tests/core/*` 顶层 import torch-backed 模块 → 5 个 collection error，CI fast job 直接崩（实测） | fast 门禁改为明确路径 `pytest tests/lifecycle/test_contracts_fast.py -m fast -q`；fast 门禁本就只应跑 stdlib 契约文件，不是缩窄通过数。实测无 torch：fast 19 passed、lifecycle 149 passed（当时 121；补回归后为 159）、lifecycle+physio 全绿；本机有 torch 全仓 982 passed / 9 skipped（补测后为 992） |
 | A6 | P3 | 管道 `snapshot.created_at` 取墙钟时间，导致同一输入两次运行 snapshot hash 不同；`PipelineState` 的 `run_id`/时间戳同理 | `created_at` 改为数据内最早 `event_time`（确定性 as-of）；缓存命中时继承 prior 的 run 身份与时间戳，state 文件逐字节一致。由 `test_repeated_run_is_byte_identical_and_has_no_duplicates` 钉住 |
 | A7 | P3 | 训练 `stage="validate"` 与管道数据校验阶段同名，语义冲突 | 训练侧改 `validate_model`，`STAGES` 增 `prepare` |
 
@@ -170,3 +170,84 @@ G5 依赖下界 → 加伴随式 `requirements-lock.txt`（本机复现快照，
 改记为 drift 而不是 duplicate；冲突重复记录保留策略。新增 4 项回归测试
 （批内重复、跨批重复、修正批次删除旧行、同批次重放），契约与重放两项经突变验证
 （各自撤回修复即 2 failed）。
+
+### 10.2 评审团第二轮（HEAD `c087d30`）
+
+| 评审者 | 质量 | 实现 | 总评 | 结论 |
+|---|---|---|---|---|
+| Claude Opus 5.5 | 8.8 | 9.3 | **8.8** | 否决：质量轴 < 9.0 |
+| Step 5 Preview | 9.1 | 9.2 | **9.1** | 通过，建议同 PR 内补齐两个 P1 |
+| Gemini 3.8 Flash | — | — | — | 复评未能执行：模型容量不足（见 10.3） |
+
+**P1-1（两家独立发现，已修）**：`pipeline_state.json` / `snapshot.json` 被截断时
+管道抛裸 `JSONDecodeError`；`resume=True` 是默认值，一次中断即可让之后每次运行
+都崩，必须人工删 `runs/`。这与 `pipeline.py` docstring 自己声明的「中断可恢复」
+矛盾，同目录下 `qc_report.json` 却已有兜底。修法：两个读取函数把不可读的 prior
+当作「无 prior」走全量重算；5 个状态文件改为 `temp + fsync + os.replace` 原子写；
+并补上「游标有效但快照不可复用 → 否则会跳过全部批次写出空 snapshot」的
+`processed.clear()`。
+
+**P1-1'（Claude 独立发现，已修）**：同名批次修正时的回滚会连带删除**仍被声明的
+其他批次**拥有的行，且留下幻影 `n_duplicate`；更严重的是 snapshot 依赖批次声明
+顺序。实测复现：
+
+```
+[A,B,A2]  input=2 acc=1 dup=1 rows=['src-2']      ← src-1 被静默删除
+[B,A,A2]  input=2 acc=2 dup=0 rows=['src-1','src-2']
+```
+
+修法：`_ingest` 重写为「候选池 + 确定性胜出」——每个幂等键保留全部候选行，胜出者
+为 `(batch_id, record_id)` 最小者，修正只摘除该批次贡献的候选；重复数在解析阶段
+统一计算。修复后两种声明顺序输出逐字节相同。这也把重复仲裁从「先写先得」改成
+与顺序无关的确定性规则。
+
+**P1-2（Step 5 Preview，已修）**：设计索引第 139 行仍写
+`n_accepted + n_rejected == n_input`，代码已是含 `n_duplicate` 的版本。已同步。
+
+**其余 P2 处置**：
+
+| 评审者 | 项 | 处置 |
+|---|---|---|
+| Claude | 回滚过滤 `ws.rejections` 是死代码（`_validate` 在全部 ingest 之后才跑） | 随 `_ingest` 重写删除 |
+| Claude / Step 5 | `private_data_not_in_git` 验收项近乎恒真 | 改为真跑 `git ls-files` 并断言无 `data/raw/`、`data/local/`、`runs/`、`artifacts/`、`*.pt`/`*.pth` |
+| Step 5 | 新增的 `resolution` / `kept_record_id` / `kept_batch_id` 零测试覆盖（突变验证不挂） | 在跨批重复用例里断言这三个字段 |
+| Step 5 | 缓存命中未校验 `qc.sha256 == snapshot.qc_sha256`，可产出自相矛盾的 `DatasetManifest` | 缓存命中时校验，不符即全量重算并记 drift |
+| Step 5 | 文档称「12 类不可变 frozen dataclass」，实际 14 类 | 三处同步为 14 |
+| Step 5 | 碰撞回滚触发面比文档暗示的窄 | 写入 `_ingest` docstring（跨运行修正必改 `dataset_sha256`，只会全量重算） |
+
+**关于远程 `1000 passed / 4 skipped` 的可核验性（Step 5 P2-5）**：该数字此前只在
+PR 描述里出现，未给命令与差异来源。现已核对并在此记录对账：
+
+| 项 | 本地（macOS / Py3.13，无 torch） | 远程 `acam-lab`（Linux / Py3.12，torch 2.15 + transformers） |
+|---|---|---|
+| 收集用例 | 996 | 1004 |
+| 通过 / 跳过 | 988 / 9 | 1000 / 4 |
+
+差 8 个收集项来自 `tests/syndrome/test_bert_model.py`（本地缺 `transformers`，
+整模块跳过故不收集）；本地 6 个 `tests/scripts/test_tcm_minimal_demo.py` 因缺
+`data/local/` 与 `artifacts/` 跳过、远程实际执行；本地 `tests/physio/test_real_data_audit.py`
+27 passed，远程 25 passed + 2 skipped（该机缺私有导出）。逐项相加与两边总数一致。
+
+### 10.3 第二轮 Gemini 复评的状态
+
+Gemini 3.8 Flash 的复评任务在 `c087d30` 上启动后返回
+`No capacity available for model gemini-3.8-flash-high on the server`，未产出分数。
+该行按缺失处理，不虚构评分：首轮的 9.6 针对 `55dd039`，不能代表修复后的 HEAD。
+
+处置：修复落盘后在新 HEAD 上重试；若持续无容量，则以 Claude 与 Step 5 Preview
+两份**针对最终 HEAD** 的评分为准，并在 PR 中如实标注 Gemini 缺位。
+
+### 10.4 第二轮之后的修复（当前 HEAD）
+
+两家评审提出的 P1 与 P2 已全部落盘：
+
+- `_ingest` 重写为「候选池 + 确定性胜出」，消除碰撞回滚删除其他批次行与声明顺序依赖；
+- 状态/快照读取容错 + 全部状态文件原子写；
+- 缓存命中校验 `qc.sha256 == snapshot.qc_sha256`；
+- 存档游标在无可用快照时清空，避免跳过全部批次写出空 snapshot；
+- 验收项 `private_data_not_in_git` 改为真跑 `git ls-files`（实测 222 个跟踪文件，无私有路径）；
+- 设计索引的守恒式与「12 类」计数同步为实际契约（14 类）。
+
+新增 4 项回归测试，全部经「撤回修复即失败」的突变验证。
+本地实测：全仓 `992 passed, 9 skipped`、`tests/lifecycle` `159 passed`、fast `19 passed`、
+`ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。

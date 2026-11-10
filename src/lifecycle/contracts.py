@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 CONTRACTS_VERSION = "ml-lifecycle-contracts-v1"
@@ -128,6 +131,25 @@ def file_sha256(path: str) -> str:
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def atomic_write_text(path: str | Path, text: str) -> None:
+    """Replace a file atomically so a reader never sees a truncated one.
+
+    A process killed mid-write would otherwise leave invalid JSON behind, and
+    every later run would fail to read its own state until someone deleted it.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _check_hex(value: str, name: str) -> None:

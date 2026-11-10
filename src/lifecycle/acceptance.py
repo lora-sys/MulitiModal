@@ -11,6 +11,7 @@ real device, no torch required.
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -349,15 +350,39 @@ def _check_three_gates(root: Path) -> str:
     return "engineering GO cannot promote the two research gates"
 
 
+PRIVATE_PATH_MARKERS = ("data/raw/", "data/local/", "runs/", "artifacts/")
+PRIVATE_SUFFIXES = (".pt", ".pth")
+
+
+def _is_private_path(path: str) -> bool:
+    normalized = "/" + path.lstrip("./")
+    return any(f"/{marker}" in normalized for marker in PRIVATE_PATH_MARKERS) or path.endswith(
+        PRIVATE_SUFFIXES
+    )
+
+
 def _check_raw_data_is_not_committed(root: Path) -> str:
+    """Assert the real protection: nothing private is tracked by git."""
     repo = Path(__file__).resolve().parents[2]
-    candidates = [
-        repo / "data" / "local" / "physio-legacy" / "raw_records_5sessions.csv",
-    ]
-    for path in candidates:
-        if path.is_file():
-            assert path.read_bytes(), "empty raw file"
-    return "private raw data stays outside git; only synthetic fixtures are used here"
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "git metadata unavailable; the CI leak check is the enforcing gate"
+    if result.returncode != 0:
+        return "git metadata unavailable; the CI leak check is the enforcing gate"
+    tracked = result.stdout.splitlines()
+    offenders = [path for path in tracked if _is_private_path(path)]
+    assert not offenders, f"private data, runs or artifacts are tracked: {offenders[:5]}"
+    return (
+        f"{len(tracked)} tracked files; no raw data, runs or binary artifacts committed"
+    )
 
 
 CHECKS: tuple[tuple[str, str, Callable[[Path], str], bool], ...] = (

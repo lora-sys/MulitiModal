@@ -14,6 +14,7 @@ from lifecycle.contracts import (
     STATUS_BLOCKED,
     STATUS_OK,
     TRUST_TRUSTED,
+    QCReport,
     canonical_json,
 )
 from lifecycle.pipeline import (
@@ -400,7 +401,9 @@ def test_reissued_batch_with_different_bytes_is_not_silently_dropped(tmp_path):
     result = run_pipeline([first, second], tmp_path / "reissue")
     assert first.sha256 != second.sha256
     assert result.qc.n_accepted == 5
-    assert result.qc.n_input == result.qc.n_accepted + result.qc.n_rejected
+    assert result.qc.n_input == (
+        result.qc.n_accepted + result.qc.n_rejected + result.qc.n_duplicate
+    )
     assert any("id collision with different content" in q["reason"] for q in result.quarantine)
     assert any("re-issued with a different sha256" in d for d in result.qc.drift)
 
@@ -470,7 +473,9 @@ def test_collision_rollback_keeps_qc_conservation_with_rejected_rows(tmp_path):
 
     result = run_pipeline([first, corrected], tmp_path / "n1")
     assert result.qc.n_input == len(corrected_rows)
-    assert result.qc.n_input == result.qc.n_accepted + result.qc.n_rejected
+    assert result.qc.n_input == (
+        result.qc.n_accepted + result.qc.n_rejected + result.qc.n_duplicate
+    )
     assert result.qc.n_accepted == 5
     assert result.qc.n_rejected == 1
     assert result.qc.n_duplicate == 0
@@ -527,6 +532,13 @@ def test_cross_batch_duplicate_is_counted_once(tmp_path):
     assert result.qc.n_input == (
         result.qc.n_accepted + result.qc.n_rejected + result.qc.n_duplicate
     )
+    conflict = [
+        q for q in result.quarantine if "conflicting duplicate" in q["reason"]
+    ]
+    assert len(conflict) == 1
+    assert conflict[0]["resolution"] == "lowest (batch_id, record_id) wins"
+    assert conflict[0]["kept_record_id"] == "1"
+    assert conflict[0]["kept_batch_id"] == "one"
 
 
 def test_correction_drops_rows_absent_from_the_new_bytes(tmp_path):
@@ -556,3 +568,83 @@ def test_identical_batch_replayed_in_one_run_is_skipped_with_drift(tmp_path):
     assert any("replay skipped" in d for d in result.qc.drift)
     assert result.qc.n_duplicate == 0
     assert result.qc.n_input == result.qc.n_accepted
+
+
+def _duplicate_scenario(order: tuple[str, ...], tmp_path: Path):
+    """A owns k1+k2, B repeats k1, A2 is A corrected down to k2 only."""
+    tmp = tmp_path / "-".join(order)
+    only_k1 = _row("1", "S1", "P1", "heart_rate", "70", "bpm")
+    k2 = _row("2", "S1", "P1", "spo2", "97", "%")
+    a = tmp / "a.csv"
+    b = tmp / "b.csv"
+    a2 = tmp / "a2.csv"
+    _write_batch(a, [only_k1, k2])
+    _write_batch(b, [dict(only_k1)])
+    _write_batch(a2, [k2])
+    batches = {
+        "A": declare_batch(a, batch_id="A"),
+        "B": declare_batch(b, batch_id="B"),
+        "A2": declare_batch(a2, batch_id="A"),
+    }
+    result = run_pipeline([batches[name] for name in order], tmp / "out")
+    return result, sorted(row.source_record for row in result.snapshot.rows)
+
+
+def test_correction_keeps_rows_owned_by_other_declared_batches(tmp_path):
+    """P1-1: rolling back one batch must not delete another batch's row."""
+    first, first_rows = _duplicate_scenario(("A", "B", "A2"), tmp_path)
+    second, second_rows = _duplicate_scenario(("B", "A", "A2"), tmp_path)
+
+    for result in (first, second):
+        assert sorted(r.source_record for r in result.snapshot.rows) == [
+            "src-1",
+            "src-2",
+        ]
+        assert result.qc.n_accepted == 2
+        assert result.qc.n_duplicate == 0
+        assert result.qc.n_input == (
+            result.qc.n_accepted + result.qc.n_rejected + result.qc.n_duplicate
+        )
+    assert first_rows == second_rows
+
+
+def test_truncated_state_file_falls_back_instead_of_crashing(tmp_path):
+    """P1-2: a half-written state file must not make resume fail forever."""
+    batch = declare_batch(BATCH_A, batch_id="A")
+    out = tmp_path / "truncated-state"
+    run_pipeline([batch], out)
+    state = out / STATE_FILE
+    raw = state.read_text(encoding="utf-8")
+    state.write_text(raw[: len(raw) // 2], encoding="utf-8")
+
+    result = run_pipeline([batch], out)
+    assert result.qc.n_accepted == 4
+    assert result.status != STATUS_BLOCKED
+
+
+def test_truncated_snapshot_falls_back_instead_of_crashing(tmp_path):
+    """P1-2: a half-written snapshot must trigger a full recompute."""
+    batch = declare_batch(BATCH_A, batch_id="A")
+    out = tmp_path / "truncated-snapshot"
+    run_pipeline([batch], out)
+    snapshot_path = out / SNAPSHOT_FILE
+    raw = snapshot_path.read_text(encoding="utf-8")
+    snapshot_path.write_text(raw[: len(raw) // 2], encoding="utf-8")
+
+    result = run_pipeline([batch], out)
+    assert result.qc.n_accepted == 4
+    assert any("snapshot unreadable" in d for d in result.qc.drift)
+
+
+def test_cached_qc_that_disagrees_with_the_snapshot_is_recomputed(tmp_path):
+    """A self-consistent but foreign QC file must not be paired with a snapshot."""
+    batch = declare_batch(BATCH_A, batch_id="A")
+    out = tmp_path / "qc-mismatch"
+    run_pipeline([batch], out)
+    empty = QCReport(n_input=0, n_accepted=0, n_rejected=0, n_duplicate=0, n_imputed=0)
+    (out / QC_FILE).write_text(canonical_json(empty.to_dict()) + "\n", encoding="utf-8")
+
+    result = run_pipeline([batch], out)
+    assert result.reused_snapshot is False
+    assert result.qc.n_accepted == 4
+    assert any("does not match the cached snapshot" in d for d in result.qc.drift)

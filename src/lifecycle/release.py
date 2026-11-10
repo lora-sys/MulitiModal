@@ -8,8 +8,6 @@ deployment reports describe supplied measurements only; they grant no gates.
 from __future__ import annotations
 
 import json
-import os
-import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -27,6 +25,7 @@ from .contracts import (
     STATUS_NOT_AVAILABLE,
     STATUS_OK,
     ArtifactManifest,
+    atomic_write_text,
     canonical_json,
     digest,
     file_sha256,
@@ -285,17 +284,7 @@ class ReleaseRegistry:
         return json.loads(canonical_json(current))
 
     def _write(self, state: dict[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            with temporary.open("x", encoding="utf-8") as stream:
-                stream.write(canonical_json(state))
-                stream.write("\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, self.path)
-        finally:
-            temporary.unlink(missing_ok=True)
+        atomic_write_text(self.path, canonical_json(state) + "\n")
 
     def _refuse(self, action: str, reason: str) -> TransitionResult:
         return TransitionResult(action, False, reason, self.state())

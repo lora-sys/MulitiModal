@@ -13,7 +13,7 @@
 
 | 阶段编号 | 阶段名称 | 对应工单 | 当前状态 | 核心代码路径 | 冻结边界与硬约束 |
 |---|---|---|---|---|---|
-| 1 | **任务与标签协议** | #104 | **EXISTS** | [`src/lifecycle/contracts.py`](../../src/lifecycle/contracts.py), [`src/core/specs.py`](../../src/core/specs.py), [`src/physio/schema.py`](../../src/physio/schema.py) | 12 类不可变 frozen dataclass、规范化 JSON 摘要哈希、三门禁物理隔离、`y_pri` 恒空、9 维平和质恒 `ABSTAIN` |
+| 1 | **任务与标签协议** | #104 | **EXISTS** | [`src/lifecycle/contracts.py`](../../src/lifecycle/contracts.py), [`src/core/specs.py`](../../src/core/specs.py), [`src/physio/schema.py`](../../src/physio/schema.py) | 14 类不可变 frozen dataclass、规范化 JSON 摘要哈希、三门禁物理隔离、`y_pri` 恒空、9 维平和质恒 `ABSTAIN` |
 | 2 | **数据源和数据管道** | #105, #106 | **PARTIAL** | [`src/lifecycle/pipeline.py`](../../src/lifecycle/pipeline.py), [`src/lifecycle/sources.py`](../../src/lifecycle/sources.py), [`src/physio/legacy_export.py`](../../src/physio/legacy_export.py), [`src/physio/adapters.py`](../../src/physio/adapters.py) | 增量幂等六阶段 + 源能力/回放一致/背压（ingest→normalize→validate→reconcile→snapshot→ready_gate）、游标断点续跑、隔离区带理由拒收；厂商字典未确认属 PARTIAL，真实设备直连 BLOCKED |
 | 3 | **特征与标签工程** | #107 | **PARTIAL** | [`src/lifecycle/features.py`](../../src/lifecycle/features.py), [`src/physio/dataset.py`](../../src/physio/dataset.py), [`src/physio/metrics.py`](../../src/physio/metrics.py) | 严格 Pre-only 防未来泄露（BODY_DIM=12, PHYSIO_DIM=7）、折内拟合（FoldImputer）、三掩码分离（observed/valid/imputed）、target/head 结构兼容校验；真实疲劳真值缺失（BLOCKED） |
 | 4 | **模型训练与评估** | #108 | **EXISTS** (Smoke) / **BLOCKED** (Real) | [`src/lifecycle/training.py`](../../src/lifecycle/training.py), [`src/physio/training.py`](../../src/physio/training.py), [`src/physio/evaluation.py`](../../src/physio/evaluation.py) | 五阶段流程（prepare→train→validate_model→compare→package）、不可变 RunManifest、受试者折隔离、INSUFFICIENT_EVIDENCE 权威状态；真实生理训练与 AutoResearch 自动提权恒定阻断 |
@@ -130,13 +130,13 @@
 - **当前状态**：`EXISTS`（定义于 [`src/lifecycle/contracts.py`](../../src/lifecycle/contracts.py)）
 - **相关核心路径**：[`src/lifecycle/contracts.py`](../../src/lifecycle/contracts.py), [`src/core/specs.py`](../../src/core/specs.py)
 - **不可变契约集**：
-  本模块提供全生命周期唯一共享的 12 类不可变 `dataclass(frozen=True)`：
+  本模块提供全生命周期唯一共享的 14 类不可变 `dataclass(frozen=True)`：
   1. `VersionRef`：具名版本哈希引用（name, version, sha256）。
   2. `SourceManifest`：原始数据源资产定义，绑定数据源真实字节的 sha256（非派生行），具备 `license`, `provenance`, `identity_trust`, `capability` 字段。
   3. `FieldSpec`：特征字段字典，限定 `timepoint` (`pre`, `during`, `post`, `static`)，`fit_scope` (`train_fold`, `none`, `frozen`)，`legal_range`。
   4. `FeatureSpec`：版本化特征集规范，要求字段名必须唯一且非空。
   5. `TargetSpec`：版本化预测目标规范，强制输出头类型匹配 `legal_range`。未批准目标强制填写 `unavailable_reason`。
-  6. `QCReport`：数据质检批次报告，约束 `n_accepted + n_rejected == n_input`，拒收行必须携带结构化 reason。
+  6. `QCReport`：数据质检批次报告，约束 `n_accepted + n_rejected + n_duplicate == n_input`（行级重复是输入行，计入 `n_duplicate` 而不是抛错），拒收行必须携带结构化 reason。
   7. `PipelineState`：管道持久化断点游标，记录处理键列表与缓存键。
   8. `DatasetManifest`：冻结数据集清单，包含 `trainable()` 硬判断逻辑。
   9. `SplitManifest`：受试者级别划分清单，严禁训练集受试者与留出集受试者发生任何交集。

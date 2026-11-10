@@ -42,6 +42,7 @@ from .contracts import (
     PipelineState,
     QCReport,
     SourceManifest,
+    atomic_write_text,
     canonical_json,
     digest,
     file_sha256,
@@ -275,7 +276,6 @@ class _Workspace:
     imputed: int = 0
     input_rows: int = 0
     batch_input_counts: dict[str, int] = field(default_factory=dict)
-    batch_duplicate_counts: dict[str, int] = field(default_factory=dict)
     batches_new: list[str] = field(default_factory=list)
 
 
@@ -428,75 +428,114 @@ def _ingest(
     """Read each batch at most once per run; a resend is a duplicate, not new data.
 
     A batch re-uploaded under the same id with different bytes is a correction,
-    not a duplicate: it is quarantined with a reason and re-ingested, so the
-    correction cannot vanish silently.
+    not a duplicate: the superseded bytes are quarantined and every row they
+    contributed is withdrawn before the new bytes are read.
+
+    Duplicate resolution is a pure function of the declared batch set. For each
+    idempotency key the row with the lowest ``(batch_id, record_id)`` wins and
+    the rest count as duplicates, so the declared order of the batch list cannot
+    change the snapshot.
+
+    The withdrawal path only fires when a single run lists the same batch id
+    twice with different bytes. A correction across runs changes the dataset
+    hash, so the resume dependency check forces a full recompute instead.
     """
-    for batch in batches:
-        key = _batch_key(batch)
-        if key in processed:
-            ws.drift.add(
-                f"{batch.batch_id}: identical sha256 already ingested; replay skipped"
-            )
-            continue
-        collisions = [
-            old for old in processed
-            if old.rsplit(":", 1)[0] == batch.batch_id
-        ]
-        if collisions:
-            ws.drift.add(
-                f"{batch.batch_id}: re-issued with a different sha256; "
-                "previous bytes replaced after explicit quarantine"
-            )
-            # Roll back exactly the raw rows this batch contributed, including
-            # rejected and duplicate ones, so QC conservation and bad_fraction
-            # stay correct (N1).
-            removed_input = ws.batch_input_counts.pop(batch.batch_id, 0)
-            ws.input_rows = max(ws.input_rows - removed_input, 0)
-            removed_duplicates = ws.batch_duplicate_counts.pop(batch.batch_id, 0)
-            ws.duplicates = max(ws.duplicates - removed_duplicates, 0)
-            ws.rejections = [r for r in ws.rejections if r.get("batch_id") != batch.batch_id]
-            ws.quarantine = [
-                q for q in ws.quarantine if q.get("batch_id") != batch.batch_id
-            ]
-            ws.quarantine.append(
-                {
-                    "key": key,
-                    "batch_id": batch.batch_id,
-                    "reason": "batch id collision with different content; forced re-ingest",
-                }
-            )
-            ws.rows = {
-                row_key: row
-                for row_key, row in ws.rows.items()
-                if row.batch_id != batch.batch_id
-            }
-            for old_key in collisions:
-                processed.discard(old_key)
-        before = ws.input_rows
-        duplicates_before = ws.duplicates
-        raw_rows = _read_rows(batch, ws)
-        ws.batch_input_counts[batch.batch_id] = ws.input_rows - before
-        for raw in raw_rows:
-            row = _normalize_row(raw, batch)
-            if row.key in ws.rows:
-                ws.duplicates += 1
-                if ws.rows[row.key].to_dict() != row.to_dict():
-                    kept = ws.rows[row.key]
-                    ws.quarantine.append(
-                        {
-                            "key": row.key,
-                            "batch_id": batch.batch_id,
-                            "reason": "conflicting duplicate with the same idempotency key",
-                            "resolution": "first_write_wins",
-                            "kept_record_id": kept.record_id,
-                            "kept_batch_id": kept.batch_id,
-                        }
-                    )
+    candidates: dict[str, list[NormalizedRow]] = {}
+    try:
+        for batch in batches:
+            key = _batch_key(batch)
+            if key in processed:
+                ws.drift.add(
+                    f"{batch.batch_id}: identical sha256 already ingested; "
+                    "replay skipped"
+                )
                 continue
-            ws.rows[row.key] = row
-        ws.batch_duplicate_counts[batch.batch_id] = ws.duplicates - duplicates_before
-        processed.add(key)
-        ws.batches_new.append(batch.batch_id)
+            superseded = [
+                old for old in processed
+                if old.rsplit(":", 1)[0] == batch.batch_id
+            ]
+            if superseded:
+                ws.drift.add(
+                    f"{batch.batch_id}: re-issued with a different sha256; "
+                    "previous bytes replaced after explicit quarantine"
+                )
+                # Withdraw exactly the raw rows this batch contributed, rejected
+                # and duplicate ones included, so QC conservation and
+                # bad_fraction stay correct.
+                removed_input = ws.batch_input_counts.pop(batch.batch_id, 0)
+                ws.input_rows = max(ws.input_rows - removed_input, 0)
+                for row_key in tuple(candidates):
+                    kept = [
+                        row for row in candidates[row_key]
+                        if row.batch_id != batch.batch_id
+                    ]
+                    if kept:
+                        candidates[row_key] = kept
+                    else:
+                        del candidates[row_key]
+                for old_key in superseded:
+                    processed.discard(old_key)
+                ws.quarantine.append(
+                    {
+                        "key": key,
+                        "batch_id": batch.batch_id,
+                        "reason": (
+                            "batch id collision with different content; "
+                            "forced re-ingest"
+                        ),
+                    }
+                )
+            before = ws.input_rows
+            raw_rows = _read_rows(batch, ws)
+            ws.batch_input_counts[batch.batch_id] = ws.input_rows - before
+            for raw in raw_rows:
+                row = _normalize_row(raw, batch)
+                candidates.setdefault(row.key, []).append(row)
+            processed.add(key)
+            ws.batches_new.append(batch.batch_id)
+    finally:
+        # Also runs when a later batch blocks: whatever was read must still be
+        # accounted for, or QC conservation would fail on the error path.
+        _resolve_duplicates(ws, candidates)
+
+
+def _payload(row: NormalizedRow) -> dict[str, Any]:
+    """Row content without the identity of the copy it came from."""
+    data = row.to_dict()
+    data.pop("batch_id", None)
+    data.pop("record_id", None)
+    return data
+
+
+def _resolve_duplicates(
+    ws: _Workspace, candidates: Mapping[str, list[NormalizedRow]]
+) -> None:
+    """Pick one row per idempotency key; count the rest instead of dropping them."""
+    resolved: dict[str, NormalizedRow] = {}
+    duplicates = 0
+    for row_key, rows in candidates.items():
+        ordered = sorted(
+            rows, key=lambda r: (r.batch_id, r.record_id, r.source_record)
+        )
+        winner = ordered[0]
+        resolved[row_key] = winner
+        for other in ordered[1:]:
+            duplicates += 1
+            if _payload(other) != _payload(winner):
+                ws.quarantine.append(
+                    {
+                        "key": row_key,
+                        "batch_id": other.batch_id,
+                        "reason": (
+                            "conflicting duplicate with the same idempotency key"
+                        ),
+                        "resolution": "lowest (batch_id, record_id) wins",
+                        "kept_record_id": winner.record_id,
+                        "kept_batch_id": winner.batch_id,
+                    }
+                )
+    ws.rows = resolved
+    ws.duplicates = duplicates
 
 
 def _validate(ws: _Workspace, config: PipelineConfig) -> None:
@@ -638,30 +677,45 @@ def _readiness(
 
 
 def _load_state(path: Path) -> PipelineState | None:
+    """Read the prior cursor; an unreadable one means "no prior", never a crash.
+
+    A run killed mid-write can leave a truncated file. Treating it as absent
+    lets the next run recompute instead of failing forever on resume.
+    """
     if not path.is_file():
         return None
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return PipelineState(
-        run_id=data["run_id"],
-        stage=data["stage"],
-        cursor=data["cursor"],
-        processed_keys=tuple(data["processed_keys"]),
-        dataset_sha256=data["dataset_sha256"],
-        schema_version=data["schema_version"],
-        code_version=data["code_version"],
-        config_sha256=data["config_sha256"],
-        rules_sha256=data["rules_sha256"],
-        status=data["status"],
-        started_at=data["started_at"],
-        updated_at=data["updated_at"],
-        error=data.get("error", ""),
-    )
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return PipelineState(
+            run_id=data["run_id"],
+            stage=data["stage"],
+            cursor=data["cursor"],
+            processed_keys=tuple(data["processed_keys"]),
+            dataset_sha256=data["dataset_sha256"],
+            schema_version=data["schema_version"],
+            code_version=data["code_version"],
+            config_sha256=data["config_sha256"],
+            rules_sha256=data["rules_sha256"],
+            status=data["status"],
+            started_at=data["started_at"],
+            updated_at=data["updated_at"],
+            error=data.get("error", ""),
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def _read_snapshot(path: Path) -> Snapshot | None:
+    """Read a cached snapshot; a truncated or malformed one counts as absent."""
     if not path.is_file():
         return None
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return _parse_snapshot(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _parse_snapshot(data: Mapping[str, Any]) -> Snapshot:
     rows = tuple(
         NormalizedRow(
             key=r["key"], batch_id=r["batch_id"], record_id=r["record_id"],
@@ -777,8 +831,10 @@ def run_pipeline(
     error = ""
     snapshot: Snapshot | None = None
 
+    if cached is None and snapshot_path.is_file():
+        ws.drift.add("cached snapshot unreadable; full recompute")
+
     cache_valid = cache_hit
-    cache_corrupted = False
     if cache_hit and cached is not None:
         try:
             qc_data = json.loads((out / QC_FILE).read_text(encoding="utf-8"))
@@ -791,15 +847,22 @@ def run_pipeline(
             )
         except (OSError, ValueError, KeyError, TypeError) as exc:
             cache_valid = False
-            cache_corrupted = True
             ws.drift.add(f"cached QC unreadable ({type(exc).__name__}); full recompute")
+        else:
+            if qc.sha256 != cached.qc_sha256:
+                # Structurally valid but not the report this snapshot was built
+                # from: reusing it would publish a self-contradicting manifest.
+                cache_valid = False
+                ws.drift.add(
+                    "cached QC does not match the cached snapshot; full recompute"
+                )
     if cache_valid and cached is not None:
         snapshot = cached
         ws.rows = {row.key: row for row in cached.rows}
     else:
-        if cache_corrupted:
-            # The prior cursor referred to artifacts that no longer verify.
-            processed.clear()
+        # A cursor without a reusable snapshot would skip every batch and
+        # overwrite a good run with an empty one.
+        processed.clear()
         try:
             if fail_stage == "ingest":
                 raise PipelineError("injected failure before ingest")
@@ -830,15 +893,13 @@ def run_pipeline(
                 rules_sha256=rules_sha256,
                 created_at=as_of,
             )
-            (out / SNAPSHOT_FILE).write_text(
-                canonical_json(snapshot.to_dict()) + "\n", encoding="utf-8"
+            atomic_write_text(
+                out / SNAPSHOT_FILE, canonical_json(snapshot.to_dict()) + "\n"
             )
-            (out / QC_FILE).write_text(
-                canonical_json(qc.to_dict()) + "\n", encoding="utf-8"
-            )
-            (out / QUARANTINE_FILE).write_text(
+            atomic_write_text(out / QC_FILE, canonical_json(qc.to_dict()) + "\n")
+            atomic_write_text(
+                out / QUARANTINE_FILE,
                 "".join(canonical_json(q) + "\n" for q in ws.quarantine),
-                encoding="utf-8",
             )
         except PipelineError as exc:
             error = str(exc)
@@ -878,12 +939,8 @@ def run_pipeline(
         ),
         error=error,
     )
-    (out / STATE_FILE).write_text(
-        canonical_json(state.to_dict()) + "\n", encoding="utf-8"
-    )
-    (out / READY_FILE).write_text(
-        canonical_json(readiness) + "\n", encoding="utf-8"
-    )
+    atomic_write_text(out / STATE_FILE, canonical_json(state.to_dict()) + "\n")
+    atomic_write_text(out / READY_FILE, canonical_json(readiness) + "\n")
 
     return RunResult(
         run_id=run,

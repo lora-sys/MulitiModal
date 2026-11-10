@@ -299,7 +299,7 @@ def test_failed_atomic_write_leaves_persisted_champion_unchanged(tmp_path, monke
     def fail_replace(source: str, target: str) -> None:
         raise OSError("synthetic disk failure")
 
-    monkeypatch.setattr(rl.os, "replace", fail_replace)
+    monkeypatch.setattr("lifecycle.contracts.os.replace", fail_replace)
     result = registry.promote(
         bundle.artifact_id, approver="release-owner", reason="reviewed release"
     )
