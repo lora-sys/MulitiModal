@@ -25,13 +25,13 @@ python -m pytest tests/lifecycle -q             # 合成生命周期套件
 python -m ruff check src tests scripts          # 全仓 lint
 python scripts/lifecycle_verify.py              # 统一验收 + 三层检查
 python scripts/lifecycle_verify.py --torch-free-smoke     # 无 torch 纯契约可导入
-python scripts/lifecycle_verify.py --acceptance-only      # 仅 10 项统一检查
+python scripts/lifecycle_verify.py --acceptance-only      # 仅 14 项统一检查
 ```
 
 `scripts/lifecycle_verify.py` 自注入 `src/` 到 `sys.path` 和子进程 `PYTHONPATH`，
 不依赖调用方环境（仓库无 `[build-system]`，实测无 PYTHONPATH 时可跑）。
 
-## 3. 统一验收 10 项（含 5 项安全负例）
+## 3. 统一验收 14 项（含 9 项安全负例）
 
 | 检查 | 阶段 | 负例 | 断言 |
 |---|---|---|---|
@@ -44,6 +44,10 @@ python scripts/lifecycle_verify.py --acceptance-only      # 仅 10 项统一检�
 | `no_silent_skip` | validate | **是** | 被拒行必带理由，隔离区可查 |
 | `training_no_auto_promotion` | train | **是** | 合成 smoke 不提升、工件 NOT_VALIDATED、三门禁独立 |
 | `release_no_self_promote` | promote | **是** | registry 从不自动提升 candidate |
+| `features_head_mismatch` | features | **是** | 负 delta 目标配 `[0,100]` 头必拒；正确头准入 |
+| `features_no_fabricated_truth` | features | **是** | 无批准的疲劳真值，unavailable_reason 明确 |
+| `gateway_fail_closed` | serve | **是** | 幂等、未知版本拒判、control_command 恒 null |
+| `observe_no_auto_actions` | observe | **是** | 数据更新只审计，不自动训练/提升/发布 |
 | `private_data_not_in_git` | ingest | 否 | 私有原始数据留在 Git 之外 |
 
 报告落盘 `runs/lifecycle/lifecycle_acceptance.json`，含 `gates`、`checks`、
@@ -55,7 +59,7 @@ python scripts/lifecycle_verify.py --acceptance-only      # 仅 10 项统一检�
 |---|---|---|---|
 | 快测 | `fast` | `tests/lifecycle/test_contracts_fast.py` | 纯 stdlib，无 I/O / 无网络 / 无 torch |
 | 合成 E2E | `synthetic` | `tests/lifecycle/` | 增量幂等、恢复、drift、折内拟合、原子提升/回滚、网关负例、哈希链 |
-| 安全负例 | — | `lifecycle_verify.py` | 5 项注入/拒判负例 |
+| 安全负例 | — | `lifecycle_verify.py` | 9 项注入/拒判负例 |
 | 慢测 | `slow` | 长耗时集成 / Bootstrap | CI 按需启用，**不计入常规通过数** |
 | 真实数据 | `real_data` | 需 `data/local/` | 默认跳过，**不计入常规通过数** |
 

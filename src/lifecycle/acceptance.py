@@ -239,6 +239,80 @@ def _check_release_no_self_promote(root: Path) -> str:
     return "registry never auto-promotes; gates stay independent"
 
 
+def _check_features_head_mismatch(root: Path) -> str:
+    from .contracts import TargetSpec
+    from .features import (
+        TargetCompatibilityError,
+        TargetHead,
+        check_target_head_compatibility,
+        head_for,
+    )
+
+    delta = TargetSpec(
+        "delta_vendor_fatigue", "t1", "linear_regression", (-20.0, 0.0),
+        "index", "derived", "vendor proxy difference", APPROVAL_UNVERIFIED,
+        unavailable_reason="no real paired label",
+    )
+    clamped = TargetHead("realtime_fatigue", "sigmoid", (0.0, 100.0))
+    try:
+        check_target_head_compatibility(delta, clamped)
+    except TargetCompatibilityError:
+        pass
+    else:
+        raise AssertionError("negative delta accepted by the clamped [0,100] head")
+    assert check_target_head_compatibility(delta, head_for(delta)) is True
+    return "structural target/head mismatch refuses; correct head admits"
+
+
+def _check_features_no_fabricated_truth(root: Path) -> str:
+    from .features import unavailable_target
+
+    target = unavailable_target("fatigue")
+    assert target.approval != APPROVAL_APPROVED
+    assert target.unavailable_reason
+    assert "clinical" in target.unavailable_reason or "truth" in target.unavailable_reason
+    return "no approved fatigue ground truth; unavailability is explicit"
+
+
+def _check_gateway_fail_closed(root: Path) -> str:
+    from .gateway import Gateway, make_envelope
+
+    gateway = Gateway(known_feature_versions=["v1"], known_model_versions=["v1"])
+    good = make_envelope(
+        request_id="r1", mode="A_pre_only", feature_version="v1",
+        model_version="v1", target_version="v1",
+        payload={"features": {"heart_rate_pre": 70.0}},
+    )
+    first = gateway.handle(good)
+    again = gateway.handle(good)
+    assert first.to_dict() == again.to_dict()
+    assert gateway.idempotency_hits >= 1
+    assert first.payload["control_command"] is None
+
+    unknown = make_envelope(
+        request_id="r2", mode="A_pre_only", feature_version="v-unknown",
+        model_version="v1", target_version="v1",
+        payload={"features": {"heart_rate_pre": 70.0}},
+    )
+    refused = gateway.handle(unknown)
+    assert refused.status != STATUS_OK, "unknown version produced an OK answer"
+    assert refused.payload["control_command"] is None
+    return "idempotent, unknown-version fail-closed, control_command always null"
+
+
+def _check_observe_no_auto_actions(root: Path) -> str:
+    from .observe import on_new_data
+
+    plan = on_new_data(batch_ids=["b1", "b2"])
+    assert plan["auto_train"] is False
+    assert plan["auto_promote"] is False
+    assert plan["auto_publish"] is False
+    assert plan["executed"] is False
+    assert plan["reason"]
+    assert plan["gates"]["GO_REAL_DATA_TRAINING"] == GATE_NOT_GRANTED
+    return "data update is audit-only; no auto train/promote/publish"
+
+
 def _check_three_gates(root: Path) -> str:
     gates = gate_bundle(True)
     assert gates["GO_ENGINEERING"] == "GRANTED"
@@ -268,6 +342,10 @@ CHECKS: tuple[tuple[str, str, Callable[[Path], str], bool], ...] = (
     ("no_silent_skip", "validate", _check_no_silent_skip, True),
     ("training_no_auto_promotion", "train", _check_training_gates, True),
     ("release_no_self_promote", "promote", _check_release_no_self_promote, True),
+    ("features_head_mismatch", "features", _check_features_head_mismatch, True),
+    ("features_no_fabricated_truth", "features", _check_features_no_fabricated_truth, True),
+    ("gateway_fail_closed", "serve", _check_gateway_fail_closed, True),
+    ("observe_no_auto_actions", "observe", _check_observe_no_auto_actions, True),
     ("private_data_not_in_git", "ingest", _check_raw_data_is_not_committed, False),
 )
 
