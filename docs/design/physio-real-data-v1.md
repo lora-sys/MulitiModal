@@ -1,7 +1,8 @@
 # 真实 94 字段 Session 导入与核对（#102）
 
 **状态**：`VERIFIED_WITH_EXCEPTIONS` / `INSUFFICIENT_EVIDENCE` / `LOCAL_EXPERIMENTAL`。
-本文冻结"真实导出 → 规范契约"的映射规则与判定口径，**不是**结果报告。
+本文声明"真实导出 → 规范契约"的**实现假设**与判定口径，**不是**结果报告，
+也**不是**经厂商字段字典验证过的映射。
 未宣称任何预测性能、疲劳改善、因果效应或临床有效性。
 
 ## 1. 为什么需要这一层
@@ -9,8 +10,11 @@
 `src/physio` 已统一 `PhysioEventV1` / `PhysioSessionV1`（设备 / 厂商服务 / 离线导入共用），
 但真实厂商导出是**长表**格式：一行一个设备记录，没有 phase、没有规范单位、
 没有标签。`legacy_export` 的合成 94 列注册表无法表达它。
-本模块 `src/physio/real_export.py` 冻结真实长表 → 规范事件的映射，并**从原始记录重建**
+本模块 `src/physio/real_export.py` 声明真实长表 → 规范事件的映射假设，并**从原始记录重建**
 Pre/Post 端点与 `y_delta_*` 标签；参考训练集只用于核对，不作为标签来源。
+没有厂商字段字典时，这套重建必然对 94 个字段施加语义解读；
+`coded_field_semantics_unverified` 与 `not_recoverable` 两类 blocker 限定了
+该解读可以被信任的范围。
 
 原始导出私有，位于 `data/local/physio-legacy/`，**不入 Git**。
 

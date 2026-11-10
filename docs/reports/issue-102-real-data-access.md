@@ -108,6 +108,21 @@ checkpoint 保存/重载、每折独立目录、预测），不证明它更好�
 Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在厂商分上近似自回归，
 不能说明"能否从独立生理量预测疲劳"。
 
+**MLP 的输出域与两个目标都不匹配（结构性错配，不只是"没训练好"）**：
+`RealtimeFatigueModel` 的疲劳状态头被限制在 `[0, 100]`，而 `post_state` 在
+`0.25–0.48` 附近、`delta_vendor_fatigue` 跨 `-18..0`。对 delta 目标而言，
+每个非正标签都落在声明输出域之外，模型无法表达该目标域的大部分。
+因此表内 MLP 的 MAE 与末损**是模型/目标结构性错配的结果**，
+不得读成关于任一目标的证据。合成 fixture 上把缩放退化为恒等反而让 post_state
+的 MLP MAE 从 43.23 降到 13.49——"更差的缩放看起来更好"，只因为该输出头倾向产生
+大正值，这正说明这些数字没有模型意义。
+
+**折是按 `subject_key` 分的，不是按已验证的生理受试者分的**：
+导出只给出 1 个共用 `member_id_hash` 对应 5 个 `subject_key`，且没有身份字典，
+这 5 个键可能对应少于 5 个真人。因此这是**留一 `subject_key` 折**，
+`RealTrainingReport.subject_isolation = PHYSICAL_SUBJECT_ISOLATION_UNVERIFIED`。
+若两个键属于同一人，折划分就会把该人泄漏到多个折里。
+
 **设计矩阵里的 0 是掩码占位符，不是测量值**：`weight_kg`（4/5 条无 `体脂` 记录）、
 `bmi`（4/5）、`respiration_rate`（3/5）在部分折内训练集的观测数不足
 `FoldImputer.min_observed=2`，因此无法建立中位数，进入 `ridge`/MLP 设计矩阵的是
@@ -133,8 +148,8 @@ MAE 无法区分它们与真实零值。
 
 | 检查 | 结果 |
 |---|---|
-| `pytest tests`（本地，torch 2.15 已装） | **822 passed / 9 skipped** |
-| `pytest tests/physio` | 362 passed / 0 skipped |
+| `pytest tests`（本地，torch 2.15 已装） | **824 passed / 9 skipped** |
+| `pytest tests/physio` | 364 passed / 0 skipped |
 | `ruff check src/physio tests/physio scripts/physio_real_data_check.py` | PASS |
 | `run_acceptance()` | **16/16 PASS**（新增 `real_export_mapping`、`real_data_audit`、`real_training_pipeline` 三项 #102 检查）。报告另含独立字段 `real_data_mapping_status = MAPPING_NOT_VERIFIED`（合成 fixture 上为 10 项 blocker，真实导出上为 9 项——合成 fixture 多出的 1 项是 `SYNTH-C` 上复现真实 Session 4 情形的 `ABSTAIN`），**工程 PASS 不等于 94 字段映射已核实** |
 | `scripts/physio_verify.py` | **OVERALL PASS** |
@@ -184,12 +199,14 @@ MAE 无法区分它们与真实零值。
 - 真实 94 字段完整导出与厂商字段字典：`BLOCKED_BY_DATA_OR_DEVICE`
 - 独立配对疲劳标签：`INSUFFICIENT_EVIDENCE`；`GO_REAL_DATA_TRAINING(physio)` /
   `GO_RESEARCH_CLAIMS(physio)` 仍 `NOT_GRANTED`，推理固定 `NOT_AVAILABLE`
+- 生理受试者隔离：`PHYSICAL_SUBJECT_ISOLATION_UNVERIFIED`（1 个 member hash 对应
+  5 个 `subject_key`，无身份字典）
 - 真实设备控制：`NOT_CONNECTED`
 - 结论级别 `LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`
 
 ## 9. 评审
 
-### 9.1 多 provider 评审团：16 次尝试，取得 5 份独立评审
+### 9.1 多 provider 评审团：17 次尝试，取得 6 份独立评审
 
 用户要求"开个评审团，跟 claude code 好好讨论"。实际尝试 10 个 provider/模型组合：
 
@@ -207,7 +224,7 @@ MAE 无法区分它们与真实零值。
 失败原因是账号额度/配额/限流/传输错误，**不是代码或环境问题**；重开评审团需要等对应
 provider 的额度恢复。
 
-**共取得 5 份来自 2 个不同 provider（`pi`、`claudeAgent`）的独立评审，仍未满足三个不同
+**共取得 6 份来自 2 个不同 provider（`pi`、`claudeAgent`）的独立评审，仍未满足三个不同
 provider 的 council 要求**，因此 council 不记为"通过"。
 
 - **第 1 份**（`pi` / default，task `2031a6d0-…`）：**8 / 10**，结论
@@ -291,7 +308,23 @@ than it first appears."*
 | R3-G8 | P3 | `OVERALL: PASS` 是最后一行，读者容易停在绿色上 | **已修**：脚本把 `mapping verified: MAPPING_NOT_VERIFIED` 移到最后一行 |
 | R3-G9 | P3 | `real_export.py` ~1100 行 | **维持第三轮判断**：纯重构无功能收益，R3-F1/F2 已消除它造成的实际危害 |
 
-### 9.4 三轮独立评审确认正确的部分
+#### 第四轮复核（`claudeAgent` / claude-opus-5-5，8/10，审 `57c37f6`）
+
+| ID | 严重度 | 问题 | 处置 |
+|---|---|---|---|
+| R4-F4 | **P2** | MLP 输出域与两个目标都不匹配：`RealtimeFatigueModel` 的状态头限制在 `[0, 100]`，而 `post_state` 在 `0.25–0.48`、`delta_vendor_fatigue` 跨 `-18..0`；对 delta 目标每个非正标签都在声明输出域之外。MLP 的误差是**结构性错配**，不只是"没训练好"。评审者在合成 fixture 上把缩放退化为恒等，反而让 post_state 的 MLP MAE 从 43.23 降到 13.49——"更差的缩放看起来更好"，正说明这些数字没有模型意义 | **已修**：`real_training` 模块 docstring 增第 4 条显式声明；报告 §4 增加专段，含上述 43.23→13.49 的反直觉实证；结论级别明确"不得读成关于任一目标的证据" |
+| R4-F5 | **P2** | "leave-one-subject-out" 未验证物理受试者隔离：1 个 `member_id_hash` 对应 5 个 `subject_key`，无身份字典，5 个键可能对应少于 5 个真人；若两键属同一人，折划分就把该人泄漏到多折 | **已修**：新增 `SUBJECT_ISOLATION_UNVERIFIED = "PHYSICAL_SUBJECT_ISOLATION_UNVERIFIED"` 并进入 `RealTrainingReport.subject_isolation` 与 `to_dict()`；脚本、报告 §4/§8、设计文档统一改称"留一 `subject_key` 折"；报告 §8 增列该边界 |
+| R4-F6 | P3 | `real_export.py` 模块 docstring 与设计文档开头仍用 "freezes the mapping"，与 C6 的"抽取集反推假设"标注不完全一致 | **已修**：两处改为"**声明实现假设**，不是经厂商字段字典验证过的映射"，并说明没有字典时重建必然对 94 个字段施加语义解读，由两类 blocker 限定可信范围 |
+| R4-F1 | P2 | 报告 `real_data_mapping_status` 同时出现 10 项（合成 fixture）与 9 项（私有导出）blocker，读者无法分辨各自输入 | **在 `4830f68` 已修**：报告明确标注合成 fixture 10 项 / 私有导出 9 项，并说明多出的 1 项是 `SYNTH-C` 复现真实 Session 4 的 `ABSTAIN` |
+| R4-F2 | P2 | 报告的 MAE 表在 `57c37f6` 上看起来是 C1 修复前的旧值 | **在 `4830f68` 已修**：该提交引入第 3 折拒绝后表已改为 4/5 折的 `0.08563 / 0.14851 / 44.78747` 与 `6.8750 / 3.50529 / 52.62228` |
+| R4-F3 | P2 | `to_dict()` 不含 `mapping_status`/`mapping_blockers`/`mapping_verified`，持久化 `audit.json` 读不出独立映射结论 | **在 `4830f68` 已修**：四字段（含 `passed`）全部进入 `to_dict()` |
+
+评审者另外披露：其验证过程用默认输出目录跑了一次 `run_real_pre_experiment()`，
+可能覆盖了 `runs/physio-real-data/fold-*/model_state.pt` 与 `manifest.json`。
+这些是 gitignore 产物，`git status` 确认**无任何被跟踪文件改动**；已重新生成
+`runs/` 产物。
+
+### 9.4 四轮独立评审确认正确的部分
 
 第一轮（`pi`）：独立重算 5 条真实 Session 的 `y_delta` 值与参考完全一致；
 未找到另一条同样简洁且能复现的规则；折内拟合经 observed counts 验证无泄漏；
@@ -301,6 +334,9 @@ than it first appears."*
 "unusually disciplined"，报告避免了临床声明。
 
 第三轮（`pi` 8.5 + 三份 Gemini 9.6/9.0/9.2）：一致确认 C1–C9 全部修复到位，
+第四轮（Claude 8/10）独立复核同样确认九项修复成立、无 P0，
+并用"改动留出行值"实验证明折内拟合无泄漏、用"缩放退化为恒等"实验证明
+C1 修复可被 mutation 检测；
 受试者级折边界、折内插补、折作用域 checkpoint 均保持；
 三份 Gemini 均独立重跑真实数据并确认报告数字与代码一致（在其审阅的时点）；
 `pi` 确认无 P0/P1，剩余问题集中在持久化工件与文档数字。

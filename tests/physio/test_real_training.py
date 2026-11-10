@@ -491,3 +491,21 @@ def test_fold_checkpoint_directory_is_fold_scoped_without_out_dir():
     assert "physio-real-data" in default_dir.parts
     assert _fold_checkpoint_dir(None, 3).name == "fold-3"
     assert _fold_checkpoint_dir(Path("/tmp/x"), 2) == Path("/tmp/x/fold-2")
+
+
+def test_subject_isolation_is_reported_as_unverified():
+    """Folds are grouped by subject_key, which is not a verified physical subject."""
+    from physio.real_training import SUBJECT_ISOLATION_UNVERIFIED
+
+    report = _report()
+    assert report.subject_isolation == SUBJECT_ISOLATION_UNVERIFIED
+    assert report.subject_isolation in report.to_dict()["subject_isolation"]
+
+
+def test_target_domains_are_disclosed_in_the_module_docstring():
+    """The [0, 100] model head cannot represent either declared target."""
+    from physio import real_training
+
+    docstring = real_training.__doc__ or ""
+    assert "[0, 100]" in docstring
+    assert "structural model/target mismatch" in docstring

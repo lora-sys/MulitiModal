@@ -19,6 +19,14 @@ Three things must not be read into any number produced here:
 3. **A zero in the design matrix is a masked placeholder**, never a measured or
    imputed value. ``masked_placeholder_features`` names the columns where that
    still happens after fold imputation.
+4. **The shared ``[0, 100]`` fatigue-state head is not a regression model suited to
+   either target.** ``RealtimeFatigueModel`` clamps its output to ``[0, 100]``, while
+   ``post_state`` lives near ``0.25–0.48`` and ``delta_vendor_fatigue`` spans
+   ``-18..0``. For the delta target every non-positive label sits outside the
+   declared output range, so the model cannot represent most of that domain. The
+   MLP errors below are therefore a **structural model/target mismatch**, not
+   merely an untrained smoke run, and they must not be read as evidence about
+   either target.
 
 ``evaluate_regression`` is the authority on status and returns
 ``INSUFFICIENT_EVIDENCE`` for this sample size.
@@ -63,6 +71,13 @@ CONFIG = TrainingConfig()
 TARGET_POST_STATE = "post_state"
 TARGET_DELTA_FATIGUE = "delta_vendor_fatigue"
 TARGET_MODES: tuple[str, ...] = (TARGET_POST_STATE, TARGET_DELTA_FATIGUE)
+
+#: The folds are grouped by ``subject_ref``, which is a ``subject_key`` string from
+#: the export. One shared ``member_id_hash`` maps to every ``subject_key`` in the
+#: provided extract, so the keys may denote fewer physical people than there are
+#: keys. The split is therefore leave-one-*subject_key*-out, and physical-subject
+#: isolation is unverified until a vendor identity dictionary arrives.
+SUBJECT_ISOLATION_UNVERIFIED = "PHYSICAL_SUBJECT_ISOLATION_UNVERIFIED"
 
 MODEL_MEAN = "train_fold_mean"
 MODEL_RIDGE = "ridge"
@@ -133,6 +148,7 @@ class RealTrainingReport:
     feature_missing_counts: dict[str, int]
     masked_placeholder_features: tuple[str, ...]
     refused_folds: tuple[int, ...]
+    subject_isolation: str
     evaluation_status: str
     evaluation_metrics: dict[str, float | None] = dataclass_field(default_factory=dict)
     notes: tuple[str, ...] = ()
@@ -158,6 +174,7 @@ class RealTrainingReport:
             "feature_missing_counts": dict(self.feature_missing_counts),
             "masked_placeholder_features": list(self.masked_placeholder_features),
             "refused_folds": list(self.refused_folds),
+            "subject_isolation": self.subject_isolation,
             "evaluation_status": self.evaluation_status,
             "evaluation_metrics": dict(self.evaluation_metrics),
             "folds": [fold.to_dict() for fold in self.folds],
@@ -297,7 +314,13 @@ def run_real_pre_experiment(
     out_dir: str | Path | None = None,
     notes: Sequence[str] = (),
 ) -> RealTrainingReport:
-    """Run the declared leave-one-subject-out pipeline regression on real rows."""
+    """Run the declared leave-one-``subject_key``-out pipeline regression on real rows.
+
+    Physical-subject isolation is unverified: the export supplies one shared
+    ``member_id_hash`` for every ``subject_key`` and no identity dictionary, so the
+    keys may denote fewer people than there are keys. The report carries
+    ``subject_isolation = PHYSICAL_SUBJECT_ISOLATION_UNVERIFIED``.
+    """
     if not sessions:
         raise RealTrainingError("pre-experiment requires at least one session")
     if target not in TARGET_MODES:
@@ -424,6 +447,7 @@ def run_real_pre_experiment(
         feature_missing_counts=dict(sorted(missing_by_feature.items())),
         masked_placeholder_features=masked_placeholder_features,
         refused_folds=tuple(fold.fold for fold in fold_results if fold.refusal),
+        subject_isolation=SUBJECT_ISOLATION_UNVERIFIED,
         evaluation_status=report.status,
         evaluation_metrics=report.metrics,
         notes=tuple(notes),

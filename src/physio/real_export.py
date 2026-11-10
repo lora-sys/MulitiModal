@@ -10,6 +10,12 @@ label source; it is only compared against, in ``real_data_audit``.
 No real export is committed. The raw file lives under ``data/local/`` and is read
 at audit time only.
 
+The mapping this module implements is a **declared implementation hypothesis**,
+reverse-engineered from the provided extract. It is not a verified vendor mapping:
+without a vendor field dictionary the reconstruction necessarily imposes a
+semantic reading on 94 fields, and ``coded_field_semantics_unverified`` /
+``not_recoverable`` blockers bound how far that reading may be trusted.
+
 Anything that cannot be recovered from the provided extract is reported through a
 QC issue instead of being guessed.
 """

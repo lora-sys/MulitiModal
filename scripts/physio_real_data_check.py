@@ -119,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         "model_mae": training.model_mae,
         "neural_status": training.neural_status,
         "refused_folds": list(training.refused_folds),
+        "subject_isolation": training.subject_isolation,
         "masked_placeholder_features": list(training.masked_placeholder_features),
         "passed": audit.passed
         and training.evaluation_status in {"EVALUATED", "INSUFFICIENT_EVIDENCE"},
@@ -143,6 +144,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"neural path     : {training.neural_status}"
           f" (folds run: {len(training.folds) - len(training.refused_folds)}/{len(training.folds)}"
           + (f", refused: {list(training.refused_folds)}" if training.refused_folds else "") + ")")
+    print(f"subject isolation: {training.subject_isolation} (folds are grouped by subject_key, "
+          "not by a verified physical subject)")
     print("model ranking   : not reported; "
           f"{training.n_sessions} sessions with one test row per fold cannot rank models")
     for item in audit.open_items:
