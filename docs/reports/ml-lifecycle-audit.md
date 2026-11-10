@@ -220,8 +220,8 @@ PR 描述里出现，未给命令与差异来源。现已核对并在此记录�
 
 | 项 | 本地（macOS / Py3.13，无 torch） | 远程 `acam-lab`（Linux / Py3.12，torch 2.15 + transformers） |
 |---|---|---|
-| 收集用例 | 996 | 1004 |
-| 通过 / 跳过 | 988 / 9 | 1000 / 4 |
+| 收集用例 | 1000 | 1008 |
+| 通过 / 跳过 | 992 / 9 | 1004 / 4 |
 
 差 8 个收集项来自 `tests/syndrome/test_bert_model.py`（本地缺 `transformers`，
 整模块跳过故不收集）；本地 6 个 `tests/scripts/test_tcm_minimal_demo.py` 因缺
@@ -251,3 +251,5 @@ Gemini 3.8 Flash 的复评任务在 `c087d30` 上启动后返回
 新增 4 项回归测试，全部经「撤回修复即失败」的突变验证。
 本地实测：全仓 `992 passed, 9 skipped`、`tests/lifecycle` `159 passed`、fast `19 passed`、
 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。
+远程 `acam-lab` 实测：全仓 `1004 passed, 4 skipped`、`tests/lifecycle` `159 passed`、
+`lifecycle_verify.py` `15/15 PASS`。
