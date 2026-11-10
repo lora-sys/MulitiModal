@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -250,3 +251,31 @@ def test_response_hash_is_a_mapping_blocker():
     hash_blockers = [b for b in audit.mapping_blockers if "response_hash" in b]
     assert hash_blockers
     assert "not declared" in hash_blockers[0]
+
+
+def test_report_hash_fragments_match_the_private_inputs():
+    """The report quotes SHA-256 fragments; a transcription error must not pass.
+
+    A wrong fragment makes the report's provenance claim unverifiable, so the
+    fragments are checked against the real files whenever they are present. On a
+    host without the private extract the check skips rather than passing on an
+    unchecked assumption.
+    """
+    private = FIXTURES.parent.parent / "data" / "local" / "physio-legacy"
+    report = FIXTURES.parents[1] / "docs" / "reports" / "issue-102-real-data-access.md"
+    if not private.is_dir() or not report.is_file():
+        pytest.skip("private extract or report is not present on this host")
+
+    text = report.read_text(encoding="utf-8")
+    for name in (
+        "raw_records_5sessions.csv",
+        "reference_train94_5sessions.csv",
+        "reference_qc_5sessions.csv",
+        "reprocessed_5sessions.csv",
+    ):
+        path = private / name
+        if not path.is_file():
+            continue
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert digest[:8] in text, f"{name}: fragment {digest[:8]} is not quoted in the report"
+        assert digest[-4:] in text, f"{name}: suffix {digest[-4:]} is not quoted in the report"

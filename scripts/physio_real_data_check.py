@@ -135,9 +135,12 @@ def main(argv: list[str] | None = None) -> int:
     print(f"audit status    : {audit.status}  {audit.verdict_counts()}")
     print(f"mapping status  : {audit.mapping_status}  ({len(audit.mapping_blockers)} blockers)")
     print(f"evaluation      : {training.evaluation_status}  ({training.reason})")
+    ran = len(training.folds) - len(training.refused_folds)
     print("pipeline MAE    : "
-          + ", ".join(
-              f"{name}={value:.4f}" if value is not None else f"{name}=n/a"
+          + " | ".join(
+              f"{name}={value:.4f} ({ran}/{len(training.folds)} folds)"
+              if value is not None
+              else f"{name}=n/a"
               for name, value in training.model_mae.items()
           )
           + "  <- pipeline regression only, NOT a model comparison")

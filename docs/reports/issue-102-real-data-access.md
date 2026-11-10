@@ -13,7 +13,7 @@
 | 文件 | 行数 | sha256 | 隔离 |
 |---|---|---|---|
 | `data/local/physio-legacy/raw_records_5sessions.csv` | 41 条记录 | `4200b467…b5f1f` | `data/local/`，不入 Git |
-| `…/reference_train94_5sessions.csv` | 5 行 × 94 列 | `a1cee8a4…d8b9` | 同上 |
+| `…/reference_train94_5sessions.csv` | 5 行 × 94 列 | `a1cee8a4…f8b9` | 同上 |
 | `…/reference_qc_5sessions.csv` | 5 行 × 11 列 | `990947d3…1a690` | 同上 |
 | `…/reprocessed_5sessions.csv` | 5 行 × 82 列 | `34686b28…b8544` | 同上（另一版中文表头明细，未纳入核对） |
 
@@ -81,7 +81,7 @@
 - **折内拟合**：中位数插补与标准化都只吃训练折；标准化**只统计观测值**
   （`observed_mask`），与 `WindowScaler.fit` 的约定一致，插补位置不进入统计量。
 - **评估**：`evaluate_regression` 是唯一状态权威 → `INSUFFICIENT_EVIDENCE`
-  （labeled samples 5 < required 30）。
+  （labeled samples 4 < required 30；第 3 折被拒绝，未进入汇总）。
 
 留一受试者折（5 折，每折 4 训练 / 1 测试）：
 
@@ -123,11 +123,18 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。该回归在�
 `RealTrainingReport.subject_isolation = PHYSICAL_SUBJECT_ISOLATION_UNVERIFIED`。
 若两个键属于同一人，折划分就会把该人泄漏到多个折里。
 
-**设计矩阵里的 0 是掩码占位符，不是测量值**：`weight_kg`（4/5 条无 `体脂` 记录）、
-`bmi`（4/5）、`respiration_rate`（3/5）在部分折内训练集的观测数不足
-`FoldImputer.min_observed=2`，因此无法建立中位数，进入 `ridge`/MLP 设计矩阵的是
-0.0 占位符。`RealTrainingReport.masked_placeholder_features` 显式列出这些列，
-MAE 无法区分它们与真实零值。
+**设计矩阵里的 0 是掩码占位符，不是测量值**：折内插补要求训练折至少
+`FoldImputer.min_observed=2` 个观测，否则不建中位数、该列保持无效，进入
+`ridge`/MLP 设计矩阵的就是 0.0 占位符。按列细分（真实抽取集）：
+
+| 列 | 有实测的 Session | 可插补的折 | 说明 |
+|---|---|---|---|
+| `weight_kg` | 1/5 | **0/5** | 留出那一条时训练折 0 观测，否则 1 观测，始终不足 2 |
+| `bmi` | 1/5 | **0/5** | 同上 |
+| `respiration_rate` | 2/5 | **3/5** | 留出两条有实测 rr 的 Session 时训练折只剩 1 观测，无法插补 |
+
+`RealTrainingReport.masked_placeholder_features` 报的是**至少在一折里是占位符**
+的列的并集（真实数据为三者全部），不携带折级粒度；MAE 无法区分占位零与真实零值。
 
 ## 5. 开放项（必须带回厂商字段字典）
 
@@ -148,8 +155,8 @@ MAE 无法区分它们与真实零值。
 
 | 检查 | 结果 |
 |---|---|
-| `pytest tests`（本地，torch 2.15 已装） | **824 passed / 9 skipped** |
-| `pytest tests/physio` | 364 passed / 0 skipped |
+| `pytest tests`（本地，torch 2.15 已装） | **825 passed / 9 skipped** |
+| `pytest tests/physio` | 365 passed / 0 skipped |
 | `ruff check src/physio tests/physio scripts/physio_real_data_check.py` | PASS |
 | `run_acceptance()` | **16/16 PASS**（新增 `real_export_mapping`、`real_data_audit`、`real_training_pipeline` 三项 #102 检查）。报告另含独立字段 `real_data_mapping_status = MAPPING_NOT_VERIFIED`（合成 fixture 上为 10 项 blocker，真实导出上为 9 项——合成 fixture 多出的 1 项是 `SYNTH-C` 上复现真实 Session 4 情形的 `ABSTAIN`），**工程 PASS 不等于 94 字段映射已核实** |
 | `scripts/physio_verify.py` | **OVERALL PASS** |
@@ -206,7 +213,7 @@ MAE 无法区分它们与真实零值。
 
 ## 9. 评审
 
-### 9.1 多 provider 评审团：17 次尝试，取得 6 份独立评审
+### 9.1 多 provider 评审团：18 次尝试，取得 7 份独立评审
 
 用户要求"开个评审团，跟 claude code 好好讨论"。实际尝试 10 个 provider/模型组合：
 
@@ -224,7 +231,7 @@ MAE 无法区分它们与真实零值。
 失败原因是账号额度/配额/限流/传输错误，**不是代码或环境问题**；重开评审团需要等对应
 provider 的额度恢复。
 
-**共取得 6 份来自 2 个不同 provider（`pi`、`claudeAgent`）的独立评审，仍未满足三个不同
+**共取得 7 份来自 2 个不同 provider（`pi`、`claudeAgent`）的独立评审，仍未满足三个不同
 provider 的 council 要求**，因此 council 不记为"通过"。
 
 - **第 1 份**（`pi` / default，task `2031a6d0-…`）：**8 / 10**，结论
@@ -265,7 +272,7 @@ than it first appears."*
 | C1 | **P1** | `_scaled_row()` 收到拟合好的 `WindowScaler` 却原样返回值，只把无效位置换成 0。岭回归与 MLP 实际在**未标准化**的原始值上训练/预测，所谓"折内标准化"是空操作，报告的 MAE 全部失真 | **本轮新修**：`_scaled_row` 现在按 `(v - mean) / std` 变换；新增 3 个回归测试（缩放必须作用于值、变换不得是恒等、统计量必须来自训练折）。修复后 MAE 从 ridge 0.1049→0.1320、MLP 18.97→50.42，已在报告更正 |
 | C2 | **P1** | 三模型 MAE 表被框定为对比 | **当时已修**（`dfba7f0` 起脚本与模块 docstring 已改为 "pipeline regression only, NOT a model comparison"）；**本轮补强**：报告表格去掉加粗最小值，新增"目标近似自回归"与"0 是掩码占位符"两段显式声明 |
 | C3 | **P1** | 即使存在未解 mismatch 与大量 not_recoverable，acceptance 仍显示 PASS / "mapping verified" | **本轮新修**：审计新增独立的 `mapping_status` / `mapping_blockers`；`run_acceptance()` 顶层新增 `real_data_mapping_status` 字段；`real_data_audit` 检查的 detail 明写"the 94-field mapping itself is MAPPING_NOT_VERIFIED"；报告 §6 拆成"工程路径 PASS"与"94 字段映射 NOT_VERIFIED"两行 |
-| C4 | **P1** | `_dense()` 把无效特征静默换成 0.0，而 MAE 与报告都无法区分真实零值与掩码占位符 | **本轮新修**：`RealTrainingReport.masked_placeholder_features` 显式列出折内插补后仍无效的列（真实数据为 `weight_kg`、`bmi`、`respiration_rate`，全部折内观测数不足 2），报告 §4 显式声明 |
+| C4 | **P1** | `_dense()` 把无效特征静默换成 0.0，而 MAE 与报告都无法区分真实零值与掩码占位符 | **本轮新修**：`RealTrainingReport.masked_placeholder_features` 显式列出折内插补后仍无效的列（真实数据为 `weight_kg`、`bmi`、`respiration_rate`；其中前两者在 0/5 折可插补，`respiration_rate` 在 3/5 折可插补），报告 §4 按列给出可插补折数 |
 | C5 | P2 | `_fit_scaler` 复制 `WindowScaler.fit`；岭回归在已有 sklearn 的情况下手写 | 岭回归**当时已修**（`090a64b` 改用 `sklearn.linear_model.Ridge`）；`_fit_scaler` **本轮新修**：改为 6 行适配器委托给 `WindowScaler.fit`，全库只剩一套零方差/掩码策略，并加测试证明委托而非复制 |
 | C6 | P2 | 端点规则与 BP 阈值是从 5 条 Session 反推的，却被称为"冻结"，且护栏可能静默丢弃未来合法标签 | **本轮新修**：代码常量注释改为"EXTRACT-FITTED HYPOTHESIS, NOT A VENDOR RULE / NOT A CLINICAL RULE"；设计文档第 3 节加警告框；报告同步 |
 | C7 | P2 | `post_state` 目标近似自回归（Pre 特征已含同名厂商分） | **本轮新修**：`real_training` 模块 docstring 第 2 条 + 设计文档 §5.1 + 报告 §4 三处显式声明 |
@@ -308,7 +315,7 @@ than it first appears."*
 | R3-G8 | P3 | `OVERALL: PASS` 是最后一行，读者容易停在绿色上 | **已修**：脚本把 `mapping verified: MAPPING_NOT_VERIFIED` 移到最后一行 |
 | R3-G9 | P3 | `real_export.py` ~1100 行 | **维持第三轮判断**：纯重构无功能收益，R3-F1/F2 已消除它造成的实际危害 |
 
-#### 第四轮复核（`claudeAgent` / claude-opus-5-5，8/10，审 `57c37f6`）
+#### 第四轮复核（`claudeAgent` / claude-opus-5-5，两份：8/10 与 7.5/10，均审 `57c37f6`）
 
 | ID | 严重度 | 问题 | 处置 |
 |---|---|---|---|
@@ -324,7 +331,26 @@ than it first appears."*
 这些是 gitignore 产物，`git status` 确认**无任何被跟踪文件改动**；已重新生成
 `runs/` 产物。
 
-### 9.4 四轮独立评审确认正确的部分
+#### 第五轮复核（`claudeAgent` / claude-opus-5-5，7.5/10，审 `57c37f6`）
+
+该轮同样确认 C1–C9 在 `57c37f6` 上基本成立、无 P0，并用两个实验独立证明：
+（a）改动留出行值**不影响**训练折的 scaler / imputer / ridge 拟合 / 折划分
+（即 R4-1 是伪造标准化，不是统计泄漏）；（b）`_fit_scaler` 委托给
+`WindowScaler.fit` 的均值、标准差、计数、最小标准差策略与掩码语义逐折一致。
+它另外发现三项本轮新问题：
+
+| ID | 严重度 | 问题 | 处置 |
+|---|---|---|---|
+| R5-1 | **P2** | 报告引用的 `reference_train94_5sessions.csv` sha256 后缀写作 `d8b9`，**实际是 `f8b9`** —— 属转写错误，使报告的溯源声明不可验证 | **已修**：更正为 `f8b9`；新增 `test_report_hash_fragments_match_the_private_inputs`，有私有数据时逐文件核对前 8 位与后 4 位，无则跳过 |
+| R5-2 | P2 | 报告仍写 `labeled samples 5 < required 30`，而第 3 折被拒绝后实际为 **4** | **已修**：改为 4 并注明"第 3 折被拒绝，未进入汇总" |
+| R5-3 | P2 | C4 的"全部折内观测数不足 2"以偏概全：`respiration_rate` 在 3/5 折内**可以**插补 | **已修**：报告 §4 改为按列给出"有实测的 Session 数 / 可插补的折数"表格（`weight_kg` 1/5→0/5、`bmi` 1/5→0/5、`respiration_rate` 2/5→3/5）；评审表条目同步更正 |
+| R5-4 | P3 | 三列 `pipeline MAE` 行虽带"NOT a model comparison"标签，表格形态仍易被扫读成排名 | **已修**：改为每项附 `(4/5 folds)` 覆盖度，明确三者覆盖同一批折且不做排序 |
+| R5-5 | P3 | `to_dict()` 缺映射字段、MAE 表旧值、"freezes the mapping" 措辞 | **`4830f68` / `8dd932d` 已修**（该评审针对 `57c37f6`） |
+
+评审者未执行 pytest / ruff / acceptance，因此报告中的测试与验收总数在其审阅时点是
+源码声明而非独立复跑结果；其本地环境缺 `sklearn`，仅用内存桩做折与缩放检查。
+
+### 9.4 五轮独立评审确认正确的部分
 
 第一轮（`pi`）：独立重算 5 条真实 Session 的 `y_delta` 值与参考完全一致；
 未找到另一条同样简洁且能复现的规则；折内拟合经 observed counts 验证无泄漏；
@@ -334,7 +360,7 @@ than it first appears."*
 "unusually disciplined"，报告避免了临床声明。
 
 第三轮（`pi` 8.5 + 三份 Gemini 9.6/9.0/9.2）：一致确认 C1–C9 全部修复到位，
-第四轮（Claude 8/10）独立复核同样确认九项修复成立、无 P0，
+第四、五轮（Claude 8/10 与 7.5/10）独立复核同样确认九项修复成立、无 P0，
 并用"改动留出行值"实验证明折内拟合无泄漏、用"缩放退化为恒等"实验证明
 C1 修复可被 mutation 检测；
 受试者级折边界、折内插补、折作用域 checkpoint 均保持；
@@ -350,5 +376,7 @@ C1 修复可被 mutation 检测；
   （需厂商字段字典）。
 - 第三轮 `claudeAgent` 评审未实际发出（循环检测 + 传输错误），该 provider 的独立意见
   在本轮缺失。
-- 三轮评审均无法验证 `fatigue_level`、`脑波` 记录选择规则、`is_complete` 语义
-  （需厂商字段字典）。
+- 第四、五轮评审者均**未执行** pytest / ruff / acceptance，因此报告中的测试与验收
+  总数在其审阅时点是源码与产物声明，不是独立复跑结果；第五轮评审者本地缺 `sklearn`。
+- 五轮评审均无法验证 `fatigue_level`、`脑波` 记录选择规则、`is_complete` 语义、
+  以及 5 个 `subject_key` 是否为 5 个生理受试者（需厂商字段字典）。
