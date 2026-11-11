@@ -53,7 +53,7 @@ from .contracts import (
     utc_now,
 )
 
-PIPELINE_VERSION = "ml-lifecycle-pipeline-v6"
+PIPELINE_VERSION = "ml-lifecycle-pipeline-v7"
 _HIGH_PRECISION_TIME = re.compile(
     r"^(.*\d{2}:?\d{2}:?\d{2})[.,](\d+)(Z|[+-]\d{2}:?\d{2}(?::?\d{2})?)?$"
 )
@@ -369,9 +369,9 @@ def _canonical_event_time(value: str) -> str:
     """
     if not value:
         return value
-    high_precision = (
-        None if _OFFSET_FRACTION.search(value) else _HIGH_PRECISION_TIME.fullmatch(value)
-    )
+    if _OFFSET_FRACTION.search(value):
+        return value
+    high_precision = _HIGH_PRECISION_TIME.fullmatch(value)
     if high_precision:
         prefix, fraction, suffix = high_precision.groups()
         suffix = suffix or ""

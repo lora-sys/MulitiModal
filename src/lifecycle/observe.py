@@ -516,19 +516,25 @@ def _unknown_columns(qc: QCReport) -> tuple[str, ...]:
     for item in qc.drift:
         if not isinstance(item, str) or marker not in item:
             continue
-        raw = item.rsplit(marker, 1)[1].strip()
-        if raw.lower().startswith(("detected", "found", "none", "0 ")):
-            continue
+        starts = [i for i in range(len(item)) if item.startswith(marker, i)]
         parsed = None
-        if raw.startswith("[") and raw.endswith("]"):
+        for start in starts:
+            raw = item[start + len(marker) :].strip()
+            if not (raw.startswith("[") and raw.endswith("]")):
+                continue
             try:
-                parsed = ast.literal_eval(raw)
+                candidate = ast.literal_eval(raw)
             except (ValueError, SyntaxError):
-                parsed = None
-        if isinstance(parsed, (list, tuple)):
+                continue
+            if isinstance(candidate, (list, tuple)):
+                parsed = candidate
+                break
+        if parsed is not None:
             names.extend(str(name) for name in parsed)
         else:
-            names.append(raw)
+            raw = item.rsplit(marker, 1)[1].strip()
+            if not raw.lower().startswith(("detected", "found", "none", "0 ")):
+                names.append(raw)
     return tuple(dict.fromkeys(names))
 
 

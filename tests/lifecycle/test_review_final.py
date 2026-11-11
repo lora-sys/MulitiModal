@@ -432,12 +432,11 @@ def test_basic_iso_timestamps_preserve_submicrosecond_precision():
 
 
 def test_fractional_timezone_offset_is_not_treated_as_wall_clock_fraction():
-    """F1: offset fractions must not corrupt the UTC instant with a placeholder."""
-    assert pl._canonical_event_time("2026-11-01T09:00:00+01:00:00.5") == (
-        "2026-11-01T07:59:59.500000+00:00"
-    )
-    assert pl._canonical_event_time("2026-11-01T09:00:00+01:00:00.5") != (
-        pl._canonical_event_time("2026-11-01T07:59:59.876544Z")
+    """F1: unsupported offset fractions stay lossless instead of being truncated."""
+    value = "2026-11-01T09:00:00+01:00:00.5"
+    assert pl._canonical_event_time(value) == value
+    assert pl._canonical_event_time(value) != pl._canonical_event_time(
+        "2026-11-01T07:59:59.876544Z"
     )
 
 
@@ -456,3 +455,23 @@ def test_missing_optional_event_time_keeps_source_record_deduplication(tmp_path)
     result = run_pipeline([declare_batch(path, batch_id="A")], tmp_path / "out")
     assert result.qc.n_accepted == 4
     assert result.qc.n_duplicate == 1
+
+
+def test_high_precision_with_fractional_offset_is_lossless():
+    """F1: distinct instants with fractional offsets are never merged."""
+    early = "2026-11-01T09:00:00.1234561+01:00:00.5"
+    late = "2026-11-01T09:00:00.1234569+01:00:00.5"
+    assert pl._canonical_event_time(early) == early
+    assert pl._canonical_event_time(late) == late
+    assert pl._row_key({"event_time": early, "source_record": "source-a"}) != (
+        pl._row_key({"event_time": late, "source_record": "source-a"})
+    )
+
+
+def test_drift_marker_inside_column_name_does_not_hide_columns():
+    """F2: only a marker followed by a valid list literal introduces columns."""
+    note = "A: unknown columns ['sensor_x', 'unknown columns detected']"
+    report = ob.drift_check(_qc(()), _qc([note]))["unknown_columns"]
+    assert report["candidate"] == ["sensor_x", "unknown columns detected"]
+    assert report["new"] == ["sensor_x", "unknown columns detected"]
+    assert report["delta"] == 2
