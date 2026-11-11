@@ -166,7 +166,10 @@ def review(manifest_path: Path, dataset_path: Path, xls_path: Path,
             "champion_source_sha256": champion_sha,
             "champion_commit": CHAMPION_COMMIT,
             "holdout_subjects": len(manifest["split"]["holdout"]),
-            "scope": "frozen selection-only 4-fold x 2-repeat out-of-fold; no holdout, no training, no tuning",
+            "scope": (
+                "frozen selection-only 4-fold x 2-repeat out-of-fold; "
+                "no holdout, no training, no tuning"
+            ),
         },
         "protocol": {"folds": FOLDS, "repeats": REPEATS, "seed": SEED,
                      "n_subjects": len(subjects), "n_folds": len(folds),
@@ -176,7 +179,10 @@ def review(manifest_path: Path, dataset_path: Path, xls_path: Path,
             "out_of_fold_mean_baseline_mae": round(statistics.mean(mean_subject.values()), 4),
         },
         "paired": {
-            "definition": "per-subject champion MAE minus mean-baseline MAE (negative = champion better)",
+            "definition": (
+                "per-subject champion MAE minus mean-baseline MAE "
+                "(negative = champion better)"
+            ),
             "mean_delta": round(statistics.mean(paired), 4),
             "ci95": _bootstrap_ci(paired, seed, n_boot),
             "improved_subjects": sum(d < 0 for d in paired),

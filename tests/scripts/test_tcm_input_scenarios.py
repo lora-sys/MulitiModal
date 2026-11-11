@@ -29,7 +29,7 @@ def test_required_missing_body_never_zero_fills():
 
 
 def test_extreme_bodies_use_observed_bounds_not_invented_values():
-    bounds = [(lo, hi) for lo, hi in zip(range(9), range(10, 19))]
+    bounds = [(lo, hi) for lo, hi in zip(range(9), range(10, 19), strict=True)]
     built = {s["id"]: s for s in scenarios.build_scenarios(bounds=bounds)}
     assert built["extreme_min"]["body"]["features"][:9] == [float(i) for i in range(9)]
     assert built["extreme_max"]["body"]["features"][:9] == [float(i) for i in range(10, 19)]

@@ -142,7 +142,10 @@ def review(manifest_path: Path, dataset_path: Path, raw_dir: Path,
             "dataset_sha256": _sha256(dataset_path),
             "artifact_dir": artifact_dir,
             "holdout_subjects": split["holdout_subjects"],
-            "scope": "frozen protocol-v2 selection dev partition; no holdout, no retraining, no tuning",
+            "scope": (
+                "frozen protocol-v2 selection dev partition; "
+                "no holdout, no retraining, no tuning"
+            ),
         },
         "protocol": {"n_classes": N_CLASSES, "seed": seed, "n_boot": n_boot,
                      "dev_dedup_dropped": split["dev_dedup_dropped"]},
@@ -163,7 +166,10 @@ def review(manifest_path: Path, dataset_path: Path, raw_dir: Path,
             "calibrated": False,
         },
         "abstention": {
-            "definition": "SyndromeService.analyze_symptoms status distribution on allowed dev data",
+            "definition": (
+                "SyndromeService.analyze_symptoms status distribution "
+                "on allowed dev data"
+            ),
             "dev": status_coverage(dev_statuses),
             "adversarial_probes": status_coverage(probe_statuses),
             "dev_accuracy_above_threshold": round(sum(above) / len(above), 6) if above else None,
@@ -209,7 +215,9 @@ def main() -> int:
         "n_classes_zero_f1": report["acceptance"]["per_class_summary"]["n_classes_zero_f1"],
         "dev_coverage": report["abstention"]["dev"]["decision_coverage"],
         "dev_abstain_coverage": report["abstention"]["dev"]["abstain_coverage"],
-        "adversarial_abstain_coverage": report["abstention"]["adversarial_probes"]["abstain_coverage"],
+        "adversarial_abstain_coverage": (
+            report["abstention"]["adversarial_probes"]["abstain_coverage"]
+        ),
         "report": str(out),
     }, ensure_ascii=False))
     return 0

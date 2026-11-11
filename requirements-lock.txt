@@ -1,0 +1,31 @@
+# Exact reproduction snapshot (P3 finding G5 / Step 5 Preview S5).
+
+# This is NOT a CI-enforced lock. `requirements-dev.txt` keeps `>=` lower bounds
+# on purpose: the CI matrix spans Python 3.11/3.12/3.13 and pinning to this
+# Python 3.13 host's versions would make the 3.11 job un-installable.
+#
+# Use this file only to reproduce the exact local environment in which the
+# reported baselines were measured:
+#   python -m pip install -r requirements-lock.txt
+#
+# CI instead installs requirements-dev.txt and prints `pip freeze` in the
+# "Declare environment" step, so any upstream drift is visible in the job log
+# rather than hidden. The remaining drift risk is recorded honestly in
+# docs/reports/ml-lifecycle-acceptance.md section 7.
+
+# Measured on: CPython 3.13.12 (macOS arm64), 2026-11-10.
+# Direct toolchain versions used for the reported baselines:
+pytest==9.2.0
+ruff==0.17.3
+numpy==2.5.4
+scikit-learn==1.9.1
+joblib==1.6.0
+xlrd==2.0.2
+openpyxl==3.1.5
+
+# Transitive dependencies observed on that host (informational, not enforced):
+iniconfig==2.3.1
+packaging==26.3
+pluggy==1.7.0
+scipy==1.18.1
+threadpoolctl==3.7.0

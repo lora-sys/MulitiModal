@@ -86,7 +86,8 @@
 - **训练与测评**：`training` 为 torch-optional 的 masked-loss smoke 训练（无有效标签、无可信身份时拒绝启动）；`artifacts` 用特征/目标版本、scaler sha256 与模型 state sha256 绑定工件，缺失或篡改一律 `NOT_AVAILABLE`；`evaluation` 在样本或受试者不足时固定返回 `INSUFFICIENT_EVIDENCE`。本地无 torch 时训练测试 skip，远端训练机实际执行。
 - **工程入口**：[src/physio/](src/physio/)（`schema`、`metrics`、`adapters`、`legacy_export`、`windows`、`preprocessing`、`artifacts`、`inference`、`dataset`、`training`、`evaluation`、`response`、`recommendation`、`tcm_exam`、`benchmark`）；设计契约见 [docs/design/physio-realtime-v1.md](docs/design/physio-realtime-v1.md)。
 - **模拟演示与验证**：`PYTHONPATH=src python -m scripts.physio_realtime_demo --pretty`（按事件时间逐步回放，`SMOKE_ONLY`）；`PYTHONPATH=src python scripts/physio_benchmark.py --pretty` 输出实测延迟/内存；`python scripts/physio_verify.py` 一次运行 acceptance + pytest + scoped ruff。
-- **硬阻塞与报告**：真实 94 字段导出、5 场共用账号会话、独立疲劳标签和厂商控制协议均未提供，相关项标 `BLOCKED_BY_DATA_OR_DEVICE`；能力清单见 [docs/reports/issue-95-gap-analysis.md](docs/reports/issue-95-gap-analysis.md)，验收证据见 [docs/reports/issue-95-acceptance.md](docs/reports/issue-95-acceptance.md)。
+- **硬阻塞与报告**：PR #101（`95788fb`）与 PR #103（`e76e2b3`，2026-11-10 11:36 UTC）均已合并，Issue #102 已关闭（历史注释中“#103 仍 open / 待审”已属陈旧事实）；真实 94 字段导出、5 场共用账号会话（1 `member_id_hash` 映射 5 个 `subject_key`，物理受试者隔离未经验证）、独立疲劳标签和厂商控制协议均未提供，相关项标 `BLOCKED_BY_DATA_OR_DEVICE`，真实设备恒定 `NOT_CONNECTED`；能力清单见 [docs/reports/issue-95-gap-analysis.md](docs/reports/issue-95-gap-analysis.md)，验收证据见 [docs/reports/issue-95-acceptance.md](docs/reports/issue-95-acceptance.md)。
+- **生命周期工程编排**：[src/lifecycle/](src/lifecycle/) 为其上层的薄工程编排层（契约、管道、源能力、特征、发布、网关、监控与验收），不改写生理研究线与冻结评估器；详见唯一设计索引 [docs/design/ml-lifecycle.md](docs/design/ml-lifecycle.md)。
 - **历史研究线**：`PhysioBPSIEFRIModel` 的 Pre-only EFRI/BPSI 研究继续归档，不定义新的产品主线，也不修改其冻结实验语义。
 
 ---
@@ -98,7 +99,7 @@
 pytest -q
 ```
 > [!NOTE]
-> 仓库采用分层依赖设计，若本地未安装 `torch` / `transformers`，相关神经栈测试会自动安全跳过（例如 `365 passed, 16 skipped`），经典机器学习交付线完全不受影响。
+> 仓库采用分层依赖设计，若本地未安装 `torch` / `transformers`，相关神经栈测试会自动安全跳过（全仓实测基线 `1044 passed, 9 skipped`；无 torch 时神经栈安全 skip），经典机器学习交付线完全不受影响。
 
 ### 2. 运行双轨最小演示（推荐体验入口）
 加载真实冻结工件与受试者特征，体验全链路端到端预测与安全拒判行为：
@@ -161,6 +162,22 @@ python -m syndrome.delivery \
 
 ---
 
+## ML 生命周期工程入口
+
+```bash
+python scripts/lifecycle_verify.py                      # 统一验收：fast 契约 + 合成生命周期套件 + 全仓 lint + 15/15 验收（含 10 项安全负例，实测 PASS）
+pytest tests/lifecycle/test_contracts_fast.py -m fast -q # 纯 stdlib 契约快测（CI 第一道门禁，实测 19 passed）
+pytest tests/lifecycle -q                               # 合成生命周期套件（实测 211 passed）
+python scripts/lifecycle_verify.py --torch-free-smoke   # 证明无 torch 时纯契约可导入
+```
+
+- **薄编排层（9 大模块）**：[src/lifecycle/](src/lifecycle/) 由 9 个模块构成（`contracts`、`pipeline`、`sources`、`features`、`training`、`release`、`gateway`、`observe`、`acceptance`），`src/physio/`、`src/core/`、`src/runtime/` 的研究线与冻结评估器 `prepare.py` / `constitution.py` **不被改写**。
+- **三门禁独立判定**：`GO_ENGINEERING` = GRANTED（合成 CI 与本地 10 项负例全通）；`GO_REAL_DATA_TRAINING` = NOT_GRANTED（无物理隔离受试者与客观真值，绿色 CI 绝不提权）；`GO_RESEARCH_CLAIMS` = NOT_GRANTED（无外部多中心临床验证）。
+- **CI 门禁路径**：见 [.github/workflows/ci.yml](.github/workflows/ci.yml)（4 个 jobs：fast 契约覆盖 Py3.11/3.12/3.13，synthetic E2E 覆盖 Py3.11/3.13，frozen-lines 冻结研究线回归、no-torch 诚实 skip；因 pyproject 无 `[build-system]`，CI 声明 `PYTHONPATH: "src:."`；无私有数据、无厂商网络服务、无 GPU）。
+- **完整规格与审计**：详见唯一索引 [docs/design/ml-lifecycle.md](docs/design/ml-lifecycle.md)，现状审计见 [docs/reports/ml-lifecycle-audit.md](docs/reports/ml-lifecycle-audit.md)，端到端验收见 [docs/reports/ml-lifecycle-acceptance.md](docs/reports/ml-lifecycle-acceptance.md)。
+
+---
+
 ## 科学证据边界与硬性红线
 
 1. **证据分级明确**：开发机本地跑出的所有指标均标注为 `LOCAL_EXPERIMENTAL`，隔离级别标识为 `AGENT_ISOLATION_UNVERIFIED`。未经独立可信评价服务（见 [docs/trusted-evaluator.md](docs/trusted-evaluator.md)）验签与异源数据复现的结果，不得作为正式学术定论。
@@ -179,6 +196,7 @@ python -m syndrome.delivery \
 - [docs/autoresearch-brief.md](docs/autoresearch-brief.md)：新实验立项必须填写的科研简报模板。
 - [docs/autoresearch-design.md](docs/autoresearch-design.md)：AutoResearch 架构设计理念与边界阐述。
 - [docs/trusted-evaluator.md](docs/trusted-evaluator.md)：独立可信评价环境部署契约。
+- **[docs/design/ml-lifecycle.md](docs/design/ml-lifecycle.md)：ML 生命周期唯一设计索引（Single Source of Truth）** —— 统领 7 大阶段能力矩阵、三独立门禁与可复现工程命令（#104–#112）；现状审计与真实缺陷清单见 [docs/reports/ml-lifecycle-audit.md](docs/reports/ml-lifecycle-audit.md)，端到端验收与门禁结论见 [docs/reports/ml-lifecycle-acceptance.md](docs/reports/ml-lifecycle-acceptance.md)。
 - [docs/design/physio-realtime-v1.md](docs/design/physio-realtime-v1.md)：实时生理疲劳与安全推荐的统一事件/窗口/推荐契约（工程实现，`NOT_VALIDATED`）。
 - [docs/design/physio-next-phase-plan.md](docs/design/physio-next-phase-plan.md)：按摩前生理预测模型下一阶段最小实施方案（`NOT_VALIDATED`，是设计不是结果）。
 - [docs/design/autoresearch-rsi-v1.md](docs/design/autoresearch-rsi-v1.md)：AutoResearch 自主循环的历史设计，仅作沿革参考。
