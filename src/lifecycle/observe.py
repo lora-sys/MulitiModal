@@ -24,7 +24,6 @@ from .contracts import (
     EVIDENCE_LEVELS,
     GATE_ENGINEERING,
     GATE_GRANTED,
-    GATE_NOT_GRANTED,
     GATE_REAL_DATA_TRAINING,
     GATE_RESEARCH_CLAIMS,
     ISOLATION_UNVERIFIED,
@@ -52,7 +51,7 @@ except ImportError:  # pragma: no cover - POSIX-only advisory lock
 
 _CHAIN_LOCK = threading.Lock()
 
-OBSERVE_VERSION = "ml-lifecycle-observe-v1"
+OBSERVE_VERSION = "ml-lifecycle-observe-v2"
 GENESIS_SHA256 = "0" * 64
 MEASURED = "MEASURED"
 DECLARED = "DECLARED"
@@ -74,6 +73,7 @@ AGGREGATE_COUNT_KEYS = frozenset(
         "n_rejected",
         "n_duplicate",
         "n_unknown_columns",
+        "rows",
     }
 )
 _UNAVAILABLE_STATUSES = frozenset(
@@ -94,10 +94,30 @@ _RAW_WORDS = frozenset({"raw", "value", "physiology", "signal", "waveform", "sam
 _RESERVED_WORDS = frozenset({"id", "ref", "key"})
 _VALUE_WORDS = frozenset({"age", "sex", "gender", "height", "weight", "bmi", "heart", "spo2", "bp"})
 _WORD_PATTERN = re.compile(r"[A-Za-z0-9]+")
+_EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_PHONE_PATTERN = re.compile(r"\b\d{3}[- ]\d{3}[- ]\d{4}\b")
+_LONG_ID_PATTERN = re.compile(r"\b\d{9,}\b")
+_RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_METRIC_KEY_PATTERN = re.compile(
+    r"(?:[a-z]+(?:_[a-z0-9]+)*_)?(?:latency|duration)(?:_(?:ms|seconds))?(?:_p\d+)?"
+)
 
 
 class ObserveError(ValueError):
     """Raised when an observation would record private data or forged evidence."""
+
+
+def _is_aggregate_metric_key(key: str) -> bool:
+    return _METRIC_KEY_PATTERN.fullmatch(key) is not None
+
+
+def _check_text(value: str, field: str) -> None:
+    if (
+        _EMAIL_PATTERN.search(value)
+        or _PHONE_PATTERN.search(value)
+        or _LONG_ID_PATTERN.search(value)
+    ):
+        raise ObserveError(f"{field} must not contain a raw subject identifier")
 
 
 def _check_counts(counts: Any) -> None:
@@ -106,16 +126,8 @@ def _check_counts(counts: Any) -> None:
     for key, value in counts.items():
         if not isinstance(key, str):
             raise ObserveError("count keys must be strings")
-        words = frozenset(_WORD_PATTERN.findall(key.lower()))
-        if words & _IDENTIFIER_WORDS or words & _RESERVED_WORDS:
-            raise ObserveError(f"counts key {key!r} names a raw subject identifier")
-        if words & _RAW_WORDS or words & _VALUE_WORDS:
-            raise ObserveError(f"counts key {key!r} names a per-row raw value")
-        parts = words - {
-            "n", "count", "total", "rate", "ratio", "avg", "mean", "p50", "p95", "p99",
-        }
-        if not parts:
-            raise ObserveError(f"counts key {key!r} is not an aggregate counter")
+        if key not in AGGREGATE_COUNT_KEYS and not _is_aggregate_metric_key(key):
+            raise ObserveError(f"counts key {key!r} is not an approved aggregate counter")
         if isinstance(value, Mapping) or isinstance(value, (list, tuple, set)):
             raise ObserveError(f"count {key!r} must be a scalar, not a per-row collection")
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -170,6 +182,8 @@ class StageEvent:
         """Refuse raw subject identifiers and per-row values in the event."""
         _parse_timestamp(self.event_time)
         _check_counts(self.counts)
+        _check_text(self.run_id, "run_id")
+        _check_text(self.reason, "reason")
         words = frozenset(_WORD_PATTERN.findall(self.run_id.lower()))
         if words & _IDENTIFIER_WORDS or words & _RAW_WORDS:
             raise ObserveError("run_id must not contain a raw subject identifier")
@@ -383,10 +397,12 @@ def readiness_report(evidence: Sequence[StageEvidence]) -> dict[str, Any]:
     """Combine per-stage evidence; engineering GO cannot grant the other gates."""
     reasons: list[str] = []
     stages: dict[str, Any] = {}
-    engineering_go = bool(evidence)
-    for item in evidence:
+    records = list(evidence)
+    for item in records:
         if not isinstance(item, StageEvidence):
             raise ObserveError("readiness_report requires StageEvidence records")
+        if item.stage in stages:
+            raise ObserveError(f"duplicate stage evidence {item.stage!r}")
         stages[item.stage] = {
             "decision": "GO" if item.go else "NO-GO",
             "gate": item.gate,
@@ -395,13 +411,24 @@ def readiness_report(evidence: Sequence[StageEvidence]) -> dict[str, Any]:
             "artifacts": list(item.artifacts),
         }
         if not item.go:
-            engineering_go = False
             reasons.append(f"{item.stage}: NO-GO ({item.reason})")
         elif item.gate != GATE_GRANTED:
-            engineering_go = False
             reasons.append(f"{item.stage}: gate is {item.gate}, not {GATE_GRANTED}")
-    if not evidence:
+    engineering_go = bool(records) and all(
+        item.stage in DATA_REFRESH_STAGES
+        and item.go
+        and item.gate == GATE_GRANTED
+        for item in records
+    )
+    if not records:
         reasons.append("no stage evidence declared")
+    if len(stages) != len(records):
+        reasons.append("duplicate stage evidence")
+    if not engineering_go and not any(
+        reason.startswith(("no stage", "ingest:", "validate:", "features:"))
+        for reason in reasons
+    ):
+        reasons.append("engineering GO requires complete stage evidence")
     reasons.append(
         f"{GATE_REAL_DATA_TRAINING} requires an approved frozen dataset and independent evidence"
     )
@@ -446,14 +473,12 @@ def on_new_data(
         "auto_promote": False,
         "auto_publish": False,
         "reason": HUMAN_APPROVAL_REQUIRED,
-        "gates": gate_bundle(True),
         "measurement": DECLARED,
     }
-    plan["gates"][GATE_REAL_DATA_TRAINING] = GATE_NOT_GRANTED
-    plan["gates"][GATE_RESEARCH_CLAIMS] = GATE_NOT_GRANTED
+    plan["readiness"] = readiness_report(tuple(evidence or ()))
+    plan["gates"] = dict(plan["readiness"]["gates"])
     plan["qc_sha256"] = qc.sha256 if qc else None
     plan["drift"] = drift_check(previous_qc, qc) if qc and previous_qc else None
-    plan["readiness"] = readiness_report(tuple(evidence or ()))
     plan["dataset_approval"] = dataset_approval
     plan["frozen"] = frozen
     plan["candidate_preparation"] = {
@@ -485,7 +510,9 @@ def _unknown_columns(qc: QCReport) -> tuple[str, ...]:
     for item in qc.drift:
         if not isinstance(item, str) or marker not in item:
             continue
-        raw = item.split(marker, 1)[1].strip()
+        raw = item.rsplit(marker, 1)[1].strip()
+        if raw.lower().startswith(("detected", "found", "none", "0 ")):
+            continue
         parsed = None
         if raw.startswith("[") and raw.endswith("]"):
             try:
@@ -543,6 +570,8 @@ def experiment_record(
         raise ObserveError("run_id is required")
     if not isinstance(reason, str) or not reason.strip():
         raise ObserveError("reason is required")
+    _check_text(run_id, "run_id")
+    _check_text(reason, "reason")
     record = {
         "schema_version": OBSERVE_VERSION,
         "decision": decision,

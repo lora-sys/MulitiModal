@@ -347,6 +347,7 @@ def _request_identity(req: Envelope) -> str:
     """Bind an idempotency key to the pure request that first used it."""
     return digest(
         {
+            "schema_version": req.schema_version,
             "mode": req.mode,
             "session_id": req.session_id,
             "trace_id": req.trace_id,

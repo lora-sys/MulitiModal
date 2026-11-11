@@ -205,3 +205,144 @@ def test_unknown_columns_tolerate_legacy_free_text():
         "unknown_columns"
     ]
     assert report["candidate"] == ["legacy_note"]
+
+
+def test_empty_evidence_iterator_does_not_grant_engineering_go():
+    """R-01: a truthy but empty iterator cannot stand in for stage evidence."""
+    report = ob.readiness_report(iter([]))
+    assert report["decision"] == "NO-GO"
+    assert report["gates"]["GO_ENGINEERING"] == "NOT_GRANTED"
+    assert report["stages"] == {}
+
+
+def test_submicrosecond_timestamps_are_not_truncated_into_one_key():
+    """R-02: datetime parsing must not collapse distinct submicrosecond instants."""
+    early = "2026-11-01T09:00:00.1234561Z"
+    late = "2026-11-01T09:00:00.1234569Z"
+    assert pl._canonical_event_time(early) == "2026-11-01T09:00:00.1234561+00:00"
+    assert pl._canonical_event_time(late) == "2026-11-01T09:00:00.1234569+00:00"
+    assert pl._row_key({"event_time": early, "source_record": "source-a"}) != (
+        pl._row_key({"event_time": late, "source_record": "source-a"})
+    )
+    assert pl._canonical_event_time(early) == pl._canonical_event_time(
+        "2026-11-01T10:00:00.1234561+01:00"
+    )
+    assert pl._canonical_event_time("2026-11-01T09:00:00,1234561Z") != (
+        pl._canonical_event_time("2026-11-01T09:00:00,1234569Z")
+    )
+
+
+def test_rows_without_physical_identity_are_not_merged():
+    """R-02: blank event/source identity cannot discard a distinct record."""
+    first = {"event_time": "", "source_record": "", "record_id": "a"}
+    second = {"event_time": "", "source_record": "", "record_id": "b"}
+    assert pl._row_key(first) != pl._row_key(second)
+
+
+def test_stage_event_rejects_email_identifiers_and_unapproved_counters():
+    """R-03: PII and arbitrary raw measurement keys fail at validation."""
+    with pytest.raises(ob.ObserveError, match="raw subject identifier"):
+        ob.StageEvent(
+            stage="ingest",
+            run_id="alice@example.test",
+            event_time="2026-11-01T00:00:00+00:00",
+            status="OK",
+            reason="processed alice@example.test",
+            counts={"n_rows": 1},
+            evidence_level="SYNTHETIC",
+        )
+    with pytest.raises(ob.ObserveError, match="approved aggregate counter"):
+        ob.StageEvent(
+            stage="ingest",
+            run_id="run-1",
+            event_time="2026-11-01T00:00:00+00:00",
+            status="OK",
+            reason="aggregate counters only",
+            counts={"hr": 70},
+            evidence_level="SYNTHETIC",
+        )
+
+
+def test_no_unknown_columns_note_is_not_schema_drift():
+    """R-04: a status message reporting zero drift produces zero new columns."""
+    report = ob.drift_check(
+        _qc(()), _qc(["no unknown columns detected in export"])
+    )["unknown_columns"]
+    assert report["candidate"] == []
+    assert report["new"] == []
+    assert report["delta"] == 0
+
+
+def test_request_identity_includes_schema_version():
+    """R-05: a changed contract version cannot replay an older response."""
+    common = {
+        "request_id": "same",
+        "session_id": "s",
+        "trace_id": "t",
+        "mode": gw.MODE_A_PRE_ONLY,
+        "event_time": "2026-11-01T00:00:00+00:00",
+        "feature_version": "v1",
+        "model_version": "v1",
+        "target_version": "v1",
+        "quality": "ok",
+        "status": "OK",
+        "provenance": "gateway",
+        "license": "internal",
+        "evidence_level": "SYNTHETIC",
+        "display_gate": "DEMO_ONLY",
+    }
+    old = gw.Envelope(schema_version="contract-v1", **common)
+    new = gw.Envelope(schema_version="contract-v2", **common)
+    assert gw._request_identity(old) != gw._request_identity(new)
+
+
+def test_empty_data_refresh_plan_does_not_grant_engineering_go():
+    """R-01: plan gates must agree with its own fail-closed readiness report."""
+    plan = ob.on_new_data(batch_ids=["synthetic-batch-a"])
+    assert plan["readiness"]["decision"] == "NO-GO"
+    assert plan["gates"]["GO_ENGINEERING"] == "NOT_GRANTED"
+
+
+def test_duplicate_stage_evidence_is_rejected():
+    """R-01: repeated evidence for one stage cannot masquerade as full coverage."""
+    evidence = ob.StageEvidence(
+        stage="ingest",
+        go=True,
+        gate="GRANTED",
+        evidence_level="SYNTHETIC",
+        reason="ok",
+        artifacts=(),
+    )
+    with pytest.raises(ob.ObserveError, match="duplicate stage evidence"):
+        ob.readiness_report([evidence, evidence])
+
+
+def test_drift_batch_id_containing_no_is_not_suppressed():
+    """R-04: ordinary batch IDs do not turn real schema drift into a zero note."""
+    report = ob.drift_check(
+        _qc(()), _qc(["batch no 1: unknown columns ['sensor_x']"])
+    )["unknown_columns"]
+    assert report["candidate"] == ["sensor_x"]
+    assert report["new"] == ["sensor_x"]
+    assert report["delta"] == 1
+
+
+def test_repeated_unknown_columns_marker_uses_the_last_list():
+    """R-04: a descriptive prefix cannot become a fabricated column name."""
+    columns = ob._unknown_columns(
+        _qc(["unknown columns audit: unknown columns ['sensor_x']"])
+    )
+    assert columns == ("sensor_x",)
+
+
+def test_experiment_record_rejects_raw_identifiers_without_writing(tmp_path):
+    """R-03: PII checks apply before any durable decision record is created."""
+    path = tmp_path / "decisions.jsonl"
+    with pytest.raises(ob.ObserveError, match="raw subject identifier"):
+        ob.experiment_record(
+            "KEEP",
+            run_id="alice@example.test",
+            reason="patient MRN 123456",
+            path=path,
+        )
+    assert not path.exists()

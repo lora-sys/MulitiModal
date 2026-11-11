@@ -23,6 +23,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -52,7 +53,8 @@ from .contracts import (
     utc_now,
 )
 
-PIPELINE_VERSION = "ml-lifecycle-pipeline-v2"
+PIPELINE_VERSION = "ml-lifecycle-pipeline-v3"
+_HIGH_PRECISION_TIME = re.compile(r"^(.*\d{2}:\d{2}:\d{2})[.,](\d+)(Z|[+-].*)$")
 STATE_FILE = "pipeline_state.json"
 QUARANTINE_FILE = "quarantine.jsonl"
 QC_FILE = "qc_report.json"
@@ -364,27 +366,39 @@ def _canonical_event_time(value: str) -> str:
     """
     if not value:
         return value
+    high_precision = _HIGH_PRECISION_TIME.fullmatch(value)
+    if high_precision:
+        prefix, fraction, suffix = high_precision.groups()
+        parser_input = f"{prefix}.123456{suffix}"
+        parser_input = parser_input.replace("Z", "+00:00")
+    else:
+        fraction = ""
+        parser_input = value.replace("Z", "+00:00").replace(",", ".")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(parser_input)
     except (ValueError, TypeError):
         return value
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).isoformat()
+    canonical = parsed.astimezone(UTC).isoformat()
+    if fraction:
+        canonical = canonical.replace("123456", fraction, 1)
+    return canonical
 
 
 def _row_key(row: Mapping[str, str]) -> str:
     """Idempotency key: stable across replay, resends and out-of-order arrival."""
-    return digest(
-        {
-            "session_id": row.get("session_id", ""),
-            "subject_ref": row.get("subject_ref", ""),
-            "phase": row.get("phase", ""),
-            "metric": row.get("metric", ""),
-            "source_record": row.get("source_record", ""),
-            "event_time": _canonical_event_time(row.get("event_time", "")),
-        }
-    )
+    identity = {
+        "session_id": row.get("session_id", ""),
+        "subject_ref": row.get("subject_ref", ""),
+        "phase": row.get("phase", ""),
+        "metric": row.get("metric", ""),
+        "source_record": row.get("source_record", ""),
+        "event_time": _canonical_event_time(row.get("event_time", "")),
+    }
+    if not identity["source_record"] or not identity["event_time"]:
+        identity["record_id"] = row.get("record_id", "")
+    return digest(identity)
 
 
 def _normalize_row(raw: Mapping[str, str], batch: Batch) -> NormalizedRow:
