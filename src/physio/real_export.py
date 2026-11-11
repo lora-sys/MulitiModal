@@ -944,7 +944,7 @@ def session_labels(session: RealSession) -> RealSessionLabels:
     blocked = next(
         (
             code
-            for code in (QC_RECORD_REUSED, QC_SESSION_OVERLAP, QC_OVERLAPPING_ENDPOINTS)
+            for code in (QC_RECORD_REUSED, QC_SESSION_OVERLAP)
             if code in session.issue_codes()
         ),
         "",
@@ -1136,7 +1136,7 @@ def session_post_state(session: RealSession) -> float | None:
     """Vendor Post proxy, only when the independent endpoint pair is verifiable."""
     if any(
         code in session.issue_codes()
-        for code in (QC_RECORD_REUSED, QC_SESSION_OVERLAP, QC_OVERLAPPING_ENDPOINTS)
+        for code in (QC_RECORD_REUSED, QC_SESSION_OVERLAP)
     ):
         return None
     endpoint = session.endpoints.get("health", {}).get(PHASE_POST)
