@@ -53,10 +53,11 @@ from .contracts import (
     utc_now,
 )
 
-PIPELINE_VERSION = "ml-lifecycle-pipeline-v5"
+PIPELINE_VERSION = "ml-lifecycle-pipeline-v6"
 _HIGH_PRECISION_TIME = re.compile(
-    r"^(.*\d{2}:?\d{2}:?\d{2})[.,](\d+)(Z|[+-].*)?$"
+    r"^(.*\d{2}:?\d{2}:?\d{2})[.,](\d+)(Z|[+-]\d{2}:?\d{2}(?::?\d{2})?)?$"
 )
+_OFFSET_FRACTION = re.compile(r"[+-]\d{2}:?\d{2}:?\d{2}[.,]\d+$")
 STATE_FILE = "pipeline_state.json"
 QUARANTINE_FILE = "quarantine.jsonl"
 QC_FILE = "qc_report.json"
@@ -368,7 +369,9 @@ def _canonical_event_time(value: str) -> str:
     """
     if not value:
         return value
-    high_precision = _HIGH_PRECISION_TIME.fullmatch(value)
+    high_precision = (
+        None if _OFFSET_FRACTION.search(value) else _HIGH_PRECISION_TIME.fullmatch(value)
+    )
     if high_precision:
         prefix, fraction, suffix = high_precision.groups()
         suffix = suffix or ""
@@ -400,7 +403,7 @@ def _row_key(row: Mapping[str, str]) -> str:
         "source_record": row.get("source_record", ""),
         "event_time": _canonical_event_time(row.get("event_time", "")),
     }
-    if not identity["source_record"] or not identity["event_time"]:
+    if not identity["source_record"]:
         identity["record_id"] = row.get("record_id", "")
     return digest(identity)
 

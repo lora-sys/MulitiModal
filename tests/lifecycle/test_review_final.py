@@ -429,3 +429,30 @@ def test_basic_iso_timestamps_preserve_submicrosecond_precision():
     assert pl._canonical_event_time(early) == pl._canonical_event_time(
         "20261101T100000,12345610+01:00"
     )
+
+
+def test_fractional_timezone_offset_is_not_treated_as_wall_clock_fraction():
+    """F1: offset fractions must not corrupt the UTC instant with a placeholder."""
+    assert pl._canonical_event_time("2026-11-01T09:00:00+01:00:00.5") == (
+        "2026-11-01T07:59:59.500000+00:00"
+    )
+    assert pl._canonical_event_time("2026-11-01T09:00:00+01:00:00.5") != (
+        pl._canonical_event_time("2026-11-01T07:59:59.876544Z")
+    )
+
+
+def test_missing_optional_event_time_keeps_source_record_deduplication(tmp_path):
+    """F2: stable source records still deduplicate when event_time is absent."""
+    rows = list(csv.DictReader(BATCH_A.open(encoding="utf-8")))
+    for row in rows:
+        row.pop("event_time", None)
+    resent = dict(rows[0])
+    resent["record_id"] = "5"
+    path = tmp_path / "no_event_time.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows + [resent])
+    result = run_pipeline([declare_batch(path, batch_id="A")], tmp_path / "out")
+    assert result.qc.n_accepted == 4
+    assert result.qc.n_duplicate == 1
