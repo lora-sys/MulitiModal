@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
-import sys
 from pathlib import Path
 
 import pytest
@@ -273,155 +271,145 @@ def test_structured_during_post_timepoints_are_rejected(phase_key):
     ids=["nan", "inf", "bytes", "set"],
 )
 @pytest.mark.parametrize("stop", [False, True], ids=["scored", "safe_stop"])
-def test_non_json_payloads_never_break_fail_closed_responses(value, stop):
-    """P2 (round-5 Codex): identity digest must be total; SAFE_STOP unconditional."""
+def test_non_json_payloads_are_refused_or_stopped_without_raising(value, stop):
+    """Non-canonical payloads get a controlled refusal; SAFE_STOP is unconditional."""
     gateway = gw.Gateway()
     payload = {"value": value}
     if stop:
         payload["safe_stop"] = True
     req = gw.make_envelope(request_id="opaque", mode=gw.MODE_B_REALTIME, payload=payload)
     res = gateway.handle(req)
-    expected = STATUS_SAFE_STOP if stop else STATUS_NOT_AVAILABLE
+    expected = STATUS_SAFE_STOP if stop else STATUS_REJECTED
     assert res.status == expected
     assert res.payload.get("prediction") is None
     assert res.payload["control_command"] is None
-    # SAFE_STOP is independent of cache writes; scored requests still write
-    # cache and identity together.
-    expected_entries = 0 if stop else 1
-    assert len(gateway._cache) == len(gateway._cache_identities) == expected_entries
+    assert gateway._cache == {} and gateway._cache_identities == {}
 
 
-def test_identity_encoding_is_typed_and_collision_free():
-    """P2 (round-6 Codex): finite float must not collide with its string form."""
-    assert gw._stable(1.0)[0] == "float"
-    assert gw._stable("float:1.0")[0] == "str"
-    assert gw._stable(1.0) != gw._stable("float:1.0")
-    assert gw._stable(1) != gw._stable("1")
-    assert gw._stable(True) != gw._stable(1)
-    assert gw._stable(b"abc") != gw._stable("616263")
+def test_canonical_json_identity_is_exact_and_order_independent():
+    """No truncation: distinct leaves stay distinct; dict insertion order is irrelevant."""
+    first = {"a": 1, "b": 2, "c": 3}
+    second = {"c": 3, "b": 2, "a": 1}
+    base = gw.make_envelope(
+        request_id="ordered", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
+        payload={"features": first},
+    )
+    replay = gw.make_envelope(
+        request_id="ordered", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
+        payload={"features": second},
+    )
+    assert gw._request_identity(base) == gw._request_identity(replay)
     gateway = gw.Gateway()
-    first = gw.make_envelope(
-        request_id="typed", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-        payload={"value": 1.0},
+    assert gateway.handle(base).status == STATUS_OK
+    assert gateway.handle(replay).status == STATUS_OK
+
+    leaf_a = "first"
+    leaf_b = "second"
+    for _ in range(26):
+        leaf_a, leaf_b = {"knowledge": leaf_a}, {"knowledge": leaf_b}
+    deep_a = gw.make_envelope(
+        request_id="deep", session_id="S1", mode=gw.MODE_C_TCM,
+        payload={"knowledge": leaf_a},
     )
-    assert gateway.handle(first).status == STATUS_OK
-    changed = gw.make_envelope(
-        request_id="typed", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-        payload={"value": "float:1.0"},
+    deep_b = gw.make_envelope(
+        request_id="deep", session_id="S1", mode=gw.MODE_C_TCM,
+        payload={"knowledge": leaf_b},
     )
-    assert gateway.handle(changed).status == STATUS_REJECTED
+    assert gw._request_identity(deep_a) != gw._request_identity(deep_b)
+    gateway = gw.Gateway()
+    assert gateway.handle(deep_a).status == STATUS_OK
+    assert gateway.handle(deep_b).status == STATUS_REJECTED
 
 
-def test_cyclic_or_unrepresentable_payloads_never_break_safe_stop():
-    """P2 (round-6 Codex): cycles / throwing __repr__ must not block SAFE_STOP."""
+def test_typed_canonical_json_does_not_collide():
+    """1.0, 'float:1.0', 1 and True must produce different identities."""
+    def envelope(payload):
+        return gw.make_envelope(
+            request_id="typed", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
+            payload={"value": payload},
+        )
+    identities = [gw._request_identity(envelope(v)) for v in (1.0, "float:1.0", 1, True)]
+    assert len(set(identities)) == 4
+    gateway = gw.Gateway()
+    assert gateway.handle(envelope(1.0)).status == STATUS_OK
+    assert gateway.handle(envelope("float:1.0")).status == STATUS_REJECTED
+
+
+def test_cyclic_deep_or_unrepresentable_payloads_never_raise():
+    """Cycles, deep nesting, huge ints and hostile __repr__/__str__ are controlled."""
     cycle = []
     cycle.append(cycle)
+    deep = "leaf"
+    for _ in range(2000):
+        deep = {"next": deep}
 
     class BadRepr:
         def __repr__(self):
             raise RuntimeError("boom")
 
-    assert ["cycle", "list"] in gw._stable({"value": cycle})[1][0][1][1]
-    for payload in (
-        {"safe_stop": True, "value": cycle},
-        {"safe_stop": True, "value": BadRepr()},
-        {"value": cycle},
-        {"value": BadRepr()},
-    ):
-        gateway = gw.Gateway()
-        req = gw.make_envelope(
-            request_id="opaque", mode=gw.MODE_B_REALTIME, payload=payload
-        )
-        res = gateway.handle(req)
-        expected = (
-            STATUS_SAFE_STOP if payload.get("safe_stop") else STATUS_NOT_AVAILABLE
-        )
-        assert res.status == expected
-        assert res.payload.get("prediction") is None
-        assert len(gateway._cache) == len(gateway._cache_identities)
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    for value in (cycle, deep, 10**5000, BadRepr()):
+        for stop in (False, True):
+            gateway = gw.Gateway()
+            payload = {"value": value}
+            if stop:
+                payload["safe_stop"] = True
+            req = gw.make_envelope(
+                request_id="opaque", mode=gw.MODE_B_REALTIME, payload=payload
+            )
+            res = gateway.handle(req)
+            if stop:
+                assert res.status == STATUS_SAFE_STOP
+            else:
+                # Either a controlled refusal or the mode-B unavailable answer;
+                # never an OK score, never an exception.
+                assert res.status in (STATUS_REJECTED, STATUS_NOT_AVAILABLE)
+            assert res.payload.get("prediction") is None
+            assert len(gateway._cache) == len(gateway._cache_identities)
 
 
-def test_map_identity_is_order_independent():
-    """Two dicts with the same items in different insertion order must match."""
-    first = {"a": 1, "b": 2, "c": 3}
-    second = {"c": 3, "b": 2, "a": 1}
-    assert gw._stable(first) == gw._stable(second)
-    gateway = gw.Gateway()
-    base = gw.make_envelope(
-        request_id="ordered", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-        payload={"features": first},
-    )
-    assert gateway.handle(base).status == STATUS_OK
-    replay = gw.make_envelope(
-        request_id="ordered", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-        payload={"features": second},
-    )
-    assert gateway.handle(replay).status == STATUS_OK
+def test_safe_stop_detection_never_calls_arbitrary_object_methods():
+    """A hostile signal object must not turn a SAFE_STOP into an exception."""
+    class BadStr:
+        def __str__(self):
+            raise RuntimeError("boom")
 
-
-def test_deep_but_acyclic_payload_is_bounded():
-    """Depth cap must stop recursion without raising."""
-    deep: object = "leaf"
-    for _ in range(2000):
-        deep = {"next": deep}
-    encoded = gw._stable({"value": deep})
-    assert canonical_json(encoded)
     gateway = gw.Gateway()
     req = gw.make_envelope(
-        request_id="deep", mode=gw.MODE_B_REALTIME, payload={"value": deep}
+        request_id="stop", mode=gw.MODE_A_PRE_ONLY,
+        payload={"safe_stop": True, "signal": BadStr()},
     )
     res = gateway.handle(req)
-    assert res.status == STATUS_NOT_AVAILABLE
-    assert res.payload["prediction"] is None
+    assert res.status == STATUS_SAFE_STOP
+    assert res.payload["control_command"] is None
 
 
-def test_set_identity_is_stable_across_hash_seeds():
-    """P3 (round-6 Codex): set encoding must not depend on PYTHONHASHSEED."""
-    import subprocess
-
-    script = (
-        "import sys; sys.path.insert(0, 'src'); "
-        "from lifecycle.gateway import _stable; "
-        "print(_stable({frozenset({'a','b','c','d'}), 'x', 1, 2.5}))"
-    )
-    outputs = set()
-    for seed in ("1", "2", "3"):
-        proc = subprocess.run(
-            [sys.executable, "-c", script],
-            cwd=str(Path(__file__).resolve().parents[2]),
-            capture_output=True, text=True, env={**os.environ, "PYTHONHASHSEED": seed},
-            check=True,
-        )
-        outputs.add(proc.stdout.strip())
-    assert len(outputs) == 1
-
-
-def test_cache_write_is_atomic_when_identity_fails(monkeypatch):
+def test_unbindable_payload_is_refused_without_writing_cache(monkeypatch):
     """No cached response may exist without its identity (no partial state)."""
     gateway = gw.Gateway()
-
-    def boom(_req):
-        raise ValueError("synthetic digest failure")
-
-    monkeypatch.setattr(gw, "_request_identity", boom)
+    monkeypatch.setattr(gw, "_request_identity", lambda _req: None)
     req = gw.make_envelope(request_id="atomic", mode=gw.MODE_A_PRE_ONLY)
-    with pytest.raises(ValueError, match="synthetic digest failure"):
-        gateway.handle(req)
+    res = gateway.handle(req)
+    assert res.status == STATUS_REJECTED
+    assert "canonical JSON" in res.payload["reason"]
     assert gateway._cache == {}
     assert gateway._cache_identities == {}
+    assert gateway.idempotency_counter == {}
 
 
 def test_non_json_payload_still_distinguishes_conflicting_requests():
-    """A normalized identity must still reject a mode/session conflict."""
+    """Controlled refusal does not silently cache a conflicting identity."""
     gateway = gw.Gateway()
     first = gw.make_envelope(
         request_id="opaque", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-        payload={"value": float("nan")},
+        payload={"value": 7},
     )
     assert gateway.handle(first).status == STATUS_OK
     conflict = gw.make_envelope(
         request_id="opaque", session_id="S2", mode=gw.MODE_B_REALTIME,
-        payload={"value": float("nan")},
+        payload={"value": 7},
     )
     res = gateway.handle(conflict)
     assert res.status == STATUS_REJECTED

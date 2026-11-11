@@ -7,7 +7,6 @@ budgets, and transport failure handling without device control.
 
 from __future__ import annotations
 
-import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -217,59 +216,16 @@ def _structured_names(container: Any) -> set[str]:
     return names
 
 
-_IDENTITY_MAX_DEPTH = 24
+def _request_identity(req: Envelope) -> str | None:
+    """Bind an idempotency key to the request that first used it.
 
-
-def _stable(
-    value: Any, _depth: int = 0, _path: frozenset[int] = frozenset()
-) -> list[Any]:
-    """Typed, cycle-safe encoding for idempotency digests.
-
-    Each branch carries a type tag so no two distinct values collide. The output
-    contains only JSON-safe scalars/lists, so ``digest`` cannot raise. Opaque
-    objects are labelled by type plus a best-effort repr (in-process only).
+    Only canonical-JSON payloads are admissible: ``None`` means the request
+    cannot be honestly bound to an identity and must be refused, never hashed.
     """
-    if _depth > _IDENTITY_MAX_DEPTH:
-        return ["depth-limit", type(value).__name__]
-    if value is None:
-        return ["none"]
-    if isinstance(value, bool):
-        return ["bool", value]
-    if isinstance(value, str):
-        return ["str", value]
-    if isinstance(value, bytes):
-        return ["bytes", value.hex()]
-    if isinstance(value, int):
-        return ["int", str(value)]
-    if isinstance(value, float):
-        encoded = value.hex() if math.isfinite(value) else f"nonfinite:{value!r}"
-        return ["float", encoded]
-    marker = id(value)
-    if marker in _path:
-        return ["cycle", type(value).__name__]
-    path = _path | {marker}
-    if isinstance(value, Mapping):
-        items = [
-            [_stable(k, _depth + 1, path), _stable(v, _depth + 1, path)]
-            for k, v in value.items()
-        ]
-        items.sort(key=canonical_json)
-        return ["map", items]
-    if isinstance(value, (list, tuple)):
-        return ["seq", [_stable(v, _depth + 1, path) for v in value]]
-    if isinstance(value, (set, frozenset)):
-        parts = [_stable(v, _depth + 1, path) for v in value]
-        parts.sort(key=canonical_json)
-        return ["set", parts]
     try:
-        shown = repr(value)
-    except Exception:
-        shown = "<unrepresentable>"
-    return ["obj", type(value).__name__, shown]
-
-
-def _request_identity(req: Envelope) -> str:
-    """Bind an idempotency key to the request that first used it."""
+        payload_json = canonical_json(dict(req.payload))
+    except (TypeError, ValueError, RecursionError, OverflowError):
+        return None
     return digest(
         {
             "mode": req.mode,
@@ -284,8 +240,23 @@ def _request_identity(req: Envelope) -> str:
             "license": req.license,
             "evidence_level": req.evidence_level,
             "display_gate": req.display_gate,
-            "payload": _stable(req.payload),
+            "payload": payload_json,
         }
+    )
+
+
+def _is_safe_stop(req: Envelope) -> bool:
+    """Evaluate stop signals without calling arbitrary object methods."""
+    payload = req.payload
+    signal = payload.get("signal") if isinstance(payload, Mapping) else None
+    action = payload.get("action") if isinstance(payload, Mapping) else None
+    return (
+        req.status == STATUS_SAFE_STOP
+        or (isinstance(req.quality, str) and req.quality.lower() == "safe_stop")
+        or (isinstance(signal, str) and signal.upper() == "SAFE_STOP")
+        or (isinstance(payload, Mapping) and payload.get("safe_stop") is True)
+        or (isinstance(payload, Mapping) and payload.get("user_stop") is True)
+        or (isinstance(action, str) and action == "safe_stop")
     )
 
 
@@ -372,7 +343,6 @@ class Gateway:
 
         self._cache: dict[str, Envelope] = {}
         self._cache_identities: dict[str, str] = {}
-        self._stopped_ids: set[str] = set()
         self.idempotency_counter: dict[str, int] = {}
         self.idempotency_hits: int = 0
         self._in_flight: dict[str, int] = {m: 0 for m in ALLOWED_MODES}
@@ -412,15 +382,7 @@ class Gateway:
         else:
             req = envelope_from_dict(raw_request)
 
-        is_safe_stop = (
-            req.status == STATUS_SAFE_STOP
-            or req.quality.lower() == "safe_stop"
-            or str(req.payload.get("signal", "")).upper() == "SAFE_STOP"
-            or req.payload.get("safe_stop") is True
-            or req.payload.get("user_stop") is True
-            or req.payload.get("action") == "safe_stop"
-        )
-        if req.request_id in self._stopped_ids or is_safe_stop:
+        if _is_safe_stop(req):
             res = make_envelope(
                 schema_version=req.schema_version,
                 request_id=req.request_id,
@@ -443,12 +405,21 @@ class Gateway:
                     "safe_stop": True,
                 },
             )
-            if req.request_id:
-                self._stopped_ids.add(req.request_id)
             return res
 
+        identity = _request_identity(req)
+        if identity is None:
+            return self._refuse_envelope(
+                req,
+                status=STATUS_REJECTED,
+                reason=(
+                    "payload is not canonical JSON (NaN/infinity, bytes, cyclic or "
+                    "non-serializable values); refusing instead of fabricating an identity"
+                ),
+            )
+
         if req.request_id in self._cache:
-            if self._cache_identities.get(req.request_id) != _request_identity(req):
+            if self._cache_identities.get(req.request_id) != identity:
                 return self._refuse_envelope(
                     req,
                     status=STATUS_REJECTED,
@@ -480,7 +451,7 @@ class Gateway:
                 reason="transport failure: network communication failure, no score emitted",
                 extra_payload={"transport_error": True},
             )
-            self._store_cache(req, res)
+            self._store_cache(req, res, identity)
             return res
 
         is_stale = (
@@ -504,7 +475,7 @@ class Gateway:
                 status=STATUS_STALE,
                 reason=f"stale signal: measurement timestamp is older than {self.stale_after_s}s",
             )
-            self._store_cache(req, res)
+            self._store_cache(req, res, identity)
             return res
 
         artifact_hash = req.payload.get("artifact_sha256") or req.payload.get("artifact_hash")
@@ -519,7 +490,7 @@ class Gateway:
                     status=STATUS_BLOCKED,
                     reason=f"bad artifact hash format: {artifact_hash!r}",
                 )
-                self._store_cache(req, res)
+                self._store_cache(req, res, identity)
                 return res
             if self.known_artifacts:
                 expected = self.known_artifacts.get(req.model_version)
@@ -529,7 +500,7 @@ class Gateway:
                         status=STATUS_BLOCKED,
                         reason=f"unknown artifact hash: {artifact_hash}",
                     )
-                    self._store_cache(req, res)
+                    self._store_cache(req, res, identity)
                     return res
                 if expected is not None and artifact_hash != expected:
                     res = self._refuse_envelope(
@@ -539,7 +510,7 @@ class Gateway:
                             f"tampered artifact hash: expected {expected}, got {artifact_hash}"
                         ),
                     )
-                    self._store_cache(req, res)
+                    self._store_cache(req, res, identity)
                     return res
 
         if (
@@ -551,7 +522,7 @@ class Gateway:
                 status=STATUS_NOT_AVAILABLE,
                 reason=f"unknown feature version: {req.feature_version!r}",
             )
-            self._store_cache(req, res)
+            self._store_cache(req, res, identity)
             return res
 
         if (
@@ -563,7 +534,7 @@ class Gateway:
                 status=STATUS_NOT_AVAILABLE,
                 reason=f"unknown model version: {req.model_version!r}",
             )
-            self._store_cache(req, res)
+            self._store_cache(req, res, identity)
             return res
 
         if (
@@ -575,7 +546,7 @@ class Gateway:
                 status=STATUS_NOT_AVAILABLE,
                 reason=f"unknown target version: {req.target_version!r}",
             )
-            self._store_cache(req, res)
+            self._store_cache(req, res, identity)
             return res
 
         is_synthetic_model = (
@@ -599,7 +570,7 @@ class Gateway:
                 status=STATUS_REJECTED,
                 reason="synthetic model cannot answer a real product request",
             )
-            self._store_cache(req, res)
+            self._store_cache(req, res, identity)
             return res
 
         self._in_flight[req.mode] += 1
@@ -611,7 +582,7 @@ class Gateway:
                     status=STATUS_STALE,
                     reason=f"timeout: latency budget of {budget_s}s exceeded",
                 )
-                self._store_cache(req, res)
+                self._store_cache(req, res, identity)
                 return res
 
             start_t = time.monotonic()
@@ -634,7 +605,7 @@ class Gateway:
                     reason=f"timeout: elapsed {elapsed:.3f}s exceeded budget {budget_s}s",
                 )
 
-            self._store_cache(req, res)
+            self._store_cache(req, res, identity)
             return res
         finally:
             self._in_flight[req.mode] -= 1
@@ -766,9 +737,8 @@ class Gateway:
             payload=payload,
         )
 
-    def _store_cache(self, request: Envelope, response: Envelope) -> None:
+    def _store_cache(self, request: Envelope, response: Envelope, identity: str) -> None:
         if request.request_id:
-            identity = _request_identity(request)
             self._cache_identities[request.request_id] = identity
             self._cache[request.request_id] = response
             self.idempotency_counter[request.request_id] = 1

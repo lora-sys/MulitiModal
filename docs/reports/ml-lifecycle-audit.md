@@ -297,8 +297,8 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 |---|---|---|
 | 精确命令 | `PYTHONPATH=src:. .venv/bin/python -m pytest -q` | 同左 |
 | 收集用例（`--collect-only -q`） | 1034 | 1042 |
-| 通过 / 跳过 | 1043 / 9 | 1055 / 4 |
-| `pytest tests/lifecycle -q` | 210 passed | 210 passed |
+| 通过 / 跳过 | 1042 / 9 | 1054 / 4 |
+| `pytest tests/lifecycle -q` | 209 passed | 209 passed |
 | `ruff check src tests scripts` | 零告警 | 零告警 |
 | `lifecycle_verify.py` | 15/15 PASS | 15/15 PASS |
 
@@ -380,4 +380,34 @@ cache 与 identities 长度一致；另补 1 项原子性测试（monkeypatch �
 
 本地 `1043 passed, 9 skipped`、`tests/lifecycle` `210 passed`；
 远程 `acam-lab` `1055 passed, 4 skipped`、`tests/lifecycle` `210 passed`；
+两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。证据级别与三门禁不变。
+
+### 10.9 第七轮复评（HEAD `726e4e2`）与去掉任意对象归一化
+
+第七轮对 `726e4e2` 的确认复评：Codex 给出 8.3 / 8.4 并否决，确认第六轮三项问题
+已解，但指出带类型标签的 `_stable` 归一化仍有 3 项 P2 / 1 项 P3：超过深度上限后
+只保留类型导致缓存身份碰撞；任意对象 `__repr__` 可无限挂起（try/except 无法约束）；
+停止检测里的 `str(payload["signal"])` 会调用任意 `__str__`；`10**5000` 触发整数
+转换上限。根因是架构性的：把任意 Python 对象哈希成幂等身份不可能做到全函数。
+
+**本轮改为边界拒绝，彻底删除 `_stable`：**
+
+- `_request_identity` 只对 `canonical_json(payload)` 的**字符串**做摘要；
+  NaN/infinity、bytes、set、自引用容器、超深嵌套、超大整数、任意对象等
+  非规范 JSON 值统一返回 `None`，由入口返回 `REJECTED`（`prediction=None`、
+  `control_command=None`、带明确理由），不再尝试归一化。
+- `_is_safe_stop` 只用 `isinstance` 与字符串比较，不调用任意对象的 `__str__` /
+  `__repr__`；停止信号在身份计算之前求值，且停止路径不写缓存，因此无条件返回。
+- `_store_cache` 接收入口已算好的身份，不再二次计算；身份为 `None` 时入口直接拒绝，
+  不会产生「cache 有值、identities 为空」的部分状态。
+- `canonical_json` 本身 `allow_nan=False` + `sort_keys=True`，无截断、无跨类型碰撞、
+  与 `PYTHONHASHSEED` 和字典插入顺序无关。
+
+重写 8 项回归：非规范 JSON 值一律受控拒绝或 SAFE_STOP、26 层不同叶子身份不同、
+1.0/`"float:1.0"`/1/True 四者身份互异、环/深嵌套/超大整数/恶意 `__repr__`/`__str__`
+均不抛异常、身份不可绑定时零缓存写入；6 项突变（边界拒绝、canonical 校验、
+停止优先、停止全函数、身份冲突、身份写入）全部命中。累计 34 项突变检查全部命中。
+
+本地 `1042 passed, 9 skipped`、`tests/lifecycle` `209 passed`；
+远程 `acam-lab` `1054 passed, 4 skipped`、`tests/lifecycle` `209 passed`；
 两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。证据级别与三门禁不变。
