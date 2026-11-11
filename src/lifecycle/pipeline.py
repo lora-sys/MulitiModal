@@ -53,8 +53,10 @@ from .contracts import (
     utc_now,
 )
 
-PIPELINE_VERSION = "ml-lifecycle-pipeline-v4"
-_HIGH_PRECISION_TIME = re.compile(r"^(.*\d{2}:\d{2}:\d{2})[.,](\d+)(Z|[+-].*)?$")
+PIPELINE_VERSION = "ml-lifecycle-pipeline-v5"
+_HIGH_PRECISION_TIME = re.compile(
+    r"^(.*\d{2}:?\d{2}:?\d{2})[.,](\d+)(Z|[+-].*)?$"
+)
 STATE_FILE = "pipeline_state.json"
 QUARANTINE_FILE = "quarantine.jsonl"
 QC_FILE = "qc_report.json"

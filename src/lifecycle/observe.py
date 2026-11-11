@@ -52,6 +52,8 @@ except ImportError:  # pragma: no cover - POSIX-only advisory lock
 _CHAIN_LOCK = threading.Lock()
 
 OBSERVE_VERSION = "ml-lifecycle-observe-v2"
+LEGACY_OBSERVE_VERSION = "ml-lifecycle-observe-v1"
+SUPPORTED_OBSERVE_VERSIONS = (OBSERVE_VERSION, LEGACY_OBSERVE_VERSION)
 GENESIS_SHA256 = "0" * 64
 MEASURED = "MEASURED"
 DECLARED = "DECLARED"
@@ -107,7 +109,15 @@ class ObserveError(ValueError):
 
 
 def _is_aggregate_metric_key(key: str) -> bool:
-    return _METRIC_KEY_PATTERN.fullmatch(key) is not None
+    if _METRIC_KEY_PATTERN.fullmatch(key) is None:
+        return False
+    words = frozenset(_WORD_PATTERN.findall(key.lower()))
+    return not (
+        words & _IDENTIFIER_WORDS
+        or words & _RESERVED_WORDS
+        or words & _RAW_WORDS
+        or words & _VALUE_WORDS
+    )
 
 
 def _check_text(value: str, field: str) -> None:
@@ -172,7 +182,7 @@ class StageEvent:
             raise ObserveError(f"unknown evidence_level {self.evidence_level!r}")
         if not isinstance(self.reason, str) or not self.reason.strip():
             raise ObserveError("reason is required")
-        if self.version != OBSERVE_VERSION:
+        if self.version not in SUPPORTED_OBSERVE_VERSIONS:
             raise ObserveError(f"unsupported observe schema {self.version!r}")
         object.__setattr__(self, "counts", dict(self.counts))
         self.validate()
@@ -414,10 +424,7 @@ def readiness_report(evidence: Sequence[StageEvidence]) -> dict[str, Any]:
         elif item.gate != GATE_GRANTED:
             reasons.append(f"{item.stage}: gate is {item.gate}, not {GATE_GRANTED}")
     engineering_go = bool(records) and all(
-        item.stage in DATA_REFRESH_STAGES
-        and item.go
-        and item.gate == GATE_GRANTED
-        for item in records
+        item.go and item.gate == GATE_GRANTED for item in records
     )
     if not records:
         reasons.append("no stage evidence declared")

@@ -6,6 +6,7 @@ Each test reproduces the reported failure mode and asserts the fixed behaviour.
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +15,7 @@ import pytest
 from lifecycle import gateway as gw
 from lifecycle import observe as ob
 from lifecycle import pipeline as pl
-from lifecycle.contracts import QCReport
+from lifecycle.contracts import QCReport, digest
 from lifecycle.pipeline import declare_batch, run_pipeline
 
 pytestmark = pytest.mark.synthetic
@@ -372,3 +373,59 @@ def test_grouped_identifier_formats_are_rejected(identifier):
     """Final review: separator variants cannot bypass identifier checks."""
     with pytest.raises(ob.ObserveError, match="raw subject identifier"):
         ob._check_text(identifier, "reason")
+
+
+def test_v1_observation_chain_remains_verifiable(tmp_path):
+    """F1: verify existing append-only v1 logs after the schema bump."""
+    legacy = ob.StageEvent(
+        stage="ingest",
+        run_id="run-1",
+        event_time="2026-11-01T00:00:00+00:00",
+        status="OK",
+        reason="ok",
+        counts={"n_rows": 1},
+        evidence_level="SYNTHETIC",
+        version=ob.LEGACY_OBSERVE_VERSION,
+    )
+    record = {"event": legacy.to_dict(), "previous_sha256": ob.GENESIS_SHA256}
+    record["sha256"] = digest(record)
+    path = tmp_path / "events.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    store = ob.ObservabilityStore(path)
+    assert store.verify_chain()["verified"] is True
+    assert store.append(legacy)
+
+
+def test_metric_counter_key_rejects_raw_identifiers():
+    """F2: a duration-shaped key cannot smuggle a subject identifier."""
+    with pytest.raises(ob.ObserveError, match="approved aggregate counter"):
+        ob._check_counts({"subject_123456789_duration": 42})
+
+
+def test_general_lifecycle_stage_can_support_engineering_readiness():
+    """F3: readiness_report is not restricted to data-refresh stages."""
+    evidence = ob.StageEvidence(
+        stage="train",
+        go=True,
+        gate="GRANTED",
+        evidence_level="SYNTHETIC",
+        reason="synthetic training smoke",
+        artifacts=(),
+    )
+    report = ob.readiness_report([evidence])
+    assert report["decision"] == "GO"
+    assert report["gates"]["GO_ENGINEERING"] == "GRANTED"
+
+
+def test_basic_iso_timestamps_preserve_submicrosecond_precision():
+    """F4: colon-less ISO timestamps cannot lose precision or merge instants."""
+    early = "20261101T090000.1234561Z"
+    late = "20261101T090000.1234569Z"
+    assert pl._canonical_event_time(early) == "2026-11-01T09:00:00.1234561+00:00"
+    assert pl._canonical_event_time(late) == "2026-11-01T09:00:00.1234569+00:00"
+    assert pl._row_key({"event_time": early, "source_record": "source-a"}) != (
+        pl._row_key({"event_time": late, "source_record": "source-a"})
+    )
+    assert pl._canonical_event_time(early) == pl._canonical_event_time(
+        "20261101T100000,12345610+01:00"
+    )
