@@ -297,8 +297,8 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 |---|---|---|
 | 精确命令 | `PYTHONPATH=src:. .venv/bin/python -m pytest -q` | 同左 |
 | 收集用例（`--collect-only -q`） | 1034 | 1042 |
-| 通过 / 跳过 | 1028 / 9 | 1040 / 4 |
-| `pytest tests/lifecycle -q` | 195 passed | 195 passed |
+| 通过 / 跳过 | 1038 / 9 | 1050 / 4 |
+| `pytest tests/lifecycle -q` | 205 passed | 205 passed |
 | `ruff check src tests scripts` | 零告警 | 零告警 |
 | `lifecycle_verify.py` | 15/15 PASS | 15/15 PASS |
 
@@ -326,7 +326,7 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 | R4-1 | P2 | 同一 `batch_id` 的两个不同版本在单次运行内声明时，`dataset_sha256` 用排序后的 `(batch_id, sha256)` 集合，丢失修正顺序；`_ingest` 却按「最后一个版本胜出」，导致 `[old,new]` 与 `[new,old]` 缓存键相同但结果不同（实测 warm 复用得 90、cold 得 70） | 改为按 `batch_id` 取最后一个声明的 `sha256`（effective bindings）再排序求摘要，与 `_ingest` 的胜出语义一致 |
 | R4-2 | P2 | 网关幂等缓存只以 `request_id` 为键；先提交模式 A/S1，再用同一 ID 提交模式 B/S2，会拿到模式 A 的 `OK` 与 BPSI/EFRI 数值，绕过模式 B 的不可用保护 | 缓存身份绑定 mode/session/trace/版本/payload；冲突复用返回 `REJECTED` 且 `prediction=None`，合法重放仍命中 |
 
-两项均由复现脚本先确认，再各补 1 项负例回归；三项突变（撤回 effective bindings、
+两项均由复现脚本先确认，再各补 1 项负例回归；3 项突变（撤回 effective bindings、
 去掉身份校验、不写入身份）全部命中。新增 2 项回归后：本地 `1028 passed, 9 skipped`、
 `tests/lifecycle` `195 passed`；远程 `acam-lab` `1040 passed, 4 skipped`、
 `tests/lifecycle` `195 passed`；两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。
@@ -335,3 +335,29 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 逐文件对账不变；10.4 保留为第二轮当时的历史快照，不回写。
 
 累计 17 项机制修复（15 + 2）全部经撤回验证，共 36 项新增回归。证据级别与三门禁不变。
+
+### 10.7 第五轮复评（HEAD `87eaaff`）与身份摘要的 P2
+
+第五轮对 `87eaaff` 的确认复评：Codex（gpt-6.1-sol）给出 8.6 / 8.7 并否决，
+确认 R4-1 / R4-2 两项 P2 均已真正解决，但指出本轮修复引入一项新 P2：
+`_store_cache` 先写 `_cache` 再对完整 payload 做严格 JSON 摘要；`Envelope` 与字典入口
+都接受 `NaN`、`bytes` 等值，此时 `digest` 抛 `ValueError` / `TypeError`，
+SAFE_STOP 也随之中断，并留下「cache 有 1 项、identities 0 项」的部分状态。
+
+处置：
+- 新增 `_stable()` 递归归一化（Mapping / Sequence / set / 非有限 float / bytes / 任意对象
+  均映射为确定性 JSON-safe 值），`_request_identity` 变为全函数，不再抛异常；
+- `_store_cache` 先算身份再写 cache 与 identities，摘要失败时不产生部分状态；
+- SAFE_STOP 在缓存查找之前求值，且返回路径不再依赖可失败的摘要。
+
+验证：NaN / inf / bytes / set 四类 payload × 评分请求 / SAFE_STOP 共 8 个用例全部
+fail-closed（评分请求 `NOT_AVAILABLE` 且 `prediction=None`，SAFE_STOP 返回 `SAFE_STOP`），
+cache 与 identities 长度一致；另补 1 项原子性测试（monkeypatch 令身份抛错后两者均为空）
+与 1 项「归一化后仍能识别模式/会话冲突」测试。2 项突变（撤回 `_stable`、把 cache 写回
+身份之前）全部命中；连同第三轮 15 项与第四轮 3 项，累计 20 项突变检查全部命中。
+累计 18 项 finding（15 + 2 + 1）全部落盘、46 项新增回归。
+
+本地 `1038 passed, 9 skipped`、`tests/lifecycle` `205 passed`；
+远程 `acam-lab` `1050 passed, 4 skipped`、`tests/lifecycle` `205 passed`；
+两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。10.5 的基线表按最终 HEAD 更新，
+10.4 保留为第二轮历史快照。证据级别与三门禁不变。

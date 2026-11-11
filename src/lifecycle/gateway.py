@@ -7,6 +7,7 @@ budgets, and transport failure handling without device control.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -216,6 +217,25 @@ def _structured_names(container: Any) -> set[str]:
     return names
 
 
+def _stable(value: Any) -> Any:
+    """Normalize arbitrary payload values into deterministic JSON-safe data.
+
+    Envelope and dict entry points accept NaN, bytes and other non-JSON values;
+    the idempotency digest must never raise on them, especially for SAFE_STOP.
+    """
+    if isinstance(value, Mapping):
+        return {str(k): _stable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_stable(v) for v in value]
+    if isinstance(value, (set, frozenset)):
+        return sorted(repr(v) for v in value)
+    if isinstance(value, float) and not math.isfinite(value):
+        return f"nonfinite:{value!r}"
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    return f"{type(value).__name__}:{value!r}"
+
+
 def _request_identity(req: Envelope) -> str:
     """Bind an idempotency key to the request that first used it."""
     return digest(
@@ -232,7 +252,7 @@ def _request_identity(req: Envelope) -> str:
             "license": req.license,
             "evidence_level": req.evidence_level,
             "display_gate": req.display_gate,
-            "payload": dict(req.payload),
+            "payload": _stable(req.payload),
         }
     )
 
@@ -714,8 +734,9 @@ class Gateway:
 
     def _store_cache(self, request: Envelope, response: Envelope) -> None:
         if request.request_id:
+            identity = _request_identity(request)
+            self._cache_identities[request.request_id] = identity
             self._cache[request.request_id] = response
-            self._cache_identities[request.request_id] = _request_identity(request)
             self.idempotency_counter[request.request_id] = 1
 
     def record_event(self, session_id: str, event: Mapping[str, Any]) -> None:

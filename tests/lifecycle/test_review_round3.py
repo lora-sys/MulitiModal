@@ -265,6 +265,60 @@ def test_structured_during_post_timepoints_are_rejected(phase_key):
         strict.handle(_envelope(gw.MODE_A_PRE_ONLY, f"strict-{phase_key}", payload))
 
 
+@pytest.mark.parametrize(
+    "value",
+    [float("nan"), float("inf"), b"raw-bytes", {"a", "b"}],
+    ids=["nan", "inf", "bytes", "set"],
+)
+@pytest.mark.parametrize("stop", [False, True], ids=["scored", "safe_stop"])
+def test_non_json_payloads_never_break_fail_closed_responses(value, stop):
+    """P2 (round-5 Codex): identity digest must be total; SAFE_STOP unconditional."""
+    gateway = gw.Gateway()
+    payload = {"value": value}
+    if stop:
+        payload["safe_stop"] = True
+    req = gw.make_envelope(request_id="opaque", mode=gw.MODE_B_REALTIME, payload=payload)
+    res = gateway.handle(req)
+    expected = STATUS_SAFE_STOP if stop else STATUS_NOT_AVAILABLE
+    assert res.status == expected
+    assert res.payload.get("prediction") is None
+    assert res.payload["control_command"] is None
+    assert len(gateway._cache) == len(gateway._cache_identities) == 1
+
+
+def test_cache_write_is_atomic_when_identity_fails(monkeypatch):
+    """No cached response may exist without its identity (no partial state)."""
+    gateway = gw.Gateway()
+
+    def boom(_req):
+        raise ValueError("synthetic digest failure")
+
+    monkeypatch.setattr(gw, "_request_identity", boom)
+    req = gw.make_envelope(request_id="atomic", mode=gw.MODE_A_PRE_ONLY)
+    with pytest.raises(ValueError, match="synthetic digest failure"):
+        gateway.handle(req)
+    assert gateway._cache == {}
+    assert gateway._cache_identities == {}
+
+
+def test_non_json_payload_still_distinguishes_conflicting_requests():
+    """A normalized identity must still reject a mode/session conflict."""
+    gateway = gw.Gateway()
+    first = gw.make_envelope(
+        request_id="opaque", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
+        payload={"value": float("nan")},
+    )
+    assert gateway.handle(first).status == STATUS_OK
+    conflict = gw.make_envelope(
+        request_id="opaque", session_id="S2", mode=gw.MODE_B_REALTIME,
+        payload={"value": float("nan")},
+    )
+    res = gateway.handle(conflict)
+    assert res.status == STATUS_REJECTED
+    assert "different request identity" in res.payload["reason"]
+    assert gateway.handle(first).status == STATUS_OK
+
+
 def test_idempotency_key_cannot_be_reused_across_modes_or_sessions():
     """P2 (round-4 Codex): a cached mode-A answer must not leak to mode B/S2."""
     gateway = gw.Gateway()
