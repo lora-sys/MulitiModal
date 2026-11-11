@@ -53,7 +53,7 @@ from .contracts import (
     utc_now,
 )
 
-PIPELINE_VERSION = "ml-lifecycle-pipeline-v7"
+PIPELINE_VERSION = "ml-lifecycle-pipeline-v8"
 _HIGH_PRECISION_TIME = re.compile(
     r"^(.*\d{2}:?\d{2}:?\d{2})[.,](\d+)(Z|[+-]\d{2}:?\d{2}(?::?\d{2})?)?$"
 )
@@ -387,7 +387,10 @@ def _canonical_event_time(value: str) -> str:
         return value
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
-    canonical = parsed.astimezone(UTC).isoformat()
+    try:
+        canonical = parsed.astimezone(UTC).isoformat()
+    except OverflowError:
+        return value
     if high_precision:
         canonical = canonical.replace("123456", fraction, 1)
     return canonical
@@ -403,7 +406,7 @@ def _row_key(row: Mapping[str, str]) -> str:
         "source_record": row.get("source_record", ""),
         "event_time": _canonical_event_time(row.get("event_time", "")),
     }
-    if not identity["source_record"]:
+    if not identity["source_record"] and not identity["event_time"]:
         identity["record_id"] = row.get("record_id", "")
     return digest(identity)
 

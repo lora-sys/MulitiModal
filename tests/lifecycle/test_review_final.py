@@ -475,3 +475,34 @@ def test_drift_marker_inside_column_name_does_not_hide_columns():
     assert report["candidate"] == ["sensor_x", "unknown columns detected"]
     assert report["new"] == ["sensor_x", "unknown columns detected"]
     assert report["delta"] == 2
+
+
+def test_blank_source_record_with_event_time_still_deduplicates(tmp_path):
+    """F1: a missing optional source anchor alone does not disable replay."""
+    rows = list(csv.DictReader(BATCH_A.open(encoding="utf-8")))
+    rows[0]["source_record"] = ""
+    resent = dict(rows[0])
+    resent["record_id"] = "5"
+    path = tmp_path / "blank_source_record.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows + [resent])
+    result = run_pipeline([declare_batch(path, batch_id="A")], tmp_path / "out")
+    assert result.qc.n_accepted == 4
+    assert result.qc.n_duplicate == 1
+
+
+def test_utc_conversion_overflow_keeps_timestamp_visible(tmp_path):
+    """F2: one out-of-range timestamp cannot abort ingestion."""
+    value = "0001-01-01T00:00:00+01:00"
+    assert pl._canonical_event_time(value) == value
+    rows = list(csv.DictReader(BATCH_A.open(encoding="utf-8")))
+    rows[0]["event_time"] = value
+    path = tmp_path / "overflow.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+    result = run_pipeline([declare_batch(path, batch_id="A")], tmp_path / "out")
+    assert result.qc.n_input == len(rows)
