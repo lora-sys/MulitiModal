@@ -369,6 +369,28 @@ class ReleaseRegistry:
             "gates": gate_bundle(True),
         }
 
+    @staticmethod
+    def _bundle_from_entry(entry: Mapping[str, Any]) -> ArtifactBundle:
+        """Rebuild a registered bundle so its files can be re-verified."""
+        manifest = entry["manifest"]
+        evidence = entry["evidence"]
+        return ArtifactBundle(
+            root=Path(entry["root"]),
+            manifest=ArtifactManifest(
+                **{key: manifest[key] for key in ArtifactManifest.__dataclass_fields__}
+            ),
+            files=entry["files"],
+            schema_version=entry["schema_version"],
+            environment=entry["environment"],
+            compatibility=entry["compatibility"],
+            extra_evidence={
+                key: value
+                for key, value in evidence.items()
+                if key not in _RESERVED_EVIDENCE
+            },
+            bundle_sha256=entry.get("bundle_sha256"),
+        )
+
     def promote(self, artifact_id: str, *, approver: str, reason: str) -> TransitionResult:
         """Atomically promote one explicitly approved candidate to champion."""
         action = "promote"
@@ -409,27 +431,15 @@ class ReleaseRegistry:
         if evidence_level not in PROMOTION_ALLOWED_EVIDENCE:
             return self._refuse(action, f"unrecognized evidence level {evidence_level!r}")
         try:
-            bundle = ArtifactBundle(
-                root=Path(entry["root"]),
-                manifest=ArtifactManifest(
-                    **{key: manifest[key] for key in ArtifactManifest.__dataclass_fields__}
-                ),
-                files=entry["files"],
-                schema_version=entry["schema_version"],
-                environment=entry["environment"],
-                compatibility=entry["compatibility"],
-                extra_evidence={
-                    key: value
-                    for key, value in evidence.items()
-                    if key not in _RESERVED_EVIDENCE
-                },
-                bundle_sha256=entry.get("bundle_sha256"),
-            )
+            bundle = self._bundle_from_entry(entry)
             bundle.verify()
         except (KeyError, TypeError, ValueError) as exc:
             return self._refuse(action, f"version-incompatible bundle: {exc}")
         if entry.get("manifest_sha256") != bundle.manifest.sha256:
             return self._refuse(action, f"version-incompatible bundle {artifact_id!r}: bad hash")
+        champion = state["champion"]
+        if isinstance(champion, dict) and champion.get("artifact_id") == artifact_id:
+            return self._refuse(action, f"{artifact_id!r} is already the active champion")
         state["previous"] = state["champion"]
         state["champion"] = entry
         return self._commit(
@@ -451,6 +461,10 @@ class ReleaseRegistry:
         previous = state["previous"]
         if previous is None:
             return self._refuse(action, "no previous champion is recorded")
+        try:
+            self._bundle_from_entry(previous).verify()
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            return self._refuse(action, f"previous champion failed verification: {exc}")
         state["champion"] = previous
         state["previous"] = None
         return self._commit(

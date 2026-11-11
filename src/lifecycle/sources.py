@@ -14,7 +14,7 @@ from __future__ import annotations
 import csv
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -27,6 +27,7 @@ from .contracts import (
     SOURCE_DEVICE,
     SOURCE_KINDS,
     SOURCE_OFFLINE,
+    SOURCE_SERVICE,
     SOURCE_SIMULATED,
     STATUS_OK,
     digest,
@@ -102,11 +103,15 @@ class SourceCapability:
                 raise SourceError(
                     "a simulated source can never be reported as a connected real device"
                 )
-        if self.kind == SOURCE_DEVICE and self.capability == CAP_CONNECTED:
+        if self.capability == CAP_CONNECTED and self.kind in (
+            SOURCE_DEVICE, SOURCE_SERVICE
+        ):
             if not self.conformance.present:
                 raise SourceError(
                     "a real device may not declare CONNECTED without a vendor conformance record"
                 )
+        if self.capability == CAP_CONNECTED and self.kind == SOURCE_OFFLINE:
+            raise SourceError("an offline source can never be reported as CONNECTED")
 
     def record(self) -> dict[str, Any]:
         """Explicit NOT_CONNECTED / BLOCKED verdict with a reason by default."""
@@ -154,7 +159,7 @@ class SourceEvent:
 
     @property
     def timestamp(self) -> datetime:
-        return datetime.fromisoformat(self.event_time)
+        return _parse_event_time(self.event_time)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -188,8 +193,14 @@ class SourceAdapter(Protocol):
     def close(self) -> None: ...
 
 
-def _event_order(event: SourceEvent) -> tuple[str, str, int, str]:
-    return (event.session_id, event.event_time, event.sequence, event.key)
+def _parse_event_time(value: str) -> datetime:
+    """Normalize an ISO timestamp to an aware UTC instant for causal ordering."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _event_order(event: SourceEvent) -> tuple[str, datetime, int, str]:
+    return (event.session_id, _parse_event_time(event.event_time), event.sequence, event.key)
 
 
 class SimulatedAdapter:
@@ -303,7 +314,9 @@ class BoundedEventQueue:
             self.dropped_count += 1
             self.reasons.append(f"duplicate key {event.key!r} dropped")
             return False
-        if self.watermark and event.event_time < self.watermark:
+        if self.watermark and _parse_event_time(event.event_time) < _parse_event_time(
+            self.watermark
+        ):
             self.late_event_count += 1
         if len(self._accepted) >= self.max_size:
             self.dropped_count += 1
@@ -313,7 +326,9 @@ class BoundedEventQueue:
             )
             return False
         self._accepted[event.key] = event
-        if event.event_time > self.watermark:
+        if not self.watermark or _parse_event_time(event.event_time) > _parse_event_time(
+            self.watermark
+        ):
             self.watermark = event.event_time
         return True
 
@@ -378,11 +393,18 @@ class SessionWindow:
         self.gap_threshold_s = gap_threshold_s
         self._events: dict[str, SourceEvent] = {}
         self.gaps: list[Gap] = []
+        self.rejections: list[str] = []
         self.closed = False
 
     def push(self, event: SourceEvent) -> bool:
         if self.closed:
             raise SourceError("session window is closed")
+        if event.session_id != self.session_id:
+            self.rejections.append(
+                f"event {event.key!r} belongs to session {event.session_id!r}, "
+                f"not {self.session_id!r}"
+            )
+            return False
         if event.key in self._events:
             return False
         if len(self._events) >= self.max_events:
@@ -392,9 +414,10 @@ class SessionWindow:
 
     def cutoff(self, at: str) -> tuple[SourceEvent, ...]:
         """Events strictly at or before `at`. No future leakage."""
+        at_ts = _parse_event_time(at)
         return tuple(
             sorted(
-                (e for e in self._events.values() if e.event_time <= at),
+                (e for e in self._events.values() if _parse_event_time(e.event_time) <= at_ts),
                 key=_event_order,
             )
         )

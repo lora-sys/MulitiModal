@@ -587,7 +587,7 @@ def _duplicate_scenario(order: tuple[str, ...], tmp_path: Path):
         "A2": declare_batch(a2, batch_id="A"),
     }
     result = run_pipeline([batches[name] for name in order], tmp / "out")
-    return result, sorted(row.source_record for row in result.snapshot.rows)
+    return result, (tmp / "out" / SNAPSHOT_FILE).read_bytes()
 
 
 def test_correction_keeps_rows_owned_by_other_declared_batches(tmp_path):
@@ -605,7 +605,13 @@ def test_correction_keeps_rows_owned_by_other_declared_batches(tmp_path):
         assert result.qc.n_input == (
             result.qc.n_accepted + result.qc.n_rejected + result.qc.n_duplicate
         )
+    # Byte-identical snapshots, not just source-record sets: this would fail if
+    # the deterministic winner ordering were removed.
     assert first_rows == second_rows
+    assert first.snapshot.sha256 == second.snapshot.sha256
+    assert [r.batch_id for r in first.snapshot.rows] == [
+        r.batch_id for r in second.snapshot.rows
+    ]
 
 
 def test_truncated_state_file_falls_back_instead_of_crashing(tmp_path):

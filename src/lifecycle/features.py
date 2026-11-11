@@ -689,6 +689,16 @@ def _extract_field_value(event: Any, field_name: str) -> float | None:
         return None
 
 
+def _value_allowed(field: FieldSpec, value: float) -> bool:
+    """An observation is usable only when finite and inside the declared range."""
+    if not math.isfinite(value):
+        return False
+    if field.legal_range is None:
+        return True
+    low, high = field.legal_range
+    return low <= value <= high
+
+
 def build_feature_rows(
     events: Sequence[Any],
     spec: FeatureSpec,
@@ -766,7 +776,7 @@ def build_feature_rows(
                 )
                 if subj in train_subj_set:
                     val = _extract_field_value(event, field.name)
-                    if val is not None:
+                    if val is not None and _value_allowed(field, val):
                         train_vals.append(val)
             if train_vals:
                 train_medians[field.name] = float(np.median(train_vals))
@@ -804,10 +814,18 @@ def build_feature_rows(
 
         for field in spec.fields:
             val = _extract_field_value(event, field.name)
-            if val is not None:
+            if val is not None and _value_allowed(field, val):
                 row_values.append(val)
                 observed_mask.append(True)
                 valid_mask.append(True)
+                imputed_mask.append(False)
+                imputation_methods.append("none")
+            elif val is not None:
+                # Observed but out of contract range: keep observed=True,
+                # valid=False and the mandatory 0.0 placeholder.
+                row_values.append(0.0)
+                observed_mask.append(True)
+                valid_mask.append(False)
                 imputed_mask.append(False)
                 imputation_methods.append("none")
             else:

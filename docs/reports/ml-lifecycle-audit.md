@@ -253,3 +253,63 @@ Gemini 3.8 Flash 的复评任务在 `c087d30` 上启动后返回
 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。
 远程 `acam-lab` 实测：全仓 `1004 passed, 4 skipped`、`tests/lifecycle` `159 passed`、
 `lifecycle_verify.py` `15/15 PASS`。
+
+### 10.5 第三轮评审（HEAD `dbaa579`）与 15 项 finding 的处置
+
+第三轮由 Codex 在三个被评审 commit 上共提出 14 项 finding（4 项 P1、10 项 P2），
+Step 5 Preview 给出 9.2 / 9.5「通过、建议合并」（另提 1 项非阻塞 P2），
+Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性胜出排序无测试保护」，
+另指出验收报告一处陈旧计数。Gemini 3.8 Flash 因模型容量不足未返回评分，如实标注缺位。
+
+**全部 14 项 Codex finding + Claude 2 项 P1 + 两家 P2 已落盘：**
+（列中的编号为本轮复现脚本 `/tmp/repro_findings.py` 的 F1–F15，含已由 `90b2cb7`
+修复并补回归锁定的 F1）
+
+| 编号 | 级别 | 问题 | 处置 |
+|---|---|---|---|
+| F1 | P1 | 崩溃恢复无可用快照时游标跳过全部批次（旧 finding） | 已由 `90b2cb7` 修复，本轮补回归锁定 |
+| F2 | P1 | 请求自带 `validated` / `safety_authorized` 即可让实时模式发分 | 模式 B 固定 `NOT_AVAILABLE`，不信任请求侧声明 |
+| F3 | P2 | 回滚不校验 previous 工件文件 | 回滚前重建并 `verify()`，失败即拒且保持 champion |
+| F4 | P1 | 缓存命中丢失 QC blockers，`train_ready` 由假翻真 | `_readiness` 消费 `qc.blocked`；失败路径先记 blocker 再算 QC |
+| F5 | P2 | cutoff / 排序 / gap 用字符串比较 ISO 时间 | `_parse_event_time` 归一为 UTC-aware instant |
+| F6 | P2 | SessionWindow 接受别的 session 事件 | 拒绝并登记理由（不静默丢弃） |
+| F7 | P2 | 声明后改写 raw bytes 仍被摄入 | `_read_rows` 先校验 raw sha256 与声明一致 |
+| F8 | P1 | SAFE_STOP 被幂等缓存与限流挡住 | 停止信号在缓存/限流之前求值 |
+| F9 | P2 | `legal_range` 未约束观测值与折内中位数 | 越界观测记 observed/无效/0.0 占位，且不进中位数 |
+| F10 | P2 | 缓存 snapshot 内容被篡改仍被复用 | `Snapshot.rows_sha256`，解析时校验，不符即全量重算 |
+| F11 | P2 | 两个 store 实例共用日志会接出断链 | append 在共享锁内重读 durable 链尾并校验 |
+| F12 | P2 | smoke 清单的 commit/environment 用默认值 | `run_synthetic_smoke` 透传 `TrainConfig` 溯源 |
+| F13 | P2 | dataset 缓存键不含 batch-id 绑定 | 键改为 `sorted((batch_id, sha256))` |
+| F14 | P2 | 重复提升把 `previous` 覆盖成自身 | 已是 champion 即拒，不改状态 |
+| F15 | P2 | 结构化 `fields` 的 `timepoint=post` 绕过 Pre-only 守卫 | 提取时保留 phase 元数据 |
+| C-P1 | P1 | 确定性胜出排序无回归保护 | 新增「声明顺序无关、snapshot 逐字节相同」用例 |
+| C-P2 | P2 | 验收报告仍写「12 类」；私有路径分类器零覆盖；恒真断言 | 改为 14 类；补正负对照单测；断言改为字节级比较 |
+
+新增 `tests/lifecycle/test_review_round3.py`（33 项）+ `test_train_ready.py` 1 项回归，
+每项均为负例。**15 项机制修复逐项做突变验证**：撤回任一修复后对应回归测试即失败
+（M1–M15 全部命中，包含 C-P1 的确定性排序）。F4/F15 首轮突变未命中系验证脚本
+自身问题（`.pyc` 时间-大小碰撞、只替换两处相同代码中的一处），修正脚本后 15/15 命中。
+
+**远程基线的可核验性（Claude P2-5 / Step 5 P2-5）**：此前 PR 只给数字未给来源，
+本轮补齐 host、user、实测时间、精确命令与差异逐项对账：
+
+| 项 | 本地（macOS / CPython 3.13.12，无 torch/transformers） | 远程 `acam-lab`（Linux / CPython 3.12.3，torch 2.15 + transformers） |
+|---|---|---|
+| 精确命令 | `PYTHONPATH=src:. .venv/bin/python -m pytest -q` | 同左 |
+| 收集用例（`--collect-only -q`） | 1034 | 1042 |
+| 通过 / 跳过 | 1026 / 9 | 1038 / 4 |
+| `pytest tests/lifecycle -q` | 193 passed | 193 passed |
+| `ruff check src tests scripts` | 零告警 | 零告警 |
+| `lifecycle_verify.py` | 15/15 PASS | 15/15 PASS |
+
+收集用例差 8 项，全部来自 `tests/syndrome/test_bert_model.py`：本地无
+`transformers`，整模块在收集期跳过（0 项收集、1 条 module-level skip 结果），
+远程 8 项实跑全过。结果数因此差 7（1035 → 1042）。逐文件对账：
+`test_tcm_minimal_demo.py` 本地 3 passed / 6 skipped、远程 9 passed（缺私有工件）；
+`test_real_data_audit.py` 本地 27 passed、远程 25 passed / 2 skipped（该机缺私有导出）；
+`test_ccmq60.py` 两端均 11 passed / 2 skipped；其余文件两端同为 985 项。
+按文件相加与两端总数一致，差异均有明确环境原因，没有把 skip 写成 PASS。
+
+证据级别不变：`LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`；
+三门禁仍为 `GO_ENGINEERING=GRANTED`、`GO_REAL_DATA_TRAINING=NOT_GRANTED`、
+`GO_RESEARCH_CLAIMS=NOT_GRANTED`，CI 绿灯不自动提权。

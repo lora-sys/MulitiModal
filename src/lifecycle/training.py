@@ -297,6 +297,7 @@ def run_synthetic_smoke(
     run = prepare(
         dataset=dataset, split=split, features=features, target=target,
         evaluation=evaluation, config=config,
+        commit=config.commit, environment=config.environment,
     )
     rows, targets, subjects = synthetic_dataset(n_subjects=n_subjects, seed=config.seed)
     folds = subject_folds(subjects, n_folds=min(3, len(set(subjects))), seed=config.seed)

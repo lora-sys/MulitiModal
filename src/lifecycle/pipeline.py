@@ -20,6 +20,8 @@ Key invariants:
 from __future__ import annotations
 
 import csv
+import hashlib
+import io
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -175,6 +177,14 @@ class Snapshot:
     config_sha256: str
     rules_sha256: str
     created_at: str
+    rows_sha256: str = ""
+
+    def __post_init__(self) -> None:
+        expected = digest([row.to_dict() for row in self.rows])
+        if not self.rows_sha256:
+            object.__setattr__(self, "rows_sha256", expected)
+        elif self.rows_sha256 != expected:
+            raise ValueError("cached snapshot rows do not match rows_sha256")
 
     @property
     def sha256(self) -> str:
@@ -192,6 +202,7 @@ class Snapshot:
             "config_sha256": self.config_sha256,
             "rules_sha256": self.rules_sha256,
             "created_at": self.created_at,
+            "rows_sha256": self.rows_sha256,
         }
 
 
@@ -313,7 +324,15 @@ def declare_source(
 
 
 def _read_rows(batch: Batch, ws: _Workspace) -> list[dict[str, str]]:
-    with batch.path.open("r", encoding="utf-8-sig", newline="") as handle:
+    raw = batch.path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != batch.sha256:
+        ws.blocked.add(
+            f"{batch.batch_id}: raw bytes changed after declaration; re-declare the batch"
+        )
+        raise PipelineError(
+            f"batch {batch.batch_id}: raw bytes do not match the declared sha256"
+        )
+    with io.StringIO(raw.decode("utf-8-sig"), newline="") as handle:
         reader = csv.DictReader(handle)
         columns = tuple(reader.fieldnames or ())
         missing = [name for name in REQUIRED_COLUMNS if name not in columns]
@@ -642,8 +661,8 @@ def _readiness(
 ) -> dict[str, Any]:
     subjects = {row.subject_ref for row in ws.rows.values()}
     reasons: list[str] = []
-    if ws.blocked:
-        reasons.extend(sorted(ws.blocked))
+    if qc.blocked:
+        reasons.extend(sorted(qc.blocked))
     if len(subjects) < config.min_subjects:
         reasons.append(f"subjects {len(subjects)} < required {config.min_subjects}")
     if not ws.rows:
@@ -739,6 +758,7 @@ def _parse_snapshot(data: Mapping[str, Any]) -> Snapshot:
         config_sha256=data["config_sha256"],
         rules_sha256=data["rules_sha256"],
         created_at=data["created_at"],
+        rows_sha256=data["rows_sha256"],
     )
 
 
@@ -769,7 +789,7 @@ def run_pipeline(
     out.mkdir(parents=True, exist_ok=True)
     started = utc_now().isoformat()
     rules_sha256 = digest({"schema": cfg.schema_version, "rules": rules_version})
-    dataset_sha256 = digest(sorted(b.sha256 for b in batches))
+    dataset_sha256 = digest(sorted((b.batch_id, b.sha256) for b in batches))
     # G2: a cold run's identity must be reproducible from declared inputs, not
     # from wall-clock time. Two cold runs of the same data/config/code/rules in
     # different directories now produce the same run_id.
@@ -903,8 +923,8 @@ def run_pipeline(
             )
         except PipelineError as exc:
             error = str(exc)
-            qc = _qc(ws)
             ws.blocked.add(f"stage failure: {error}")
+            qc = _qc(ws)
 
     readiness = _readiness(
         ws, cfg, qc, approval=approval, identity_trust=identity_trust,

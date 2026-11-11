@@ -188,32 +188,41 @@ def _is_during_or_post_feature(name: str) -> bool:
     )
 
 
-def _extract_feature_names(payload: Mapping[str, Any]) -> set[str]:
+_FORBIDDEN_PHASES = ("during", "post")
+
+
+def _declared_phase(item: Any) -> str:
+    if isinstance(item, Mapping):
+        return str(item.get("timepoint") or item.get("phase") or "").lower()
+    return ""
+
+
+def _structured_names(container: Any) -> set[str]:
+    """Keep declared during/post phase metadata instead of trusting field names."""
     names: set[str] = set()
-    features = payload.get("features")
-    if isinstance(features, Mapping):
-        names.update(features.keys())
-    elif isinstance(features, Sequence) and not isinstance(features, (str, bytes)):
-        for item in features:
+    if isinstance(container, Mapping):
+        for key, value in container.items():
+            phase = _declared_phase(value)
+            name = str(key)
+            names.add(f"{phase}_{name}" if phase in _FORBIDDEN_PHASES else name)
+    elif isinstance(container, Sequence) and not isinstance(container, (str, bytes)):
+        for item in container:
             if isinstance(item, str):
                 names.add(item)
             elif isinstance(item, Mapping) and "name" in item:
-                names.add(str(item["name"]))
-    feature_names = payload.get("feature_names")
-    if isinstance(feature_names, Sequence) and not isinstance(feature_names, (str, bytes)):
-        names.update(str(x) for x in feature_names)
-    fields = payload.get("fields")
-    if isinstance(fields, Mapping):
-        names.update(fields.keys())
-    elif isinstance(fields, Sequence) and not isinstance(fields, (str, bytes)):
-        for item in fields:
-            if isinstance(item, str):
-                names.add(item)
-            elif isinstance(item, Mapping):
-                if item.get("timepoint") in ("during", "post"):
-                    names.add(str(item.get("name", "during_unnamed")))
-                elif "name" in item:
-                    names.add(str(item["name"]))
+                phase = _declared_phase(item)
+                name = str(item["name"])
+                names.add(f"{phase}_{name}" if phase in _FORBIDDEN_PHASES else name)
+    return names
+
+
+def _extract_feature_names(payload: Mapping[str, Any]) -> set[str]:
+    names: set[str] = set()
+    for key in ("features", "feature_names", "fields"):
+        names.update(_structured_names(payload.get(key)))
+    payload_phase = _declared_phase(payload)
+    if payload_phase in _FORBIDDEN_PHASES:
+        names.add(f"{payload_phase}_declared")
     for k in payload:
         if _is_during_or_post_feature(k):
             names.add(k)
@@ -328,23 +337,6 @@ class Gateway:
         else:
             req = envelope_from_dict(raw_request)
 
-        if req.request_id in self._cache:
-            self.idempotency_hits += 1
-            self.idempotency_counter[req.request_id] = (
-                self.idempotency_counter.get(req.request_id, 1) + 1
-            )
-            return self._cache[req.request_id]
-
-        limit = self._concurrency_limits.get(req.mode, self.max_concurrency_per_mode)
-        if self._in_flight[req.mode] >= limit:
-            return self._refuse_envelope(
-                req,
-                status=STATUS_REJECTED,
-                reason=(
-                    f"throttle overflow: concurrency limit ({limit}) exceeded for mode {req.mode}"
-                ),
-            )
-
         is_safe_stop = (
             req.status == STATUS_SAFE_STOP
             or req.quality.lower() == "safe_stop"
@@ -378,6 +370,23 @@ class Gateway:
             )
             self._store_cache(req.request_id, res)
             return res
+
+        if req.request_id in self._cache:
+            self.idempotency_hits += 1
+            self.idempotency_counter[req.request_id] = (
+                self.idempotency_counter.get(req.request_id, 1) + 1
+            )
+            return self._cache[req.request_id]
+
+        limit = self._concurrency_limits.get(req.mode, self.max_concurrency_per_mode)
+        if self._in_flight[req.mode] >= limit:
+            return self._refuse_envelope(
+                req,
+                status=STATUS_REJECTED,
+                reason=(
+                    f"throttle overflow: concurrency limit ({limit}) exceeded for mode {req.mode}"
+                ),
+            )
 
         if req.payload.get("transport_failure") is True:
             res = self._refuse_envelope(
@@ -585,41 +594,19 @@ class Gateway:
         )
 
     def _handle_mode_b(self, req: Envelope) -> Envelope:
-        is_validated = (
-            req.payload.get("validated") is True and req.payload.get("safety_authorized") is True
-        )
-        if not is_validated:
-            return self._refuse_envelope(
-                req,
-                status=STATUS_NOT_AVAILABLE,
-                reason="fatigue score not available: unvalidated realtime model; claims forbidden",
-                extra_payload={"prediction": None, "control_command": None},
-            )
+        """Realtime fatigue scoring stays NOT_AVAILABLE until trusted validation exists.
 
-        evidence = (
-            req.evidence_level if req.evidence_level != EVIDENCE_SMOKE else EVIDENCE_SYNTHETIC
-        )
-        return make_envelope(
-            schema_version=req.schema_version,
-            request_id=req.request_id,
-            session_id=req.session_id,
-            trace_id=req.trace_id,
-            mode=MODE_B_REALTIME,
-            event_time=req.event_time,
-            feature_version=req.feature_version,
-            model_version=req.model_version,
-            target_version=req.target_version,
-            quality=req.quality,
-            status=STATUS_OK,
-            provenance=req.provenance,
-            license=req.license,
-            evidence_level=evidence,
-            display_gate="REVIEWED_MONITORING",
-            payload={
-                "prediction": req.payload.get("prediction", 0.5),
-                "control_command": None,
-                "status": STATUS_OK,
-            },
+        Request-supplied flags cannot authorize a prediction: no validated model
+        or server-side safety clearance is wired into this gateway.
+        """
+        return self._refuse_envelope(
+            req,
+            status=STATUS_NOT_AVAILABLE,
+            reason=(
+                "fatigue score not available: unvalidated realtime model; "
+                "no trusted safety clearance is wired in; claims forbidden"
+            ),
+            extra_payload={"prediction": None, "control_command": None},
         )
 
     def _handle_mode_c(self, req: Envelope) -> Envelope:

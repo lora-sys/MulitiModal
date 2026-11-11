@@ -71,7 +71,7 @@ python scripts/lifecycle_verify.py --acceptance-only      # 仅 15 项统一检�
 
 | 阶段 | Issue | evidence | 判定 |
 |---|---|---|---|
-| 任务与标签协议 | #104 | `contracts.py` 12 类不可变契约 + 三门禁 | **GO_ENGINEERING** |
+| 任务与标签协议 | #104 | `contracts.py` 14 类不可变契约 + 三门禁 | **GO_ENGINEERING** |
 | 数据源与管道 | #105/#106 | `pipeline.py` 合成增量幂等 + 恢复 | **GO_ENGINEERING**（映射仍 NOT_VERIFIED） |
 | 特征与标签 | #107 | 版本化注册表 + 折内拟合 + 泄漏负例 | **GO_ENGINEERING**（真实标签 BLOCKED） |
 | 训练与评估 | #108 | 合成 smoke + 重复运行一致 | **GO_ENGINEERING**（真实训练 NO-GO） |

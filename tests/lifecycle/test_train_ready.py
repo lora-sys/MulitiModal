@@ -185,6 +185,17 @@ def test_smoke_config_cannot_claim_approved_real_training():
         )
 
 
+def test_smoke_manifest_carries_configured_provenance():
+    """P2 (Codex 300): commit/environment must come from TrainConfig, not defaults."""
+    report = tr.run_synthetic_smoke(
+        features=_features(), target=_target(), dataset=_dataset(), split=_split(),
+        evaluation=_eval(),
+        config=_config(commit="actual-commit", environment="declared-host"),
+    )
+    assert report.run.commit == "actual-commit"
+    assert report.run.environment == "declared-host"
+
+
 def test_artifact_from_smoke_never_validated():
     report = tr.run_synthetic_smoke(
         features=_features(), target=_target(), dataset=_dataset(), split=_split(),

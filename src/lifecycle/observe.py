@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -42,6 +43,13 @@ from .contracts import (
     gate_bundle,
 )
 from .training import DECISIONS
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - POSIX-only advisory lock
+    fcntl = None
+
+_CHAIN_LOCK = threading.Lock()
 
 OBSERVE_VERSION = "ml-lifecycle-observe-v1"
 GENESIS_SHA256 = "0" * 64
@@ -204,16 +212,30 @@ class ObservabilityStore:
             self.verify_chain()
 
     def append(self, event: StageEvent) -> str:
+        """Append under a shared lock after re-reading the durable chain tail.
+
+        A second store instance (or process) must not extend a stale tail; the
+        verification and the write are one critical section.
+        """
         event.validate()
-        previous = self._tail
-        record = {
-            "event": event.to_dict(),
-            "previous_sha256": previous,
-        }
-        record["sha256"] = digest(record)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as stream:
-            stream.write(canonical_json(record) + "\n")
+        with _CHAIN_LOCK:
+            with self.path.open("a+", encoding="utf-8") as stream:
+                if fcntl is not None:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+                try:
+                    self.verify_chain()
+                    previous = self._tail
+                    record = {
+                        "event": event.to_dict(),
+                        "previous_sha256": previous,
+                    }
+                    record["sha256"] = digest(record)
+                    stream.write(canonical_json(record) + "\n")
+                    stream.flush()
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
         self._tail = record["sha256"]
         return self._tail
 
