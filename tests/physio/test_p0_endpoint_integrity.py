@@ -60,8 +60,9 @@ def test_single_health_record_must_not_become_both_endpoints():
     session = build_real_sessions(records)[0]
     assert QC_OVERLAPPING_ENDPOINTS in session.issue_codes()
     labels = session_labels(session)
-    assert all(value is None for value in labels.values.values())
-    assert not any(labels.mask.values())
+    # The health delta is missing, but independent BP measurements remain usable.
+    assert labels.mask.get("y_delta_vendor_fatigue") is not True
+    assert labels.mask["y_delta_sbp"] is True
     assert session_post_state(session) is None
 
 
@@ -72,7 +73,9 @@ def test_two_health_events_within_one_minute_are_not_distinct_pre_post_groups():
     ]
     session = build_real_sessions(records)[0]
     assert QC_OVERLAPPING_ENDPOINTS in session.issue_codes()
-    assert session_labels(session).available == ()
+    labels = session_labels(session)
+    assert labels.mask.get("y_delta_vendor_fatigue") is not True
+    assert labels.mask["y_delta_dbp"] is True
 
 
 def test_cross_session_record_reuse_blocks_both_sessions():
