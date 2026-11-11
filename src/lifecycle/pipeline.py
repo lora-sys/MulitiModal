@@ -53,11 +53,12 @@ from .contracts import (
     utc_now,
 )
 
-PIPELINE_VERSION = "ml-lifecycle-pipeline-v8"
-_HIGH_PRECISION_TIME = re.compile(
-    r"^(.*\d{2}:?\d{2}:?\d{2})[.,](\d+)(Z|[+-]\d{2}:?\d{2}(?::?\d{2})?)?$"
+PIPELINE_VERSION = "ml-lifecycle-pipeline-v9"
+_ISO_TIME = re.compile(
+    r"^(?P<prefix>\d{4}-?\d{2}-?\d{2}T\d{2}:?\d{2}(?::?\d{2})?)"
+    r"(?:[.,](?P<fraction>\d+))?"
+    r"(?P<offset>Z|[+-]\d{2}(?::?\d{2}){0,2})?$"
 )
-_OFFSET_FRACTION = re.compile(r"[+-]\d{2}:?\d{2}:?\d{2}[.,]\d+$")
 STATE_FILE = "pipeline_state.json"
 QUARANTINE_FILE = "quarantine.jsonl"
 QC_FILE = "qc_report.json"
@@ -361,29 +362,23 @@ def _read_rows(batch: Batch, ws: _Workspace) -> list[dict[str, str]]:
 
 
 def _canonical_event_time(value: str) -> str:
-    """Normalize ISO timestamps to one UTC instant for stable identity keys.
+    """Normalize supported ISO timestamps to a lossless UTC representation.
 
-    Equivalent instants written with different UTC offsets must not create two
-    rows. Unparseable values are kept verbatim so malformed input stays visible
-    to QC instead of being silently merged. Naive timestamps are treated as UTC.
+    Equivalent instants share one key. Fractional digits are preserved, and any
+    timestamp format that cannot be normalized without loss stays verbatim so
+    malformed or unsupported input remains visible to QC instead of merging.
     """
     if not value:
         return value
-    if _OFFSET_FRACTION.search(value):
+    match = _ISO_TIME.fullmatch(value)
+    if match is None:
         return value
-    high_precision = _HIGH_PRECISION_TIME.fullmatch(value)
-    if high_precision:
-        prefix, fraction, suffix = high_precision.groups()
-        suffix = suffix or ""
-        parser_input = f"{prefix}.123456{suffix}"
-        fraction = fraction.rstrip("0") or "0"
-    else:
-        fraction = ""
-        parser_input = value
-    parser_input = parser_input.replace("Z", "+00:00").replace(",", ".")
+    prefix, fraction, offset = match.groups()
+    fraction = (fraction or "").rstrip("0")
+    suffix = "+00:00" if (offset or "Z") == "Z" else offset
     try:
-        parsed = datetime.fromisoformat(parser_input)
-    except (ValueError, TypeError):
+        parsed = datetime.fromisoformat(prefix + suffix)
+    except (ValueError, TypeError, OverflowError):
         return value
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
@@ -391,8 +386,8 @@ def _canonical_event_time(value: str) -> str:
         canonical = parsed.astimezone(UTC).isoformat()
     except OverflowError:
         return value
-    if high_precision:
-        canonical = canonical.replace("123456", fraction, 1)
+    if fraction:
+        canonical = canonical.replace("+00:00", f".{fraction}+00:00", 1)
     return canonical
 
 

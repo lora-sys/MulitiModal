@@ -506,3 +506,17 @@ def test_utc_conversion_overflow_keeps_timestamp_visible(tmp_path):
         writer.writerows(rows)
     result = run_pipeline([declare_batch(path, batch_id="A")], tmp_path / "out")
     assert result.qc.n_input == len(rows)
+
+
+def test_timestamps_without_seconds_preserve_submicrosecond_precision():
+    """Current-head P2: omitted seconds do not license datetime truncation."""
+    early = "2026-11-01T09:00.1234561Z"
+    late = "2026-11-01T09:00.1234569Z"
+    assert pl._canonical_event_time(early) == "2026-11-01T09:00:00.1234561+00:00"
+    assert pl._canonical_event_time(late) == "2026-11-01T09:00:00.1234569+00:00"
+    assert pl._row_key({"event_time": early, "source_record": "source-a"}) != (
+        pl._row_key({"event_time": late, "source_record": "source-a"})
+    )
+    assert pl._canonical_event_time(early) == pl._canonical_event_time(
+        "2026-11-01T10:00,1234561+01:00"
+    )
