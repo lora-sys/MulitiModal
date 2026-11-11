@@ -296,18 +296,18 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 | 项 | 本地（macOS / CPython 3.13.12，无 torch/transformers） | 远程 `acam-lab`（Linux / CPython 3.12.3，torch 2.15 + transformers） |
 |---|---|---|
 | 精确命令 | `PYTHONPATH=src:. .venv/bin/python -m pytest -q` | 同左 |
-| 收集用例（`--collect-only -q`） | 1052 | 1060 |
-| 通过 / 跳过 | 1044 / 9 | 1056 / 4 |
-| `pytest tests/lifecycle -q` | 211 passed | 211 passed |
+| 收集用例（`--collect-only -q`） | 1053 | 1061 |
+| 通过 / 跳过 | 1045 / 9 | 1057 / 4 |
+| `pytest tests/lifecycle -q` | 212 passed | 212 passed |
 | `ruff check src tests scripts` | 零告警 | 零告警 |
 | `lifecycle_verify.py` | 15/15 PASS | 15/15 PASS |
 
 收集用例差 8 项，全部来自 `tests/syndrome/test_bert_model.py`：本地无
 `transformers`，整模块在收集期跳过（0 项收集、1 条 module-level skip 结果），
-远程 8 项实跑全过；故结果数差 7（本地 1053、远程 1060）。逐文件对账：
+远程 8 项实跑全过；故结果数差 7（本地 1054、远程 1061）。逐文件对账：
 `test_tcm_minimal_demo.py` 本地 3 passed / 6 skipped、远程 9 passed（缺私有工件）；
 `test_real_data_audit.py` 本地 27 passed、远程 25 passed / 2 skipped（该机缺私有导出）；
-`test_ccmq60.py` 两端均 11 passed / 2 skipped；其余文件两端同为 1003 项。
+`test_ccmq60.py` 两端均 11 passed / 2 skipped；其余文件两端同为 1004 项。
 按文件相加与两端总数一致，差异均有明确环境原因，没有把 skip 写成 PASS。
 
 证据级别不变：`LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`；
@@ -439,4 +439,32 @@ cache 与 identities 长度一致；另补 1 项原子性测试（monkeypatch �
 
 本地 `1044 passed, 9 skipped`、`tests/lifecycle` `211 passed`；
 远程 `acam-lab` `1056 passed, 4 skipped`、`tests/lifecycle` `211 passed`；
+两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。证据级别与三门禁不变。
+
+### 10.11 第九轮复评（HEAD `56e9847`）与彻底去掉用户方法调用
+
+第九轮对 `56e9847` 的确认复评：Codex 给出 8.4 / 8.5 并否决，确认第八轮四项原始
+复现已修，但指出仍有 2 项 P2 / 1 项 P3：`kind in (bool, int, str)` 用相等比较会调用
+自定义元类 `__eq__`、`kind.__name__` 会调用元类 `__getattribute__`；`payload.get()`
+会调用恶意键的 `__eq__`，即使请求显式 `status=SAFE_STOP` 也可能抛异常；
+PR 正文的收集用例数仍是旧值。
+
+**处置：身份计算路径不再调用任何用户可覆盖的方法。**
+
+- `_strict_json` 改用逐项 `kind is bool / is int / is str` 身份判断，拒绝理由不再读取
+  不可信类型的属性；字典遍历用非绑定 `dict.items(value)`，杜绝子类覆盖 `items()`。
+- `_is_safe_stop` 先按 `type(x) is str` 检查 Envelope 自身的 `status` / `quality`，
+  显式停止无需触碰 payload；payload 仅在 `type(payload) is dict` 时用
+  `dict.items()` 迭代，键必须 `type(key) is str` 才比较，全程无 `.get()`、
+  无 `upper()`、无 `__str__`。
+- `_request_identity` 把整个记录（含 payload）交给 `_strict_json` 重建后再 `digest`，
+  元数据与 payload 统一走同一严格边界。
+- PR 正文的收集/结果数对账同步为 1053 / 1061 并补齐逐文件相加。
+
+新增 2 项回归（自定义元类类型、恶意键 `__eq__` 下的显式停止 + dict 子类 `items()`），
+5 项突变（身份类型判断、不读类型名、停止精确 dict、状态优先、键精确类型）全部命中。
+累计 43 项突变检查全部命中。
+
+本地 `1045 passed, 9 skipped`、`tests/lifecycle` `212 passed`；
+远程 `acam-lab` `1057 passed, 4 skipped`、`tests/lifecycle` `212 passed`；
 两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。证据级别与三门禁不变。

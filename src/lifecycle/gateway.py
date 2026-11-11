@@ -234,7 +234,9 @@ def _strict_json(value: Any, depth: int = 0) -> Any:
     if depth > _MAX_PAYLOAD_DEPTH:
         raise _UnsafePayload("payload nested too deeply")
     kind = type(value)
-    if value is None or kind in (bool, int, str):
+    # Identity comparisons only: ``in``/``==`` would call a custom metaclass's
+    # __eq__, and reading ``kind.__name__`` would call __getattribute__.
+    if value is None or kind is bool or kind is int or kind is str:
         return value
     if kind is float:
         if not math.isfinite(value):
@@ -244,58 +246,70 @@ def _strict_json(value: Any, depth: int = 0) -> Any:
         return [_strict_json(item, depth + 1) for item in value]
     if kind is dict:
         result = {}
-        for key, item in value.items():
+        for key, item in dict.items(value):
             if type(key) is not str:
                 raise _UnsafePayload("non-string mapping key")
             result[key] = _strict_json(item, depth + 1)
         return result
-    raise _UnsafePayload(f"unsupported value type {kind.__name__}")
+    raise _UnsafePayload("unsupported value type")
 
 
 def _request_identity(req: Envelope) -> str | None:
     """Bind an idempotency key to the request that first used it.
 
-    ``None`` means the payload is not strict canonical JSON and must be refused
+    ``None`` means the request is not strict canonical JSON and must be refused
     rather than hashed. No arbitrary object method is ever called.
     """
     try:
-        payload_json = canonical_json(_strict_json(req.payload))
+        return digest(
+            _strict_json(
+                {
+                    "mode": req.mode,
+                    "session_id": req.session_id,
+                    "trace_id": req.trace_id,
+                    "quality": req.quality,
+                    "status": req.status,
+                    "feature_version": req.feature_version,
+                    "model_version": req.model_version,
+                    "target_version": req.target_version,
+                    "provenance": req.provenance,
+                    "license": req.license,
+                    "evidence_level": req.evidence_level,
+                    "display_gate": req.display_gate,
+                    "payload": req.payload,
+                }
+            )
+        )
     except (_UnsafePayload, TypeError, ValueError, RecursionError, OverflowError):
         return None
-    return digest(
-        {
-            "mode": req.mode,
-            "session_id": req.session_id,
-            "trace_id": req.trace_id,
-            "quality": req.quality,
-            "status": req.status,
-            "feature_version": req.feature_version,
-            "model_version": req.model_version,
-            "target_version": req.target_version,
-            "provenance": req.provenance,
-            "license": req.license,
-            "evidence_level": req.evidence_level,
-            "display_gate": req.display_gate,
-            "payload": payload_json,
-        }
-    )
 
 
 def _is_safe_stop(req: Envelope) -> bool:
-    """Evaluate stop signals using exact types and no overridable methods."""
+    """Evaluate stop signals using identity checks, never ``dict.get`` on a
+    payload whose keys may override ``__eq__``.
+    """
+    # Status/quality come from the Envelope itself; check them first so an
+    # explicit stop never needs to touch a hostile payload.
+    if type(req.status) is str and req.status == STATUS_SAFE_STOP:
+        return True
+    if type(req.quality) is str and req.quality == "safe_stop":
+        return True
     payload = req.payload
-    if type(payload) is dict:
-        if payload.get("safe_stop") is True or payload.get("user_stop") is True:
-            return True
-        signal = payload.get("signal")
-        action = payload.get("action")
-        if type(signal) is str and signal == "SAFE_STOP":
-            return True
-        if type(action) is str and action == "safe_stop":
-            return True
-    return (
-        type(req.status) is str and req.status == STATUS_SAFE_STOP
-    ) or (type(req.quality) is str and req.quality == "safe_stop")
+    if type(payload) is not dict:
+        return False
+    for key, value in dict.items(payload):
+        if type(key) is not str:
+            continue
+        if key == "safe_stop" or key == "user_stop":
+            if value is True:
+                return True
+        elif key == "signal":
+            if type(value) is str and value == "SAFE_STOP":
+                return True
+        elif key == "action":
+            if type(value) is str and value == "safe_stop":
+                return True
+    return False
 
 
 def _extract_feature_names(payload: Mapping[str, Any]) -> set[str]:

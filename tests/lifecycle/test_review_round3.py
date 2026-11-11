@@ -352,6 +352,66 @@ def test_string_subclass_signal_cannot_block_an_explicit_stop():
     assert gw.Gateway().handle(only_signal).status == STATUS_REJECTED
 
 
+def test_custom_metaclass_and_hostile_dict_keys_are_contained():
+    """P2 (round-9 Codex): type checks and stop detection never call user hooks."""
+    class Meta(type):
+        def __eq__(cls, other):
+            raise RuntimeError("metaclass eq")
+
+        def __getattribute__(cls, name):
+            if name == "__name__":
+                raise RuntimeError("metaclass name")
+            return super().__getattribute__(name)
+
+    class Weird(metaclass=Meta):
+        pass
+
+    assert gw._request_identity(
+        gw.make_envelope(request_id="meta", payload={"v": Weird()})
+    ) is None
+    assert gw.Gateway().handle(
+        gw.make_envelope(request_id="meta", payload={"v": Weird()})
+    ).status == STATUS_REJECTED
+
+    class BadKey(str):
+        def __eq__(self, other):
+            raise RuntimeError("key eq")
+
+        def __hash__(self):
+            return hash(str(self))
+
+    hostile = {BadKey("safe_stop"): "x"}
+    only_hostile = {BadKey("safe_stop"): "x"}
+    with_flag = dict(hostile)
+    with_flag["user_stop"] = True
+    for req in (
+        gw.make_envelope(
+            request_id="stop-key", status=gw.STATUS_SAFE_STOP, payload=only_hostile
+        ),
+        gw.make_envelope(request_id="stop-key-2", payload=with_flag),
+    ):
+        res = gw.Gateway().handle(req)
+        assert res.status == STATUS_SAFE_STOP
+        assert res.payload["control_command"] is None
+
+    class HostileDict(dict):
+        def items(self):
+            raise RuntimeError("items hook")
+
+    # Envelope is a frozen dataclass: a dict subclass can reach the Python
+    # object entry point without being copied by make_envelope.
+    direct = gw.Envelope(
+        schema_version="ml-lifecycle-contracts-v1",
+        request_id="sd", session_id="S1", trace_id="t", mode=gw.MODE_A_PRE_ONLY,
+        event_time="", feature_version="v1", model_version="v1",
+        target_version="v1", quality="ok", status=gw.STATUS_OK,
+        provenance="test", license="test", evidence_level=gw.EVIDENCE_SYNTHETIC,
+        display_gate="", payload=HostileDict({"safe_stop": True}),
+    )
+    assert gw._is_safe_stop(direct) is False
+    assert gw.Gateway().handle(direct).status == STATUS_REJECTED
+
+
 def test_canonical_json_identity_is_exact_and_order_independent():
     """No truncation: distinct leaves stay distinct; dict insertion order is irrelevant."""
     first = {"a": 1, "b": 2, "c": 3}
