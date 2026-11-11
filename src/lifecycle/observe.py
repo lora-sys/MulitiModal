@@ -95,9 +95,8 @@ _RESERVED_WORDS = frozenset({"id", "ref", "key"})
 _VALUE_WORDS = frozenset({"age", "sex", "gender", "height", "weight", "bmi", "heart", "spo2", "bp"})
 _WORD_PATTERN = re.compile(r"[A-Za-z0-9]+")
 _EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE_PATTERN = re.compile(r"\b\d{3}[- ]\d{3}[- ]\d{4}\b")
-_LONG_ID_PATTERN = re.compile(r"\b\d{9,}\b")
-_RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_PHONE_PATTERN = re.compile(r"\b\d{3}[-. ]\d{3}[-. ]\d{4}\b|\(\d{3}\)\s*\d{3}-\d{4}")
+_LONG_ID_PATTERN = re.compile(r"\b\d{3,}(?:[- ]\d{3,}){2,}\b|\b\d{9,}\b")
 _METRIC_KEY_PATTERN = re.compile(
     r"(?:[a-z]+(?:_[a-z0-9]+)*_)?(?:latency|duration)(?:_(?:ms|seconds))?(?:_p\d+)?"
 )

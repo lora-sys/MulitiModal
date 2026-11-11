@@ -53,8 +53,8 @@ from .contracts import (
     utc_now,
 )
 
-PIPELINE_VERSION = "ml-lifecycle-pipeline-v3"
-_HIGH_PRECISION_TIME = re.compile(r"^(.*\d{2}:\d{2}:\d{2})[.,](\d+)(Z|[+-].*)$")
+PIPELINE_VERSION = "ml-lifecycle-pipeline-v4"
+_HIGH_PRECISION_TIME = re.compile(r"^(.*\d{2}:\d{2}:\d{2})[.,](\d+)(Z|[+-].*)?$")
 STATE_FILE = "pipeline_state.json"
 QUARANTINE_FILE = "quarantine.jsonl"
 QC_FILE = "qc_report.json"
@@ -369,11 +369,13 @@ def _canonical_event_time(value: str) -> str:
     high_precision = _HIGH_PRECISION_TIME.fullmatch(value)
     if high_precision:
         prefix, fraction, suffix = high_precision.groups()
+        suffix = suffix or ""
         parser_input = f"{prefix}.123456{suffix}"
-        parser_input = parser_input.replace("Z", "+00:00")
+        fraction = fraction.rstrip("0") or "0"
     else:
         fraction = ""
-        parser_input = value.replace("Z", "+00:00").replace(",", ".")
+        parser_input = value
+    parser_input = parser_input.replace("Z", "+00:00").replace(",", ".")
     try:
         parsed = datetime.fromisoformat(parser_input)
     except (ValueError, TypeError):
@@ -381,7 +383,7 @@ def _canonical_event_time(value: str) -> str:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     canonical = parsed.astimezone(UTC).isoformat()
-    if fraction:
+    if high_precision:
         canonical = canonical.replace("123456", fraction, 1)
     return canonical
 

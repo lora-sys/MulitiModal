@@ -346,3 +346,29 @@ def test_experiment_record_rejects_raw_identifiers_without_writing(tmp_path):
             path=path,
         )
     assert not path.exists()
+
+
+def test_equivalent_fraction_widths_and_naive_high_precision_are_stable():
+    """Final review: width, separator, offset and naive UTC never change identity."""
+    assert pl._canonical_event_time("2026-11-01T09:00:00.100000Z") == (
+        pl._canonical_event_time("2026-11-01T10:00:00,1+01:00")
+    )
+    assert pl._canonical_event_time("2026-11-01T09:00:00.12345610Z") == (
+        pl._canonical_event_time("2026-11-01T10:00:00,1234561+01:00")
+    )
+    assert pl._canonical_event_time("2026-11-01T09:00:00.1234561") != (
+        pl._canonical_event_time("2026-11-01T09:00:00.1234569")
+    )
+    assert pl._canonical_event_time("2026-11-01T09:00:00,1234561") != (
+        pl._canonical_event_time("2026-11-01T09:00:00,1234569")
+    )
+
+
+@pytest.mark.parametrize(
+    "identifier",
+    ["555.123.4567", "(555) 123-4567", "123-456-789-012", "123 456 789 012"],
+)
+def test_grouped_identifier_formats_are_rejected(identifier):
+    """Final review: separator variants cannot bypass identifier checks."""
+    with pytest.raises(ob.ObserveError, match="raw subject identifier"):
+        ob._check_text(identifier, "reason")
