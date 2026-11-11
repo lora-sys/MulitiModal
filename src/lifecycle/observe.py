@@ -7,6 +7,7 @@ training, promotion, publishing or research claim is performed here.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import threading
@@ -23,7 +24,6 @@ from .contracts import (
     EVIDENCE_LEVELS,
     GATE_ENGINEERING,
     GATE_GRANTED,
-    GATE_NOT_GRANTED,
     GATE_REAL_DATA_TRAINING,
     GATE_RESEARCH_CLAIMS,
     ISOLATION_UNVERIFIED,
@@ -51,7 +51,9 @@ except ImportError:  # pragma: no cover - POSIX-only advisory lock
 
 _CHAIN_LOCK = threading.Lock()
 
-OBSERVE_VERSION = "ml-lifecycle-observe-v1"
+OBSERVE_VERSION = "ml-lifecycle-observe-v2"
+LEGACY_OBSERVE_VERSION = "ml-lifecycle-observe-v1"
+SUPPORTED_OBSERVE_VERSIONS = (OBSERVE_VERSION, LEGACY_OBSERVE_VERSION)
 GENESIS_SHA256 = "0" * 64
 MEASURED = "MEASURED"
 DECLARED = "DECLARED"
@@ -73,6 +75,7 @@ AGGREGATE_COUNT_KEYS = frozenset(
         "n_rejected",
         "n_duplicate",
         "n_unknown_columns",
+        "rows",
     }
 )
 _UNAVAILABLE_STATUSES = frozenset(
@@ -93,10 +96,37 @@ _RAW_WORDS = frozenset({"raw", "value", "physiology", "signal", "waveform", "sam
 _RESERVED_WORDS = frozenset({"id", "ref", "key"})
 _VALUE_WORDS = frozenset({"age", "sex", "gender", "height", "weight", "bmi", "heart", "spo2", "bp"})
 _WORD_PATTERN = re.compile(r"[A-Za-z0-9]+")
+_EMAIL_PATTERN = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_PHONE_PATTERN = re.compile(r"\b\d{3}[-. ]\d{3}[-. ]\d{4}\b|\(\d{3}\)\s*\d{3}-\d{4}")
+_LONG_ID_PATTERN = re.compile(r"\b\d{3,}(?:[- ]\d{3,}){2,}\b|\b\d{9,}\b")
+_METRIC_KEY_PATTERN = re.compile(
+    r"(?:[a-z]+(?:_[a-z0-9]+)*_)?(?:latency|duration)(?:_(?:ms|seconds))?(?:_p\d+)?"
+)
 
 
 class ObserveError(ValueError):
     """Raised when an observation would record private data or forged evidence."""
+
+
+def _is_aggregate_metric_key(key: str) -> bool:
+    if _METRIC_KEY_PATTERN.fullmatch(key) is None:
+        return False
+    words = frozenset(_WORD_PATTERN.findall(key.lower()))
+    return not (
+        words & _IDENTIFIER_WORDS
+        or words & _RESERVED_WORDS
+        or words & _RAW_WORDS
+        or words & _VALUE_WORDS
+    )
+
+
+def _check_text(value: str, field: str) -> None:
+    if (
+        _EMAIL_PATTERN.search(value)
+        or _PHONE_PATTERN.search(value)
+        or _LONG_ID_PATTERN.search(value)
+    ):
+        raise ObserveError(f"{field} must not contain a raw subject identifier")
 
 
 def _check_counts(counts: Any) -> None:
@@ -105,16 +135,8 @@ def _check_counts(counts: Any) -> None:
     for key, value in counts.items():
         if not isinstance(key, str):
             raise ObserveError("count keys must be strings")
-        words = frozenset(_WORD_PATTERN.findall(key.lower()))
-        if words & _IDENTIFIER_WORDS or words & _RESERVED_WORDS:
-            raise ObserveError(f"counts key {key!r} names a raw subject identifier")
-        if words & _RAW_WORDS or words & _VALUE_WORDS:
-            raise ObserveError(f"counts key {key!r} names a per-row raw value")
-        parts = words - {
-            "n", "count", "total", "rate", "ratio", "avg", "mean", "p50", "p95", "p99",
-        }
-        if not parts:
-            raise ObserveError(f"counts key {key!r} is not an aggregate counter")
+        if key not in AGGREGATE_COUNT_KEYS and not _is_aggregate_metric_key(key):
+            raise ObserveError(f"counts key {key!r} is not an approved aggregate counter")
         if isinstance(value, Mapping) or isinstance(value, (list, tuple, set)):
             raise ObserveError(f"count {key!r} must be a scalar, not a per-row collection")
         if isinstance(value, (int, float)) and not isinstance(value, bool):
@@ -160,14 +182,17 @@ class StageEvent:
             raise ObserveError(f"unknown evidence_level {self.evidence_level!r}")
         if not isinstance(self.reason, str) or not self.reason.strip():
             raise ObserveError("reason is required")
-        if self.version != OBSERVE_VERSION:
+        if self.version not in SUPPORTED_OBSERVE_VERSIONS:
             raise ObserveError(f"unsupported observe schema {self.version!r}")
         object.__setattr__(self, "counts", dict(self.counts))
         self.validate()
 
     def validate(self) -> None:
         """Refuse raw subject identifiers and per-row values in the event."""
+        _parse_timestamp(self.event_time)
         _check_counts(self.counts)
+        _check_text(self.run_id, "run_id")
+        _check_text(self.reason, "reason")
         words = frozenset(_WORD_PATTERN.findall(self.run_id.lower()))
         if words & _IDENTIFIER_WORDS or words & _RAW_WORDS:
             raise ObserveError("run_id must not contain a raw subject identifier")
@@ -381,10 +406,12 @@ def readiness_report(evidence: Sequence[StageEvidence]) -> dict[str, Any]:
     """Combine per-stage evidence; engineering GO cannot grant the other gates."""
     reasons: list[str] = []
     stages: dict[str, Any] = {}
-    engineering_go = bool(evidence)
-    for item in evidence:
+    records = list(evidence)
+    for item in records:
         if not isinstance(item, StageEvidence):
             raise ObserveError("readiness_report requires StageEvidence records")
+        if item.stage in stages:
+            raise ObserveError(f"duplicate stage evidence {item.stage!r}")
         stages[item.stage] = {
             "decision": "GO" if item.go else "NO-GO",
             "gate": item.gate,
@@ -393,13 +420,21 @@ def readiness_report(evidence: Sequence[StageEvidence]) -> dict[str, Any]:
             "artifacts": list(item.artifacts),
         }
         if not item.go:
-            engineering_go = False
             reasons.append(f"{item.stage}: NO-GO ({item.reason})")
         elif item.gate != GATE_GRANTED:
-            engineering_go = False
             reasons.append(f"{item.stage}: gate is {item.gate}, not {GATE_GRANTED}")
-    if not evidence:
+    engineering_go = bool(records) and all(
+        item.go and item.gate == GATE_GRANTED for item in records
+    )
+    if not records:
         reasons.append("no stage evidence declared")
+    if len(stages) != len(records):
+        reasons.append("duplicate stage evidence")
+    if not engineering_go and not any(
+        reason.startswith(("no stage", "ingest:", "validate:", "features:"))
+        for reason in reasons
+    ):
+        reasons.append("engineering GO requires complete stage evidence")
     reasons.append(
         f"{GATE_REAL_DATA_TRAINING} requires an approved frozen dataset and independent evidence"
     )
@@ -444,14 +479,12 @@ def on_new_data(
         "auto_promote": False,
         "auto_publish": False,
         "reason": HUMAN_APPROVAL_REQUIRED,
-        "gates": gate_bundle(True),
         "measurement": DECLARED,
     }
-    plan["gates"][GATE_REAL_DATA_TRAINING] = GATE_NOT_GRANTED
-    plan["gates"][GATE_RESEARCH_CLAIMS] = GATE_NOT_GRANTED
+    plan["readiness"] = readiness_report(tuple(evidence or ()))
+    plan["gates"] = dict(plan["readiness"]["gates"])
     plan["qc_sha256"] = qc.sha256 if qc else None
     plan["drift"] = drift_check(previous_qc, qc) if qc and previous_qc else None
-    plan["readiness"] = readiness_report(tuple(evidence or ()))
     plan["dataset_approval"] = dataset_approval
     plan["frozen"] = frozen
     plan["candidate_preparation"] = {
@@ -471,14 +504,38 @@ def _duplicate_rate(qc: QCReport) -> float:
 
 
 def _unknown_columns(qc: QCReport) -> tuple[str, ...]:
+    """Return exact column identifiers from structured drift messages.
+
+    ``unknown columns ['sensor_x']`` is emitted by the pipeline with a Python
+    list literal. Tokenizing words loses underscores, punctuation and non-ASCII
+    names, and filtering x/y/z hides real columns. Parse the list instead. Any
+    legacy free-text drift note is kept verbatim rather than reconstructed.
+    """
     marker = "unknown columns"
-    return tuple(
-        name
-        for item in qc.drift
-        if isinstance(item, str) and marker in item
-        for name in _WORD_PATTERN.findall(item.split(marker, 1)[1].lower())
-        if name not in {"x", "y", "z"} and not name.isdigit()
-    )
+    names: list[str] = []
+    for item in qc.drift:
+        if not isinstance(item, str) or marker not in item:
+            continue
+        starts = [i for i in range(len(item)) if item.startswith(marker, i)]
+        parsed = None
+        for start in starts:
+            raw = item[start + len(marker) :].strip()
+            if not (raw.startswith("[") and raw.endswith("]")):
+                continue
+            try:
+                candidate = ast.literal_eval(raw)
+            except (ValueError, SyntaxError):
+                continue
+            if isinstance(candidate, (list, tuple)):
+                parsed = candidate
+                break
+        if parsed is not None:
+            names.extend(str(name) for name in parsed)
+        else:
+            raw = item.rsplit(marker, 1)[1].strip()
+            if not raw.lower().startswith(("detected", "found", "none", "0 ")):
+                names.append(raw)
+    return tuple(dict.fromkeys(names))
 
 
 def drift_check(previous_qc: QCReport, current_qc: QCReport) -> dict[str, Any]:
@@ -525,6 +582,8 @@ def experiment_record(
         raise ObserveError("run_id is required")
     if not isinstance(reason, str) or not reason.strip():
         raise ObserveError("reason is required")
+    _check_text(run_id, "run_id")
+    _check_text(reason, "reason")
     record = {
         "schema_version": OBSERVE_VERSION,
         "decision": decision,

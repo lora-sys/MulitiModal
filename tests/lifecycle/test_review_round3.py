@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -382,13 +383,14 @@ def test_canonical_json_identity_is_exact_and_order_independent():
     """No truncation: distinct leaves stay distinct; dict insertion order is irrelevant."""
     first = {"a": 1, "b": 2, "c": 3}
     second = {"c": 3, "b": 2, "a": 1}
+    fixed_time = datetime.now(UTC).isoformat()
     base = gw.make_envelope(
         request_id="ordered", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-        payload={"features": first},
+        event_time=fixed_time, payload={"features": first},
     )
     replay = gw.make_envelope(
         request_id="ordered", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-        payload={"features": second},
+        event_time=fixed_time, payload={"features": second},
     )
     gateway = gw.Gateway()
     assert gateway.handle(base).status == STATUS_OK
@@ -400,11 +402,11 @@ def test_canonical_json_identity_is_exact_and_order_independent():
         leaf_a, leaf_b = {"knowledge": leaf_a}, {"knowledge": leaf_b}
     deep_a = gw.make_envelope(
         request_id="deep", session_id="S1", mode=gw.MODE_C_TCM,
-        payload={"knowledge": leaf_a},
+        event_time=fixed_time, payload={"knowledge": leaf_a},
     )
     deep_b = gw.make_envelope(
         request_id="deep", session_id="S1", mode=gw.MODE_C_TCM,
-        payload={"knowledge": leaf_b},
+        event_time=fixed_time, payload={"knowledge": leaf_b},
     )
     gateway = gw.Gateway()
     assert gateway.handle(deep_a).status == STATUS_OK
@@ -413,10 +415,12 @@ def test_canonical_json_identity_is_exact_and_order_independent():
 
 def test_typed_canonical_json_does_not_collide():
     """1.0, 'float:1.0', 1 and True must be four different requests."""
+    fixed_time = datetime.now(UTC).isoformat()
+
     def envelope(payload):
         return gw.make_envelope(
             request_id="typed", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-            payload={"value": payload},
+            event_time=fixed_time, payload={"value": payload},
         )
     gateway = gw.Gateway()
     assert gateway.handle(envelope(1.0)).status == STATUS_OK
@@ -508,14 +512,15 @@ def test_refused_request_writes_no_partial_cache_state():
 def test_non_json_payload_still_distinguishes_conflicting_requests():
     """Controlled refusal does not silently cache a conflicting identity."""
     gateway = gw.Gateway()
+    fixed_time = datetime.now(UTC).isoformat()
     first = gw.make_envelope(
         request_id="opaque", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-        payload={"value": 7},
+        event_time=fixed_time, payload={"value": 7},
     )
     assert gateway.handle(first).status == STATUS_OK
     conflict = gw.make_envelope(
         request_id="opaque", session_id="S2", mode=gw.MODE_B_REALTIME,
-        payload={"value": 7},
+        event_time=fixed_time, payload={"value": 7},
     )
     res = gateway.handle(conflict)
     assert res.status == STATUS_REJECTED
@@ -526,13 +531,15 @@ def test_non_json_payload_still_distinguishes_conflicting_requests():
 def test_idempotency_key_cannot_be_reused_across_modes_or_sessions():
     """P2 (round-4 Codex): a cached mode-A answer must not leak to mode B/S2."""
     gateway = gw.Gateway()
+    fixed_time = datetime.now(UTC).isoformat()
     first = gw.make_envelope(
         request_id="shared-id", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
-        payload={"features": {"pre_hr": 70}},
+        event_time=fixed_time, payload={"features": {"pre_hr": 70}},
     )
     assert gateway.handle(first).status == STATUS_OK
     conflicting = gw.make_envelope(
-        request_id="shared-id", session_id="S2", mode=gw.MODE_B_REALTIME, payload={}
+        request_id="shared-id", session_id="S2", mode=gw.MODE_B_REALTIME,
+        event_time=fixed_time, payload={}
     )
     res = gateway.handle(conflicting)
     assert res.status == STATUS_REJECTED

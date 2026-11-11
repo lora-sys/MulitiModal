@@ -23,8 +23,10 @@ import csv
 import hashlib
 import io
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +53,12 @@ from .contracts import (
     utc_now,
 )
 
-PIPELINE_VERSION = "ml-lifecycle-pipeline-v1"
+PIPELINE_VERSION = "ml-lifecycle-pipeline-v9"
+_ISO_TIME = re.compile(
+    r"^(?P<prefix>\d{4}-?\d{2}-?\d{2}T\d{2}:?\d{2}(?::?\d{2})?)"
+    r"(?:[.,](?P<fraction>\d+))?"
+    r"(?P<offset>Z|[+-]\d{2}(?::?\d{2}){0,2})?$"
+)
 STATE_FILE = "pipeline_state.json"
 QUARANTINE_FILE = "quarantine.jsonl"
 QC_FILE = "qc_report.json"
@@ -354,18 +361,49 @@ def _read_rows(batch: Batch, ws: _Workspace) -> list[dict[str, str]]:
         return rows
 
 
+def _canonical_event_time(value: str) -> str:
+    """Normalize supported ISO timestamps to a lossless UTC representation.
+
+    Equivalent instants share one key. Fractional digits are preserved, and any
+    timestamp format that cannot be normalized without loss stays verbatim so
+    malformed or unsupported input remains visible to QC instead of merging.
+    """
+    if not value:
+        return value
+    match = _ISO_TIME.fullmatch(value)
+    if match is None:
+        return value
+    prefix, fraction, offset = match.groups()
+    fraction = (fraction or "").rstrip("0")
+    suffix = "+00:00" if (offset or "Z") == "Z" else offset
+    try:
+        parsed = datetime.fromisoformat(prefix + suffix)
+    except (ValueError, TypeError, OverflowError):
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    try:
+        canonical = parsed.astimezone(UTC).isoformat()
+    except OverflowError:
+        return value
+    if fraction:
+        canonical = canonical.replace("+00:00", f".{fraction}+00:00", 1)
+    return canonical
+
+
 def _row_key(row: Mapping[str, str]) -> str:
     """Idempotency key: stable across replay, resends and out-of-order arrival."""
-    return digest(
-        {
-            "session_id": row.get("session_id", ""),
-            "subject_ref": row.get("subject_ref", ""),
-            "phase": row.get("phase", ""),
-            "metric": row.get("metric", ""),
-            "source_record": row.get("source_record", ""),
-            "event_time": row.get("event_time", ""),
-        }
-    )
+    identity = {
+        "session_id": row.get("session_id", ""),
+        "subject_ref": row.get("subject_ref", ""),
+        "phase": row.get("phase", ""),
+        "metric": row.get("metric", ""),
+        "source_record": row.get("source_record", ""),
+        "event_time": _canonical_event_time(row.get("event_time", "")),
+    }
+    if not identity["source_record"] and not identity["event_time"]:
+        identity["record_id"] = row.get("record_id", "")
+    return digest(identity)
 
 
 def _normalize_row(raw: Mapping[str, str], batch: Batch) -> NormalizedRow:
@@ -427,7 +465,7 @@ def _normalize_row(raw: Mapping[str, str], batch: Batch) -> NormalizedRow:
         quality=quality,
         origin=origin,
         source_record=raw.get("source_record", ""),
-        event_time=raw.get("event_time", ""),
+        event_time=_canonical_event_time(raw.get("event_time", "")),
         received_at=raw.get("received_at", ""),
         observed=observed,
         valid=valid,
