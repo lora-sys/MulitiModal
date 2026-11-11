@@ -359,6 +359,7 @@ def _request_identity(req: Envelope) -> str:
             "license": req.license,
             "evidence_level": req.evidence_level,
             "display_gate": req.display_gate,
+            "event_time": req.event_time,
             "payload": req.payload,
         }
     )

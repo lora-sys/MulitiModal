@@ -7,6 +7,7 @@ training, promotion, publishing or research claim is performed here.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import threading
@@ -167,6 +168,7 @@ class StageEvent:
 
     def validate(self) -> None:
         """Refuse raw subject identifiers and per-row values in the event."""
+        _parse_timestamp(self.event_time)
         _check_counts(self.counts)
         words = frozenset(_WORD_PATTERN.findall(self.run_id.lower()))
         if words & _IDENTIFIER_WORDS or words & _RAW_WORDS:
@@ -471,14 +473,30 @@ def _duplicate_rate(qc: QCReport) -> float:
 
 
 def _unknown_columns(qc: QCReport) -> tuple[str, ...]:
+    """Return exact column identifiers from structured drift messages.
+
+    ``unknown columns ['sensor_x']`` is emitted by the pipeline with a Python
+    list literal. Tokenizing words loses underscores, punctuation and non-ASCII
+    names, and filtering x/y/z hides real columns. Parse the list instead. Any
+    legacy free-text drift note is kept verbatim rather than reconstructed.
+    """
     marker = "unknown columns"
-    return tuple(
-        name
-        for item in qc.drift
-        if isinstance(item, str) and marker in item
-        for name in _WORD_PATTERN.findall(item.split(marker, 1)[1].lower())
-        if name not in {"x", "y", "z"} and not name.isdigit()
-    )
+    names: list[str] = []
+    for item in qc.drift:
+        if not isinstance(item, str) or marker not in item:
+            continue
+        raw = item.split(marker, 1)[1].strip()
+        parsed = None
+        if raw.startswith("[") and raw.endswith("]"):
+            try:
+                parsed = ast.literal_eval(raw)
+            except (ValueError, SyntaxError):
+                parsed = None
+        if isinstance(parsed, (list, tuple)):
+            names.extend(str(name) for name in parsed)
+        else:
+            names.append(raw)
+    return tuple(dict.fromkeys(names))
 
 
 def drift_check(previous_qc: QCReport, current_qc: QCReport) -> dict[str, Any]:

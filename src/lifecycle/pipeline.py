@@ -25,6 +25,7 @@ import io
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -354,6 +355,24 @@ def _read_rows(batch: Batch, ws: _Workspace) -> list[dict[str, str]]:
         return rows
 
 
+def _canonical_event_time(value: str) -> str:
+    """Normalize ISO timestamps to one UTC instant for stable identity keys.
+
+    Equivalent instants written with different UTC offsets must not create two
+    rows. Unparseable values are kept verbatim so malformed input stays visible
+    to QC instead of being silently merged. Naive timestamps are treated as UTC.
+    """
+    if not value:
+        return value
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return value
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).isoformat()
+
+
 def _row_key(row: Mapping[str, str]) -> str:
     """Idempotency key: stable across replay, resends and out-of-order arrival."""
     return digest(
@@ -363,7 +382,7 @@ def _row_key(row: Mapping[str, str]) -> str:
             "phase": row.get("phase", ""),
             "metric": row.get("metric", ""),
             "source_record": row.get("source_record", ""),
-            "event_time": row.get("event_time", ""),
+            "event_time": _canonical_event_time(row.get("event_time", "")),
         }
     )
 
@@ -427,7 +446,7 @@ def _normalize_row(raw: Mapping[str, str], batch: Batch) -> NormalizedRow:
         quality=quality,
         origin=origin,
         source_record=raw.get("source_record", ""),
-        event_time=raw.get("event_time", ""),
+        event_time=_canonical_event_time(raw.get("event_time", "")),
         received_at=raw.get("received_at", ""),
         observed=observed,
         valid=valid,
