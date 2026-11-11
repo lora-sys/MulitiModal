@@ -246,6 +246,9 @@ QC_MISSING_MODULE = "missing_module"
 QC_MISSING_FIELD = "missing_field"
 QC_INVALID_VALUE = "invalid_value"
 QC_SINGLE_ENDPOINT = "single_endpoint_record"
+QC_OVERLAPPING_ENDPOINTS = "overlapping_endpoint_records"
+QC_RECORD_REUSED = "record_reused_across_sessions"
+QC_SESSION_OVERLAP = "overlapping_session_windows"
 QC_SNAPSHOT_ENDPOINT = "snapshot_endpoint"
 QC_BP_DELTA_ANOMALY = "bp_delta_anomaly"
 QC_HR_CROSS_MODULE_MISMATCH = "hr_cross_module_mismatch"
@@ -520,6 +523,7 @@ def _merge_endpoint(
     measurements: list[MeasurementV1] = []
     for raw_column, metric, _label_key in MODULE_METRIC_COLUMNS[module]:
         chosen: MeasurementV1 | None = None
+        value_source_record = ""
         for record in ordered:
             value = record.value(raw_column)
             if value is None:
@@ -527,9 +531,11 @@ def _merge_endpoint(
             routed = route_measurement(raw_column, value, _UNIT_OVERRIDES.get(raw_column, ""))
             if routed.valid:
                 chosen = routed
+                value_source_record = record.record_id
                 break
         if chosen is None:
             value = ordered[0].value(raw_column)
+            value_source_record = ordered[0].record_id
             chosen = route_measurement(raw_column, value, _UNIT_OVERRIDES.get(raw_column, ""))
             issues.append(
                 RealQCIssue(
@@ -549,7 +555,10 @@ def _merge_endpoint(
                 raw_metric=raw_column,
                 raw_value=chosen.raw_value,
                 raw_unit=chosen.raw_unit,
-                notes=chosen.notes + (f"endpoint_record={anchor.record_id}",),
+                notes=chosen.notes + (
+                    f"endpoint_record={anchor.record_id}",
+                    f"value_source_record={value_source_record}",
+                ),
             )
         )
     event = PhysioEventV1(
@@ -661,6 +670,20 @@ def _draft_session(session_id: str, records: Sequence[RealRecord]) -> RealSessio
             continue
         pre_group = _endpoint_group(module_records, last=False)
         post_group = _endpoint_group(module_records, last=True)
+        repeated = {record.record_id for record in pre_group} & {
+            record.record_id for record in post_group
+        }
+        if repeated:
+            draft.issues.append(
+                RealQCIssue(
+                    QC_OVERLAPPING_ENDPOINTS,
+                    f"module {module!r} Pre/Post endpoint groups reuse records: "
+                    + ",".join(sorted(repeated)),
+                    session_id,
+                )
+            )
+            # The same measurement must never count as both Pre and Post.
+            continue
         if len(pre_group) < 2 and len(post_group) < 2 and len(module_records) < 2:
             draft.issues.append(
                 RealQCIssue(
@@ -794,6 +817,42 @@ def build_real_sessions(
         grouped.setdefault(record.session_id, []).append(record)
     drafts = [_draft_session(session_id, grouped[session_id]) for session_id in sorted(grouped)]
 
+    # A raw measurement cannot independently support labels in two Sessions.
+    owners: dict[tuple[str, str], set[str]] = {}
+    for draft in drafts:
+        for record in draft.records:
+            owners.setdefault((record.source_type, record.record_id), set()).add(draft.session_id)
+    for draft in drafts:
+        reused = sorted(
+            {
+                f"{module}:{record_id}"
+                for (module, record_id), ids in owners.items()
+                if draft.session_id in ids and len(ids) > 1
+            }
+        )
+        if reused:
+            draft.issues.append(
+                RealQCIssue(
+                    QC_RECORD_REUSED,
+                    "source records appear in more than one Session: " + ",".join(reused),
+                    draft.session_id,
+                )
+            )
+
+    # Check overlap by explicit subject key, not by a legacy shared account.
+    by_subject: dict[str, list[RealSessionDraft]] = {}
+    for draft in drafts:
+        by_subject.setdefault(draft.subject_ref, []).append(draft)
+    for subject_drafts in by_subject.values():
+        ordered_drafts = sorted(
+            subject_drafts, key=lambda item: (item.window_start, item.session_id)
+        )
+        for left, right in zip(ordered_drafts, ordered_drafts[1:]):
+            if right.window_start < left.window_end:
+                detail = f"Session windows overlap: {left.session_id} and {right.session_id}"
+                left.issues.append(RealQCIssue(QC_SESSION_OVERLAP, detail, left.session_id))
+                right.issues.append(RealQCIssue(QC_SESSION_OVERLAP, detail, right.session_id))
+
     members = {draft.member_ref for draft in drafts}
     subjects = {draft.subject_ref for draft in drafts}
     shared_identity = len(members) < len(subjects)
@@ -860,6 +919,19 @@ def _metric_of_reference_key(label_key: str) -> str:
     return label_key.removeprefix("y_delta_")
 
 
+def _metric_record(endpoint: RealEndpoint, metric: str) -> str:
+    """Return the record supplying this metric rather than the group anchor."""
+    measurement = endpoint.measurement(metric)
+    if measurement is None:
+        return ""
+    sources = [
+        note.removeprefix("value_source_record=")
+        for note in measurement.notes
+        if note.startswith("value_source_record=")
+    ]
+    return sources[0] if len(sources) == 1 else ""
+
+
 def session_labels(session: RealSession) -> RealSessionLabels:
     """Rebuild the reference ``y_delta_*`` labels from the raw endpoints."""
     values: dict[str, float | None] = {}
@@ -868,6 +940,26 @@ def session_labels(session: RealSession) -> RealSessionLabels:
     excluded: list[str] = []
     cross_module: dict[str, float | None] = {}
     issues: list[RealQCIssue] = []
+
+    blocked = next(
+        (
+            code
+            for code in (QC_RECORD_REUSED, QC_SESSION_OVERLAP, QC_OVERLAPPING_ENDPOINTS)
+            if code in session.issue_codes()
+        ),
+        "",
+    )
+    if blocked:
+        for key in REFERENCE_LABEL_KEYS:
+            values[key], mask[key], reasons[key] = None, False, blocked
+        return RealSessionLabels(
+            session_id=session.session_id,
+            values=values,
+            mask=mask,
+            reasons=reasons,
+            excluded_bp_labels=(),
+            cross_module_hr={},
+        )
 
     for module in LABEL_MODULE_PRIORITY:
         module_endpoints = session.endpoints.get(module, {})
@@ -885,11 +977,22 @@ def session_labels(session: RealSession) -> RealSessionLabels:
             scale = REFERENCE_VALUE_SCALE.get(_metric_of_reference_key(label_key), 1.0)
             raw_value = admission.values.get(canonical_key)
             value = None if raw_value is None else _round(float(raw_value) * scale)
+            is_available = bool(admission.mask.get(canonical_key))
+            if is_available and canonical_key.startswith("y_delta_"):
+                metric = canonical_key.removeprefix("y_delta_")
+                pre_source = _metric_record(pre, metric)
+                post_source = _metric_record(post, metric)
+                if not pre_source or not post_source:
+                    reason, is_available = "unverified_metric_source_record", False
+                elif pre_source == post_source:
+                    reason, is_available = "same_metric_source_record", False
+                if not is_available:
+                    value = None
             if label_key in mask:
                 cross_module[label_key] = value
                 continue
             values[label_key] = value
-            mask[label_key] = bool(admission.mask.get(canonical_key))
+            mask[label_key] = is_available
             reasons[label_key] = (
                 reason
                 if label_key in REFERENCE_LABEL_KEYS
@@ -1030,12 +1133,24 @@ def session_feature_row(session: RealSession) -> FeatureRow:
 
 
 def session_post_state(session: RealSession) -> float | None:
-    """Vendor fatigue index at the Post endpoint, used only as a smoke target."""
+    """Vendor Post proxy, only when the independent endpoint pair is verifiable."""
+    if any(
+        code in session.issue_codes()
+        for code in (QC_RECORD_REUSED, QC_SESSION_OVERLAP, QC_OVERLAPPING_ENDPOINTS)
+    ):
+        return None
     endpoint = session.endpoints.get("health", {}).get(PHASE_POST)
     if endpoint is None:
         return None
     measurement = endpoint.measurement("fatigue_index")
     if measurement is None or not measurement.valid or measurement.value is None:
+        return None
+    pre = session.endpoints.get("health", {}).get(PHASE_PRE)
+    if pre is None:
+        return None
+    pre_source = _metric_record(pre, "fatigue_index")
+    post_source = _metric_record(endpoint, "fatigue_index")
+    if not pre_source or not post_source or pre_source == post_source:
         return None
     return float(measurement.value) / 100.0
 
