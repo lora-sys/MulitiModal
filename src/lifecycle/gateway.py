@@ -11,6 +11,7 @@ import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import fields as dc_fields
 from datetime import UTC, datetime
 from typing import Any
 
@@ -219,23 +220,21 @@ def _structured_names(container: Any) -> set[str]:
 
 _MAX_PAYLOAD_DEPTH = 64
 
+# A request is admitted only after it has been rebuilt from exact built-in JSON
+# values. Nothing downstream (str(), .get(), "in", ==) ever sees an untrusted
+# object, so no user-overridable method can run during identity computation.
+_ENVELOPE_FIELDS = tuple(field.name for field in dc_fields(Envelope))
+
 
 class _UnsafePayload(Exception):
-    """Raised internally when a payload is not a strict JSON value."""
+    """Raised internally when a request is not strict JSON."""
 
 
 def _strict_json(value: Any, depth: int = 0) -> Any:
-    """Rebuild a value from exact built-in JSON types only.
-
-    ``json.dumps`` on arbitrary objects calls user-overridable methods
-    (``__lt__`` via sort_keys, key coercion, subclass hooks). Accepting only
-    exact built-in types means no user code runs during identity computation.
-    """
+    """Rebuild a value from exact built-in JSON types only."""
     if depth > _MAX_PAYLOAD_DEPTH:
-        raise _UnsafePayload("payload nested too deeply")
+        raise _UnsafePayload("nested too deeply")
     kind = type(value)
-    # Identity comparisons only: ``in``/``==`` would call a custom metaclass's
-    # __eq__, and reading ``kind.__name__`` would call __getattribute__.
     if value is None or kind is bool or kind is int or kind is str:
         return value
     if kind is float:
@@ -248,68 +247,121 @@ def _strict_json(value: Any, depth: int = 0) -> Any:
         result = {}
         for key, item in dict.items(value):
             if type(key) is not str:
-                raise _UnsafePayload("non-string mapping key")
+                raise _UnsafePayload("non-string key")
             result[key] = _strict_json(item, depth + 1)
         return result
     raise _UnsafePayload("unsupported value type")
 
 
-def _request_identity(req: Envelope) -> str | None:
-    """Bind an idempotency key to the request that first used it.
+def _exact_field(raw: Any, name: str) -> tuple[bool, Any]:
+    """Read one field without ``getattr``/``dict.get`` overrides or key hooks."""
+    if type(raw) is Envelope:
+        try:
+            return True, object.__getattribute__(raw, name)
+        except AttributeError:
+            return False, None
+    if type(raw) is dict:
+        for key, value in dict.items(raw):
+            if type(key) is str and key == name:
+                return True, value
+    return False, None
 
-    ``None`` means the request is not strict canonical JSON and must be refused
-    rather than hashed. No arbitrary object method is ever called.
-    """
+
+def _exact_str(raw: Any, name: str, default: str) -> str:
+    found, value = _exact_field(raw, name)
+    return value if found and type(value) is str else default
+
+
+def _stop_signal(raw: Any) -> bool:
+    """Total stop detection on the raw request; no overridable method called."""
+    _, status = _exact_field(raw, "status")
+    _, quality = _exact_field(raw, "quality")
+    _, payload = _exact_field(raw, "payload")
+    if type(status) is str and status == STATUS_SAFE_STOP:
+        return True
+    if type(quality) is str and quality == "safe_stop":
+        return True
+    if type(payload) is dict:
+        for key, value in dict.items(payload):
+            if type(key) is not str:
+                continue
+            if key == "safe_stop" or key == "user_stop":
+                if value is True:
+                    return True
+            elif key == "signal":
+                if type(value) is str and value == "SAFE_STOP":
+                    return True
+            elif key == "action":
+                if type(value) is str and value == "safe_stop":
+                    return True
+    return False
+
+
+def _safe_stop_response(raw: Any) -> Envelope:
+    """SAFE_STOP answer built from literals only, independent of the payload."""
+    return make_envelope(
+        schema_version=GATEWAY_SCHEMA_VERSION,
+        request_id=_exact_str(raw, "request_id", ""),
+        session_id=_exact_str(raw, "session_id", ""),
+        trace_id=_exact_str(raw, "trace_id", ""),
+        mode=MODE_A_PRE_ONLY,
+        quality="safe_stop",
+        status=STATUS_SAFE_STOP,
+        display_gate="SAFE_STOP_OVERRIDE",
+        payload={
+            "control_command": None,
+            "reason": "SAFE_STOP signal received: all operations stopped",
+            "safe_stop": True,
+        },
+    )
+
+
+def _refusal(reason: str) -> Envelope:
+    """Literal-only fail-closed refusal; never echoes untrusted values."""
+    return make_envelope(
+        request_id="",
+        mode=MODE_A_PRE_ONLY,
+        status=STATUS_REJECTED,
+        quality="rejected",
+        display_gate="REFUSED",
+        payload={"control_command": None, "prediction": None, "reason": reason},
+    )
+
+
+def _normalize_request(raw: Any) -> Envelope | None:
+    """Rebuild the whole request from strict JSON, or refuse."""
+    if type(raw) is Envelope:
+        record = {name: object.__getattribute__(raw, name) for name in _ENVELOPE_FIELDS}
+    elif type(raw) is dict:
+        record = raw
+    else:
+        return None
     try:
-        return digest(
-            _strict_json(
-                {
-                    "mode": req.mode,
-                    "session_id": req.session_id,
-                    "trace_id": req.trace_id,
-                    "quality": req.quality,
-                    "status": req.status,
-                    "feature_version": req.feature_version,
-                    "model_version": req.model_version,
-                    "target_version": req.target_version,
-                    "provenance": req.provenance,
-                    "license": req.license,
-                    "evidence_level": req.evidence_level,
-                    "display_gate": req.display_gate,
-                    "payload": req.payload,
-                }
-            )
-        )
+        pure = _strict_json(record)
     except (_UnsafePayload, TypeError, ValueError, RecursionError, OverflowError):
         return None
+    return envelope_from_dict(pure)
 
 
-def _is_safe_stop(req: Envelope) -> bool:
-    """Evaluate stop signals using identity checks, never ``dict.get`` on a
-    payload whose keys may override ``__eq__``.
-    """
-    # Status/quality come from the Envelope itself; check them first so an
-    # explicit stop never needs to touch a hostile payload.
-    if type(req.status) is str and req.status == STATUS_SAFE_STOP:
-        return True
-    if type(req.quality) is str and req.quality == "safe_stop":
-        return True
-    payload = req.payload
-    if type(payload) is not dict:
-        return False
-    for key, value in dict.items(payload):
-        if type(key) is not str:
-            continue
-        if key == "safe_stop" or key == "user_stop":
-            if value is True:
-                return True
-        elif key == "signal":
-            if type(value) is str and value == "SAFE_STOP":
-                return True
-        elif key == "action":
-            if type(value) is str and value == "safe_stop":
-                return True
-    return False
+def _request_identity(req: Envelope) -> str:
+    """Bind an idempotency key to the pure request that first used it."""
+    return digest(
+        {
+            "mode": req.mode,
+            "session_id": req.session_id,
+            "trace_id": req.trace_id,
+            "quality": req.quality,
+            "status": req.status,
+            "feature_version": req.feature_version,
+            "model_version": req.model_version,
+            "target_version": req.target_version,
+            "provenance": req.provenance,
+            "license": req.license,
+            "evidence_level": req.evidence_level,
+            "display_gate": req.display_gate,
+            "payload": req.payload,
+        }
+    )
 
 
 def _extract_feature_names(payload: Mapping[str, Any]) -> set[str]:
@@ -407,68 +459,45 @@ class Gateway:
         return [self._process_single(req) for req in requests]
 
     def _process_single(self, raw_request: Envelope | Mapping[str, Any]) -> Envelope:
-        mode_str = str(
-            raw_request.mode if isinstance(raw_request, Envelope) else raw_request.get("mode", "")
-        )
+        try:
+            return self._process_request(raw_request)
+        except GatewayError:
+            # strict_mode uses ModeIsolationError/ThrottleError as deliberate
+            # control flow; let them reach the caller unchanged.
+            raise
+        except Exception:
+            # Fail-closed totality: a malformed request can never raise out of
+            # the gateway or turn into a fabricated score.
+            return _refusal("request could not be processed safely")
+
+    def _process_request(self, raw_request: Any) -> Envelope:
+        if _stop_signal(raw_request):
+            return _safe_stop_response(raw_request)
+
+        found, raw_mode = _exact_field(raw_request, "mode")
+        mode_str = raw_mode if type(raw_mode) is str else ("" if found else MODE_A_PRE_ONLY)
         if mode_str not in ALLOWED_MODES:
-            req_id = (
-                raw_request.request_id
-                if isinstance(raw_request, Envelope)
-                else str(raw_request.get("request_id", ""))
-            )
             return make_envelope(
-                request_id=req_id,
+                request_id=_exact_str(raw_request, "request_id", ""),
                 mode=MODE_A_PRE_ONLY,
                 status=STATUS_REJECTED,
                 quality="rejected",
                 display_gate="REFUSED",
                 payload={
                     "control_command": None,
+                    "prediction": None,
                     "reason": f"unknown mode: {mode_str!r}",
                     "requested_mode": mode_str,
                 },
             )
 
-        if isinstance(raw_request, Envelope):
-            req = raw_request
-        else:
-            req = envelope_from_dict(raw_request)
-
-        if _is_safe_stop(req):
-            res = make_envelope(
-                schema_version=req.schema_version,
-                request_id=req.request_id,
-                session_id=req.session_id,
-                trace_id=req.trace_id,
-                mode=req.mode,
-                event_time=req.event_time,
-                feature_version=req.feature_version,
-                model_version=req.model_version,
-                target_version=req.target_version,
-                quality="safe_stop",
-                status=STATUS_SAFE_STOP,
-                provenance=req.provenance,
-                license=req.license,
-                evidence_level=req.evidence_level,
-                display_gate="SAFE_STOP_OVERRIDE",
-                payload={
-                    "control_command": None,
-                    "reason": "SAFE_STOP signal received: all operations stopped",
-                    "safe_stop": True,
-                },
+        req = _normalize_request(raw_request)
+        if req is None:
+            return _refusal(
+                "request is not strict canonical JSON (NaN/infinity, bytes, "
+                "non-string keys, cyclic or non-serializable values)"
             )
-            return res
-
         identity = _request_identity(req)
-        if identity is None:
-            return self._refuse_envelope(
-                req,
-                status=STATUS_REJECTED,
-                reason=(
-                    "payload is not canonical JSON (NaN/infinity, bytes, cyclic or "
-                    "non-serializable values); refusing instead of fabricating an identity"
-                ),
-            )
 
         if req.request_id in self._cache:
             if self._cache_identities.get(req.request_id) != identity:

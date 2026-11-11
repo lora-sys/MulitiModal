@@ -99,7 +99,7 @@
 pytest -q
 ```
 > [!NOTE]
-> 仓库采用分层依赖设计，若本地未安装 `torch` / `transformers`，相关神经栈测试会自动安全跳过（全仓实测基线 `1045 passed, 9 skipped`；无 torch 时神经栈安全 skip），经典机器学习交付线完全不受影响。
+> 仓库采用分层依赖设计，若本地未安装 `torch` / `transformers`，相关神经栈测试会自动安全跳过（全仓实测基线 `1044 passed, 9 skipped`；无 torch 时神经栈安全 skip），经典机器学习交付线完全不受影响。
 
 ### 2. 运行双轨最小演示（推荐体验入口）
 加载真实冻结工件与受试者特征，体验全链路端到端预测与安全拒判行为：
@@ -167,7 +167,7 @@ python -m syndrome.delivery \
 ```bash
 python scripts/lifecycle_verify.py                      # 统一验收：fast 契约 + 合成生命周期套件 + 全仓 lint + 15/15 验收（含 10 项安全负例，实测 PASS）
 pytest tests/lifecycle/test_contracts_fast.py -m fast -q # 纯 stdlib 契约快测（CI 第一道门禁，实测 19 passed）
-pytest tests/lifecycle -q                               # 合成生命周期套件（实测 212 passed）
+pytest tests/lifecycle -q                               # 合成生命周期套件（实测 211 passed）
 python scripts/lifecycle_verify.py --torch-free-smoke   # 证明无 torch 时纯契约可导入
 ```
 

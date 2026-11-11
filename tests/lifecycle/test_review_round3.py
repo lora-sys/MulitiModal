@@ -286,74 +286,8 @@ def test_non_json_payloads_are_refused_or_stopped_without_raising(value, stop):
     assert gateway._cache == {} and gateway._cache_identities == {}
 
 
-def test_non_string_keys_and_subclass_hooks_never_produce_an_identity():
-    """P2 (round-8 Codex): reject non-str keys and hostile __lt__ keys."""
-    int_key = gw.make_envelope(
-        request_id="k", session_id="S1", mode=gw.MODE_C_TCM,
-        payload={"knowledge": [{1: "x"}]},
-    )
-    str_key = gw.make_envelope(
-        request_id="k", session_id="S1", mode=gw.MODE_C_TCM,
-        payload={"knowledge": [{"1": "x"}]},
-    )
-    assert gw._request_identity(int_key) is None
-    assert gw._request_identity(str_key) is not None
-    assert gw._request_identity(int_key) != gw._request_identity(str_key)
-    gateway = gw.Gateway()
-    assert gateway.handle(int_key).status == STATUS_REJECTED
-    assert gateway.handle(str_key).status == STATUS_OK
-
-    class BadKey(str):
-        def __lt__(self, other):
-            raise RuntimeError("boom")
-
-    hostile = gw.make_envelope(
-        request_id="k2", payload={BadKey("a"): 1, BadKey("b"): 2}
-    )
-    assert gw._request_identity(hostile) is None
-    assert gw.Gateway().handle(hostile).status == STATUS_REJECTED
-
-    class BadValue(str):
-        def __str__(self):
-            raise RuntimeError("boom")
-
-    subclass_value = gw.make_envelope(
-        request_id="k3", payload={"value": BadValue("x")}
-    )
-    assert gw._request_identity(subclass_value) is None
-    assert gw.Gateway().handle(subclass_value).status == STATUS_REJECTED
-
-
-def test_string_subclass_signal_cannot_block_an_explicit_stop():
-    """P2 (round-8 Codex): explicit stop must not call overridable str methods."""
-    class BadStr(str):
-        def upper(self):
-            raise RuntimeError("boom")
-
-        def __str__(self):
-            raise RuntimeError("boom")
-
-    gateway = gw.Gateway()
-    req = gw.make_envelope(
-        request_id="stop", mode=gw.MODE_A_PRE_ONLY,
-        payload={"safe_stop": True, "signal": BadStr("SAFE_STOP")},
-    )
-    res = gateway.handle(req)
-    assert res.status == STATUS_SAFE_STOP
-    assert res.payload["control_command"] is None
-
-    # Without an explicit flag, a str subclass must not have overridable
-    # methods invoked during stop detection.
-    only_signal = gw.make_envelope(
-        request_id="stop2", mode=gw.MODE_A_PRE_ONLY,
-        payload={"signal": BadStr("SAFE_STOP")},
-    )
-    assert gw._is_safe_stop(only_signal) is False
-    assert gw.Gateway().handle(only_signal).status == STATUS_REJECTED
-
-
-def test_custom_metaclass_and_hostile_dict_keys_are_contained():
-    """P2 (round-9 Codex): type checks and stop detection never call user hooks."""
+def test_untrusted_request_objects_are_contained_at_the_boundary():
+    """One boundary: exotic Python objects are refused, SAFE_STOP still wins."""
     class Meta(type):
         def __eq__(cls, other):
             raise RuntimeError("metaclass eq")
@@ -366,13 +300,6 @@ def test_custom_metaclass_and_hostile_dict_keys_are_contained():
     class Weird(metaclass=Meta):
         pass
 
-    assert gw._request_identity(
-        gw.make_envelope(request_id="meta", payload={"v": Weird()})
-    ) is None
-    assert gw.Gateway().handle(
-        gw.make_envelope(request_id="meta", payload={"v": Weird()})
-    ).status == STATUS_REJECTED
-
     class BadKey(str):
         def __eq__(self, other):
             raise RuntimeError("key eq")
@@ -380,36 +307,75 @@ def test_custom_metaclass_and_hostile_dict_keys_are_contained():
         def __hash__(self):
             return hash(str(self))
 
-    hostile = {BadKey("safe_stop"): "x"}
-    only_hostile = {BadKey("safe_stop"): "x"}
-    with_flag = dict(hostile)
-    with_flag["user_stop"] = True
-    for req in (
-        gw.make_envelope(
-            request_id="stop-key", status=gw.STATUS_SAFE_STOP, payload=only_hostile
-        ),
-        gw.make_envelope(request_id="stop-key-2", payload=with_flag),
-    ):
-        res = gw.Gateway().handle(req)
-        assert res.status == STATUS_SAFE_STOP
-        assert res.payload["control_command"] is None
+    class BadStr(str):
+        def __str__(self):
+            raise RuntimeError("str hook")
+
+        def upper(self):
+            raise RuntimeError("upper hook")
 
     class HostileDict(dict):
         def items(self):
             raise RuntimeError("items hook")
 
+    # Non-string keys, subclassed values, custom metaclass types, dict
+    # subclasses, non-finite floats, bytes, sets, cycles: all refused, never
+    # raising out of the gateway and never emitting a score.
+    untrusted = (
+        {"knowledge": [{1: "x"}]},
+        {BadKey("a"): 1, BadKey("b"): 2},
+        {"value": Weird()},
+        {"value": BadStr("x")},
+        {"value": float("nan")},
+        {"value": b"bytes"},
+        {"value": {1, 2}},
+    )
+    for payload in untrusted:
+        gateway = gw.Gateway()
+        res = gateway.handle(
+            gw.make_envelope(request_id="bad", mode=gw.MODE_B_REALTIME, payload=payload)
+        )
+        assert res.status == STATUS_REJECTED, payload
+        # The boundary refusal, not the generic totality wrapper, must fire.
+        assert "strict canonical JSON" in res.payload["reason"], payload
+        assert res.payload.get("prediction") is None
+        assert gateway._cache == {} and gateway._cache_identities == {}
+
     # Envelope is a frozen dataclass: a dict subclass can reach the Python
-    # object entry point without being copied by make_envelope.
+    # object entry point directly, bypassing make_envelope's copy.
     direct = gw.Envelope(
         schema_version="ml-lifecycle-contracts-v1",
         request_id="sd", session_id="S1", trace_id="t", mode=gw.MODE_A_PRE_ONLY,
         event_time="", feature_version="v1", model_version="v1",
         target_version="v1", quality="ok", status=gw.STATUS_OK,
         provenance="test", license="test", evidence_level=gw.EVIDENCE_SYNTHETIC,
-        display_gate="", payload=HostileDict({"safe_stop": True}),
+        display_gate="", payload=HostileDict({"value": 1}),
     )
-    assert gw._is_safe_stop(direct) is False
-    assert gw.Gateway().handle(direct).status == STATUS_REJECTED
+    direct_res = gw.Gateway().handle(direct)
+    assert direct_res.status == STATUS_REJECTED
+    assert "strict canonical JSON" in direct_res.payload["reason"]
+
+    # SAFE_STOP is decided before normalization and is unconditional.
+    for raw in (
+        gw.make_envelope(request_id="s", status=gw.STATUS_SAFE_STOP,
+                         payload={"value": Weird()}),
+        gw.make_envelope(request_id="s", payload={"safe_stop": True,
+                                                 "signal": BadStr("SAFE_STOP")}),
+        gw.make_envelope(request_id="s", payload={"user_stop": True,
+                                                 "other": Weird()}),
+        gw.Envelope(
+            schema_version="ml-lifecycle-contracts-v1", request_id="s",
+            session_id="S1", trace_id="t", mode=gw.MODE_A_PRE_ONLY,
+            event_time="", feature_version="v1", model_version="v1",
+            target_version="v1", quality="safe_stop", status=gw.STATUS_OK,
+            provenance="test", license="test",
+            evidence_level=gw.EVIDENCE_SYNTHETIC, display_gate="",
+            payload=HostileDict({"value": 1}),
+        ),
+    ):
+        res = gw.Gateway().handle(raw)
+        assert res.status == STATUS_SAFE_STOP
+        assert res.payload["control_command"] is None
 
 
 def test_canonical_json_identity_is_exact_and_order_independent():
@@ -424,13 +390,12 @@ def test_canonical_json_identity_is_exact_and_order_independent():
         request_id="ordered", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
         payload={"features": second},
     )
-    assert gw._request_identity(base) == gw._request_identity(replay)
     gateway = gw.Gateway()
     assert gateway.handle(base).status == STATUS_OK
     assert gateway.handle(replay).status == STATUS_OK
+    assert gateway.idempotency_hits == 1
 
-    leaf_a = "first"
-    leaf_b = "second"
+    leaf_a, leaf_b = "first", "second"
     for _ in range(26):
         leaf_a, leaf_b = {"knowledge": leaf_a}, {"knowledge": leaf_b}
     deep_a = gw.make_envelope(
@@ -441,24 +406,23 @@ def test_canonical_json_identity_is_exact_and_order_independent():
         request_id="deep", session_id="S1", mode=gw.MODE_C_TCM,
         payload={"knowledge": leaf_b},
     )
-    assert gw._request_identity(deep_a) != gw._request_identity(deep_b)
     gateway = gw.Gateway()
     assert gateway.handle(deep_a).status == STATUS_OK
     assert gateway.handle(deep_b).status == STATUS_REJECTED
 
 
 def test_typed_canonical_json_does_not_collide():
-    """1.0, 'float:1.0', 1 and True must produce different identities."""
+    """1.0, 'float:1.0', 1 and True must be four different requests."""
     def envelope(payload):
         return gw.make_envelope(
             request_id="typed", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
             payload={"value": payload},
         )
-    identities = [gw._request_identity(envelope(v)) for v in (1.0, "float:1.0", 1, True)]
-    assert len(set(identities)) == 4
     gateway = gw.Gateway()
     assert gateway.handle(envelope(1.0)).status == STATUS_OK
-    assert gateway.handle(envelope("float:1.0")).status == STATUS_REJECTED
+    for value in ("float:1.0", 1, True):
+        assert gw.Gateway().handle(envelope(value)).status == STATUS_OK
+        assert gateway.handle(envelope(value)).status == STATUS_REJECTED
 
 
 def test_cyclic_deep_or_unrepresentable_payloads_never_raise():
@@ -512,14 +476,30 @@ def test_safe_stop_detection_never_calls_arbitrary_object_methods():
     assert res.payload["control_command"] is None
 
 
-def test_unbindable_payload_is_refused_without_writing_cache(monkeypatch):
-    """No cached response may exist without its identity (no partial state)."""
+def test_internal_failure_is_fail_closed(monkeypatch):
+    """The totality wrapper converts any unexpected error into a refusal."""
+    monkeypatch.setattr(
+        gw, "_request_identity", lambda _req: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
     gateway = gw.Gateway()
-    monkeypatch.setattr(gw, "_request_identity", lambda _req: None)
-    req = gw.make_envelope(request_id="atomic", mode=gw.MODE_A_PRE_ONLY)
-    res = gateway.handle(req)
+    res = gateway.handle(
+        gw.make_envelope(request_id="boom", mode=gw.MODE_A_PRE_ONLY)
+    )
     assert res.status == STATUS_REJECTED
-    assert "canonical JSON" in res.payload["reason"]
+    assert "could not be processed safely" in res.payload["reason"]
+    assert res.payload["prediction"] is None
+    assert gateway._cache == {} and gateway._cache_identities == {}
+
+
+def test_refused_request_writes_no_partial_cache_state():
+    """A boundary refusal must not leave a cache entry without its identity."""
+    gateway = gw.Gateway()
+    res = gateway.handle(
+        gw.make_envelope(request_id="atomic", mode=gw.MODE_A_PRE_ONLY,
+                         payload={"value": float("nan")})
+    )
+    assert res.status == STATUS_REJECTED
+    assert "strict canonical JSON" in res.payload["reason"]
     assert gateway._cache == {}
     assert gateway._cache_identities == {}
     assert gateway.idempotency_counter == {}

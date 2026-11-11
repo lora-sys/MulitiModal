@@ -296,18 +296,18 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 | 项 | 本地（macOS / CPython 3.13.12，无 torch/transformers） | 远程 `acam-lab`（Linux / CPython 3.12.3，torch 2.15 + transformers） |
 |---|---|---|
 | 精确命令 | `PYTHONPATH=src:. .venv/bin/python -m pytest -q` | 同左 |
-| 收集用例（`--collect-only -q`） | 1053 | 1061 |
-| 通过 / 跳过 | 1045 / 9 | 1057 / 4 |
-| `pytest tests/lifecycle -q` | 212 passed | 212 passed |
+| 收集用例（`--collect-only -q`） | 1052 | 1060 |
+| 通过 / 跳过 | 1044 / 9 | 1056 / 4 |
+| `pytest tests/lifecycle -q` | 211 passed | 211 passed |
 | `ruff check src tests scripts` | 零告警 | 零告警 |
 | `lifecycle_verify.py` | 15/15 PASS | 15/15 PASS |
 
 收集用例差 8 项，全部来自 `tests/syndrome/test_bert_model.py`：本地无
 `transformers`，整模块在收集期跳过（0 项收集、1 条 module-level skip 结果），
-远程 8 项实跑全过；故结果数差 7（本地 1054、远程 1061）。逐文件对账：
+远程 8 项实跑全过；故结果数差 7（本地 1053、远程 1060）。逐文件对账：
 `test_tcm_minimal_demo.py` 本地 3 passed / 6 skipped、远程 9 passed（缺私有工件）；
 `test_real_data_audit.py` 本地 27 passed、远程 25 passed / 2 skipped（该机缺私有导出）；
-`test_ccmq60.py` 两端均 11 passed / 2 skipped；其余文件两端同为 1004 项。
+`test_ccmq60.py` 两端均 11 passed / 2 skipped；其余文件两端同为 1003 项。
 按文件相加与两端总数一致，差异均有明确环境原因，没有把 skip 写成 PASS。
 
 证据级别不变：`LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`；
@@ -467,4 +467,33 @@ PR 正文的收集用例数仍是旧值。
 
 本地 `1045 passed, 9 skipped`、`tests/lifecycle` `212 passed`；
 远程 `acam-lab` `1057 passed, 4 skipped`、`tests/lifecycle` `212 passed`；
+两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。证据级别与三门禁不变。
+
+### 10.12 第十轮复评（HEAD `7941a36`）与架构性收敛
+
+第十轮对 `7941a36` 的确认复评：Codex 给出 8.4 / 8.5 并否决，确认第九轮三项已解，
+但仍指出 `str(raw_request.mode)` / `raw_request.get()` 在**边界之前**就会调用任意对象的
+`__str__` / `__eq__`，以及 `kind in (...)` 之外的元类钩子。九轮下来累积的守卫代码本身
+已成为新的问题面：每加一层防御就多一处可覆写方法调用，评分始终停在 8.3–8.6 无法通过。
+
+按 AGENTS.md「采用尽可能简单的实现方案」「不要以尚未成熟的复杂性取代已经可用的产品」，
+本轮**删掉累积的守卫，改为一次边界归一化**：
+
+- `_strict_json` 只接受精确内建 JSON 类型（`None`/`bool`/`int`/`str`/`float`/`list`/`dict`），
+  用 `type(x) is ...` 身份判断、非绑定 `dict.items()`、深度上限 64；不读取不可信类型属性，
+  不调用任何可覆写方法。整条请求（含所有标量字段与 payload）先归一化成纯 JSON，
+  再交给 `envelope_from_dict`。**下游所有 `str()` / `.get()` / `in` 只作用于精确内建值。**
+- `_stop_signal` 用 `_exact_field` 精确读取 `status` / `quality` / `payload`，显式停止标志
+  优先；`_safe_stop_response` 只用字面量构造，SAFE_STOP 与 payload 内容彻底解耦。
+- `_request_identity` 不再返回 `None`、不再做二次校验，只摘要已归一化的纯 JSON 记录。
+- `_process_single` 增加 fail-closed totality wrapper：`GatewayError`（strict_mode 控制流）
+  原样上抛，其余任何异常转为字面量 `REJECTED`，网关不会向外抛异常或伪造分值。
+
+净删除约 11 行守卫代码（本轮 diff 205 增 / 216 删），把「逐调用点防御」收敛为
+「一个边界 + 一个兜底」。重写 6 项回归覆盖非字符串键、元类类型、str 子类、字典子类、
+恶意 `__eq__` 键、显式停止优先与内部异常兜底；6 项突变（边界归一化、`_strict_json`
+全覆盖、`_exact_field`、停止优先、totality wrapper）全部命中。累计 49 项突变检查。
+
+本地 `1044 passed, 9 skipped`、`tests/lifecycle` `211 passed`；
+远程 `acam-lab` `1056 passed, 4 skipped`、`tests/lifecycle` `211 passed`；
 两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。证据级别与三门禁不变。
