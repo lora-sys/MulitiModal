@@ -216,6 +216,27 @@ def _structured_names(container: Any) -> set[str]:
     return names
 
 
+def _request_identity(req: Envelope) -> str:
+    """Bind an idempotency key to the request that first used it."""
+    return digest(
+        {
+            "mode": req.mode,
+            "session_id": req.session_id,
+            "trace_id": req.trace_id,
+            "quality": req.quality,
+            "status": req.status,
+            "feature_version": req.feature_version,
+            "model_version": req.model_version,
+            "target_version": req.target_version,
+            "provenance": req.provenance,
+            "license": req.license,
+            "evidence_level": req.evidence_level,
+            "display_gate": req.display_gate,
+            "payload": dict(req.payload),
+        }
+    )
+
+
 def _extract_feature_names(payload: Mapping[str, Any]) -> set[str]:
     names: set[str] = set()
     for key in ("features", "feature_names", "fields"):
@@ -298,6 +319,7 @@ class Gateway:
         self.strict_mode = strict_mode
 
         self._cache: dict[str, Envelope] = {}
+        self._cache_identities: dict[str, str] = {}
         self.idempotency_counter: dict[str, int] = {}
         self.idempotency_hits: int = 0
         self._in_flight: dict[str, int] = {m: 0 for m in ALLOWED_MODES}
@@ -368,10 +390,19 @@ class Gateway:
                     "safe_stop": True,
                 },
             )
-            self._store_cache(req.request_id, res)
+            self._store_cache(req, res)
             return res
 
         if req.request_id in self._cache:
+            if self._cache_identities.get(req.request_id) != _request_identity(req):
+                return self._refuse_envelope(
+                    req,
+                    status=STATUS_REJECTED,
+                    reason=(
+                        "idempotency key reused with a different request identity "
+                        "(mode/session/versions/payload must match)"
+                    ),
+                )
             self.idempotency_hits += 1
             self.idempotency_counter[req.request_id] = (
                 self.idempotency_counter.get(req.request_id, 1) + 1
@@ -395,7 +426,7 @@ class Gateway:
                 reason="transport failure: network communication failure, no score emitted",
                 extra_payload={"transport_error": True},
             )
-            self._store_cache(req.request_id, res)
+            self._store_cache(req, res)
             return res
 
         is_stale = (
@@ -419,7 +450,7 @@ class Gateway:
                 status=STATUS_STALE,
                 reason=f"stale signal: measurement timestamp is older than {self.stale_after_s}s",
             )
-            self._store_cache(req.request_id, res)
+            self._store_cache(req, res)
             return res
 
         artifact_hash = req.payload.get("artifact_sha256") or req.payload.get("artifact_hash")
@@ -434,7 +465,7 @@ class Gateway:
                     status=STATUS_BLOCKED,
                     reason=f"bad artifact hash format: {artifact_hash!r}",
                 )
-                self._store_cache(req.request_id, res)
+                self._store_cache(req, res)
                 return res
             if self.known_artifacts:
                 expected = self.known_artifacts.get(req.model_version)
@@ -444,7 +475,7 @@ class Gateway:
                         status=STATUS_BLOCKED,
                         reason=f"unknown artifact hash: {artifact_hash}",
                     )
-                    self._store_cache(req.request_id, res)
+                    self._store_cache(req, res)
                     return res
                 if expected is not None and artifact_hash != expected:
                     res = self._refuse_envelope(
@@ -454,7 +485,7 @@ class Gateway:
                             f"tampered artifact hash: expected {expected}, got {artifact_hash}"
                         ),
                     )
-                    self._store_cache(req.request_id, res)
+                    self._store_cache(req, res)
                     return res
 
         if (
@@ -466,7 +497,7 @@ class Gateway:
                 status=STATUS_NOT_AVAILABLE,
                 reason=f"unknown feature version: {req.feature_version!r}",
             )
-            self._store_cache(req.request_id, res)
+            self._store_cache(req, res)
             return res
 
         if (
@@ -478,7 +509,7 @@ class Gateway:
                 status=STATUS_NOT_AVAILABLE,
                 reason=f"unknown model version: {req.model_version!r}",
             )
-            self._store_cache(req.request_id, res)
+            self._store_cache(req, res)
             return res
 
         if (
@@ -490,7 +521,7 @@ class Gateway:
                 status=STATUS_NOT_AVAILABLE,
                 reason=f"unknown target version: {req.target_version!r}",
             )
-            self._store_cache(req.request_id, res)
+            self._store_cache(req, res)
             return res
 
         is_synthetic_model = (
@@ -514,7 +545,7 @@ class Gateway:
                 status=STATUS_REJECTED,
                 reason="synthetic model cannot answer a real product request",
             )
-            self._store_cache(req.request_id, res)
+            self._store_cache(req, res)
             return res
 
         self._in_flight[req.mode] += 1
@@ -526,7 +557,7 @@ class Gateway:
                     status=STATUS_STALE,
                     reason=f"timeout: latency budget of {budget_s}s exceeded",
                 )
-                self._store_cache(req.request_id, res)
+                self._store_cache(req, res)
                 return res
 
             start_t = time.monotonic()
@@ -549,7 +580,7 @@ class Gateway:
                     reason=f"timeout: elapsed {elapsed:.3f}s exceeded budget {budget_s}s",
                 )
 
-            self._store_cache(req.request_id, res)
+            self._store_cache(req, res)
             return res
         finally:
             self._in_flight[req.mode] -= 1
@@ -681,10 +712,11 @@ class Gateway:
             payload=payload,
         )
 
-    def _store_cache(self, request_id: str, response: Envelope) -> None:
-        if request_id:
-            self._cache[request_id] = response
-            self.idempotency_counter[request_id] = 1
+    def _store_cache(self, request: Envelope, response: Envelope) -> None:
+        if request.request_id:
+            self._cache[request.request_id] = response
+            self._cache_identities[request.request_id] = _request_identity(request)
+            self.idempotency_counter[request.request_id] = 1
 
     def record_event(self, session_id: str, event: Mapping[str, Any]) -> None:
         if not session_id:

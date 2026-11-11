@@ -265,6 +265,24 @@ def test_structured_during_post_timepoints_are_rejected(phase_key):
         strict.handle(_envelope(gw.MODE_A_PRE_ONLY, f"strict-{phase_key}", payload))
 
 
+def test_idempotency_key_cannot_be_reused_across_modes_or_sessions():
+    """P2 (round-4 Codex): a cached mode-A answer must not leak to mode B/S2."""
+    gateway = gw.Gateway()
+    first = gw.make_envelope(
+        request_id="shared-id", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
+        payload={"features": {"pre_hr": 70}},
+    )
+    assert gateway.handle(first).status == STATUS_OK
+    conflicting = gw.make_envelope(
+        request_id="shared-id", session_id="S2", mode=gw.MODE_B_REALTIME, payload={}
+    )
+    res = gateway.handle(conflicting)
+    assert res.status == STATUS_REJECTED
+    assert res.payload["prediction"] is None
+    assert "different request identity" in res.payload["reason"]
+    assert gateway.handle(first).status == STATUS_OK
+
+
 def test_structured_pre_timepoint_is_still_admitted():
     """Pre declared phase metadata stays admissible (no blanket rejection)."""
     res = gw.Gateway().handle(
@@ -332,6 +350,24 @@ def test_only_real_connection_kinds_may_declare_connected():
     record = src.conformance_record(connected)
     assert record["capability"] == src.CAP_CONNECTED
     assert record["status"] == STATUS_OK
+
+
+def test_same_id_revision_order_is_not_served_from_a_stale_cache(tmp_path):
+    """P2 (round-4 Codex): correction order must be part of the cache identity."""
+    directory = tmp_path / "revision"
+    old = directory / "old.csv"
+    new = directory / "new.csv"
+    _write_batch(old, [_row("1", "S1", "P1", "heart_rate", "70", "bpm")])
+    _write_batch(new, [_row("1", "S1", "P1", "heart_rate", "90", "bpm")])
+    first = declare_batch(old, batch_id="A")
+    second = declare_batch(new, batch_id="A")
+    run_pipeline([first, second], directory / "warm")
+    warm_reversed = run_pipeline([second, first], directory / "warm")
+    cold_reversed = run_pipeline([second, first], directory / "cold")
+    assert warm_reversed.reused_snapshot is False
+    assert [r.value for r in warm_reversed.snapshot.rows] == [
+        r.value for r in cold_reversed.snapshot.rows
+    ]
 
 
 # --- features: legal ranges -------------------------------------------------

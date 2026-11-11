@@ -297,8 +297,8 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 |---|---|---|
 | 精确命令 | `PYTHONPATH=src:. .venv/bin/python -m pytest -q` | 同左 |
 | 收集用例（`--collect-only -q`） | 1034 | 1042 |
-| 通过 / 跳过 | 1026 / 9 | 1038 / 4 |
-| `pytest tests/lifecycle -q` | 193 passed | 193 passed |
+| 通过 / 跳过 | 1028 / 9 | 1040 / 4 |
+| `pytest tests/lifecycle -q` | 195 passed | 195 passed |
 | `ruff check src tests scripts` | 零告警 | 零告警 |
 | `lifecycle_verify.py` | 15/15 PASS | 15/15 PASS |
 
@@ -313,3 +313,25 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 证据级别不变：`LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`；
 三门禁仍为 `GO_ENGINEERING=GRANTED`、`GO_REAL_DATA_TRAINING=NOT_GRANTED`、
 `GO_RESEARCH_CLAIMS=NOT_GRANTED`，CI 绿灯不自动提权。
+
+### 10.6 终轮复评（HEAD `8a5c5f6`）与 2 项新 P2
+
+对 `8a5c5f6` 发起终轮复评。Claude Opus 5.5 与 Step 5 Preview 的路由本次均返回
+`fetch failed`（未返回评分，如实标注缺位，不虚构分数）；`opencode` 路由因额度耗尽
+返回 `Insufficient balance`。Codex（gpt-6.1-sol）完成复评，给出 8.5 / 8.7 并否决，
+列出 2 项本轮新引入的 P2：
+
+| 编号 | 级别 | 问题 | 处置 |
+|---|---|---|---|
+| R4-1 | P2 | 同一 `batch_id` 的两个不同版本在单次运行内声明时，`dataset_sha256` 用排序后的 `(batch_id, sha256)` 集合，丢失修正顺序；`_ingest` 却按「最后一个版本胜出」，导致 `[old,new]` 与 `[new,old]` 缓存键相同但结果不同（实测 warm 复用得 90、cold 得 70） | 改为按 `batch_id` 取最后一个声明的 `sha256`（effective bindings）再排序求摘要，与 `_ingest` 的胜出语义一致 |
+| R4-2 | P2 | 网关幂等缓存只以 `request_id` 为键；先提交模式 A/S1，再用同一 ID 提交模式 B/S2，会拿到模式 A 的 `OK` 与 BPSI/EFRI 数值，绕过模式 B 的不可用保护 | 缓存身份绑定 mode/session/trace/版本/payload；冲突复用返回 `REJECTED` 且 `prediction=None`，合法重放仍命中 |
+
+两项均由复现脚本先确认，再各补 1 项负例回归；三项突变（撤回 effective bindings、
+去掉身份校验、不写入身份）全部命中。新增 2 项回归后：本地 `1028 passed, 9 skipped`、
+`tests/lifecycle` `195 passed`；远程 `acam-lab` `1040 passed, 4 skipped`、
+`tests/lifecycle` `195 passed`；两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。
+
+10.5 的远程基线表按最终 HEAD 的数字更新（1028 / 1040、195 passed），收集用例差与
+逐文件对账不变；10.4 保留为第二轮当时的历史快照，不回写。
+
+累计 17 项机制修复（15 + 2）全部经撤回验证，共 36 项新增回归。证据级别与三门禁不变。

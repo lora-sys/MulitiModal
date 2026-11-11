@@ -789,7 +789,12 @@ def run_pipeline(
     out.mkdir(parents=True, exist_ok=True)
     started = utc_now().isoformat()
     rules_sha256 = digest({"schema": cfg.schema_version, "rules": rules_version})
-    dataset_sha256 = digest(sorted((b.batch_id, b.sha256) for b in batches))
+    # A batch id re-declared with different bytes is a correction: _ingest keeps
+    # the LAST declaration. The cache identity must reflect the effective binding,
+    # otherwise two runs with the same sorted hash set but a different correction
+    # order would reuse the wrong snapshot.
+    effective_bindings = {b.batch_id: b.sha256 for b in batches}
+    dataset_sha256 = digest(sorted(effective_bindings.items()))
     # G2: a cold run's identity must be reproducible from declared inputs, not
     # from wall-clock time. Two cold runs of the same data/config/code/rules in
     # different directories now produce the same run_id.
