@@ -1,4 +1,4 @@
-"""Regressions for the four final Codex findings on PR #116.
+"""Regressions for the post-merge Codex findings on PR #116 and PR #117.
 
 Each test reproduces the reported failure mode and asserts the fixed behaviour.
 """
@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from lifecycle import gateway as gw
 from lifecycle import observe as ob
+from lifecycle import pipeline as pl
 from lifecycle.contracts import QCReport
 from lifecycle.pipeline import declare_batch, run_pipeline
 
 pytestmark = pytest.mark.synthetic
+LEGACY_PIPELINE_VERSION = "ml-lifecycle-pipeline-v1"
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "lifecycle"
 BATCH_A = FIXTURES / "batch_a.csv"
@@ -28,26 +31,53 @@ def _qc(drift):
     )
 
 
+def _equivalent_offset_batch(path: Path) -> object:
+    rows = list(csv.DictReader(BATCH_A.open(encoding="utf-8")))
+    resent = dict(rows[0])
+    resent["event_time"] = "2026-11-01T10:00:00+01:00"
+    resent["record_id"] = "5"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows + [resent])
+    return declare_batch(path, batch_id="A")
+
+
 def test_equivalent_utc_offsets_share_one_dedup_key(tmp_path):
     """F1: `09:00Z` and `10:00+01:00` are the same instant; one row must survive.
 
     Regresses pipeline.py `_row_key`: raw timestamp strings used to produce two
     keys, double-counting the observation and flipping `train_ready`.
     """
-    rows = list(csv.DictReader(BATCH_A.open(encoding="utf-8")))
-    resent = dict(rows[0])
-    resent["event_time"] = "2026-11-01T10:00:00+01:00"
-    resent["record_id"] = "5"
-    path = tmp_path / "resent.csv"
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), lineterminator="\n")
-        writer.writeheader()
-        writer.writerows(rows + [resent])
-    result = run_pipeline([declare_batch(path, batch_id="A")], tmp_path / "out")
+    batch = _equivalent_offset_batch(tmp_path / "resent.csv")
+    result = run_pipeline([batch], tmp_path / "out")
     assert result.qc.n_input == 5
     assert result.qc.n_accepted == 4
     assert result.qc.n_duplicate == 1
     assert result.readiness["train_ready"] is False
+
+
+def test_legacy_snapshot_is_invalidated_after_timestamp_identity_change(
+    tmp_path,
+):
+    """P1: a v1 snapshot must not survive the changed row identity semantics.
+
+    The old pipeline keyed `09:00Z` and `10:00+01:00` as separate rows. A
+    default v2 run has to recompute that cache, not reuse the double-counted
+    snapshot.
+    """
+    batch = _equivalent_offset_batch(tmp_path / "resent.csv")
+    with patch.object(pl, "_canonical_event_time", lambda value: value):
+        legacy = run_pipeline(
+            [batch], tmp_path / "out", code_version=LEGACY_PIPELINE_VERSION
+        )
+    assert legacy.qc.n_accepted == 5
+    assert legacy.qc.n_duplicate == 0
+
+    upgraded = run_pipeline([batch], tmp_path / "out")
+    assert upgraded.reused_snapshot is False
+    assert upgraded.qc.n_accepted == 4
+    assert upgraded.qc.n_duplicate == 1
 
 
 def test_distinct_instants_still_get_distinct_keys(tmp_path):

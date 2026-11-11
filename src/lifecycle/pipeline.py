@@ -52,7 +52,7 @@ from .contracts import (
     utc_now,
 )
 
-PIPELINE_VERSION = "ml-lifecycle-pipeline-v1"
+PIPELINE_VERSION = "ml-lifecycle-pipeline-v2"
 STATE_FILE = "pipeline_state.json"
 QUARANTINE_FILE = "quarantine.jsonl"
 QC_FILE = "qc_report.json"
