@@ -847,7 +847,7 @@ def build_real_sessions(
         ordered_drafts = sorted(
             subject_drafts, key=lambda item: (item.window_start, item.session_id)
         )
-        for left, right in zip(ordered_drafts, ordered_drafts[1:]):
+        for left, right in zip(ordered_drafts, ordered_drafts[1:], strict=False):
             if right.window_start < left.window_end:
                 detail = f"Session windows overlap: {left.session_id} and {right.session_id}"
                 left.issues.append(RealQCIssue(QC_SESSION_OVERLAP, detail, left.session_id))
