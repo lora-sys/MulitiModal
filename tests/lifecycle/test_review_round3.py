@@ -286,6 +286,72 @@ def test_non_json_payloads_are_refused_or_stopped_without_raising(value, stop):
     assert gateway._cache == {} and gateway._cache_identities == {}
 
 
+def test_non_string_keys_and_subclass_hooks_never_produce_an_identity():
+    """P2 (round-8 Codex): reject non-str keys and hostile __lt__ keys."""
+    int_key = gw.make_envelope(
+        request_id="k", session_id="S1", mode=gw.MODE_C_TCM,
+        payload={"knowledge": [{1: "x"}]},
+    )
+    str_key = gw.make_envelope(
+        request_id="k", session_id="S1", mode=gw.MODE_C_TCM,
+        payload={"knowledge": [{"1": "x"}]},
+    )
+    assert gw._request_identity(int_key) is None
+    assert gw._request_identity(str_key) is not None
+    assert gw._request_identity(int_key) != gw._request_identity(str_key)
+    gateway = gw.Gateway()
+    assert gateway.handle(int_key).status == STATUS_REJECTED
+    assert gateway.handle(str_key).status == STATUS_OK
+
+    class BadKey(str):
+        def __lt__(self, other):
+            raise RuntimeError("boom")
+
+    hostile = gw.make_envelope(
+        request_id="k2", payload={BadKey("a"): 1, BadKey("b"): 2}
+    )
+    assert gw._request_identity(hostile) is None
+    assert gw.Gateway().handle(hostile).status == STATUS_REJECTED
+
+    class BadValue(str):
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    subclass_value = gw.make_envelope(
+        request_id="k3", payload={"value": BadValue("x")}
+    )
+    assert gw._request_identity(subclass_value) is None
+    assert gw.Gateway().handle(subclass_value).status == STATUS_REJECTED
+
+
+def test_string_subclass_signal_cannot_block_an_explicit_stop():
+    """P2 (round-8 Codex): explicit stop must not call overridable str methods."""
+    class BadStr(str):
+        def upper(self):
+            raise RuntimeError("boom")
+
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    gateway = gw.Gateway()
+    req = gw.make_envelope(
+        request_id="stop", mode=gw.MODE_A_PRE_ONLY,
+        payload={"safe_stop": True, "signal": BadStr("SAFE_STOP")},
+    )
+    res = gateway.handle(req)
+    assert res.status == STATUS_SAFE_STOP
+    assert res.payload["control_command"] is None
+
+    # Without an explicit flag, a str subclass must not have overridable
+    # methods invoked during stop detection.
+    only_signal = gw.make_envelope(
+        request_id="stop2", mode=gw.MODE_A_PRE_ONLY,
+        payload={"signal": BadStr("SAFE_STOP")},
+    )
+    assert gw._is_safe_stop(only_signal) is False
+    assert gw.Gateway().handle(only_signal).status == STATUS_REJECTED
+
+
 def test_canonical_json_identity_is_exact_and_order_independent():
     """No truncation: distinct leaves stay distinct; dict insertion order is irrelevant."""
     first = {"a": 1, "b": 2, "c": 3}

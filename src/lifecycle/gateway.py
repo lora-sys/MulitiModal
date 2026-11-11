@@ -7,6 +7,7 @@ budgets, and transport failure handling without device control.
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -216,15 +217,50 @@ def _structured_names(container: Any) -> set[str]:
     return names
 
 
+_MAX_PAYLOAD_DEPTH = 64
+
+
+class _UnsafePayload(Exception):
+    """Raised internally when a payload is not a strict JSON value."""
+
+
+def _strict_json(value: Any, depth: int = 0) -> Any:
+    """Rebuild a value from exact built-in JSON types only.
+
+    ``json.dumps`` on arbitrary objects calls user-overridable methods
+    (``__lt__`` via sort_keys, key coercion, subclass hooks). Accepting only
+    exact built-in types means no user code runs during identity computation.
+    """
+    if depth > _MAX_PAYLOAD_DEPTH:
+        raise _UnsafePayload("payload nested too deeply")
+    kind = type(value)
+    if value is None or kind in (bool, int, str):
+        return value
+    if kind is float:
+        if not math.isfinite(value):
+            raise _UnsafePayload("non-finite float")
+        return value
+    if kind is list:
+        return [_strict_json(item, depth + 1) for item in value]
+    if kind is dict:
+        result = {}
+        for key, item in value.items():
+            if type(key) is not str:
+                raise _UnsafePayload("non-string mapping key")
+            result[key] = _strict_json(item, depth + 1)
+        return result
+    raise _UnsafePayload(f"unsupported value type {kind.__name__}")
+
+
 def _request_identity(req: Envelope) -> str | None:
     """Bind an idempotency key to the request that first used it.
 
-    Only canonical-JSON payloads are admissible: ``None`` means the request
-    cannot be honestly bound to an identity and must be refused, never hashed.
+    ``None`` means the payload is not strict canonical JSON and must be refused
+    rather than hashed. No arbitrary object method is ever called.
     """
     try:
-        payload_json = canonical_json(dict(req.payload))
-    except (TypeError, ValueError, RecursionError, OverflowError):
+        payload_json = canonical_json(_strict_json(req.payload))
+    except (_UnsafePayload, TypeError, ValueError, RecursionError, OverflowError):
         return None
     return digest(
         {
@@ -246,18 +282,20 @@ def _request_identity(req: Envelope) -> str | None:
 
 
 def _is_safe_stop(req: Envelope) -> bool:
-    """Evaluate stop signals without calling arbitrary object methods."""
+    """Evaluate stop signals using exact types and no overridable methods."""
     payload = req.payload
-    signal = payload.get("signal") if isinstance(payload, Mapping) else None
-    action = payload.get("action") if isinstance(payload, Mapping) else None
+    if type(payload) is dict:
+        if payload.get("safe_stop") is True or payload.get("user_stop") is True:
+            return True
+        signal = payload.get("signal")
+        action = payload.get("action")
+        if type(signal) is str and signal == "SAFE_STOP":
+            return True
+        if type(action) is str and action == "safe_stop":
+            return True
     return (
-        req.status == STATUS_SAFE_STOP
-        or (isinstance(req.quality, str) and req.quality.lower() == "safe_stop")
-        or (isinstance(signal, str) and signal.upper() == "SAFE_STOP")
-        or (isinstance(payload, Mapping) and payload.get("safe_stop") is True)
-        or (isinstance(payload, Mapping) and payload.get("user_stop") is True)
-        or (isinstance(action, str) and action == "safe_stop")
-    )
+        type(req.status) is str and req.status == STATUS_SAFE_STOP
+    ) or (type(req.quality) is str and req.quality == "safe_stop")
 
 
 def _extract_feature_names(payload: Mapping[str, Any]) -> set[str]:

@@ -296,18 +296,18 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 | 项 | 本地（macOS / CPython 3.13.12，无 torch/transformers） | 远程 `acam-lab`（Linux / CPython 3.12.3，torch 2.15 + transformers） |
 |---|---|---|
 | 精确命令 | `PYTHONPATH=src:. .venv/bin/python -m pytest -q` | 同左 |
-| 收集用例（`--collect-only -q`） | 1034 | 1042 |
-| 通过 / 跳过 | 1042 / 9 | 1054 / 4 |
-| `pytest tests/lifecycle -q` | 209 passed | 209 passed |
+| 收集用例（`--collect-only -q`） | 1052 | 1060 |
+| 通过 / 跳过 | 1044 / 9 | 1056 / 4 |
+| `pytest tests/lifecycle -q` | 211 passed | 211 passed |
 | `ruff check src tests scripts` | 零告警 | 零告警 |
 | `lifecycle_verify.py` | 15/15 PASS | 15/15 PASS |
 
 收集用例差 8 项，全部来自 `tests/syndrome/test_bert_model.py`：本地无
 `transformers`，整模块在收集期跳过（0 项收集、1 条 module-level skip 结果），
-远程 8 项实跑全过。结果数因此差 7（1035 → 1042）。逐文件对账：
+远程 8 项实跑全过；故结果数差 7（本地 1053、远程 1060）。逐文件对账：
 `test_tcm_minimal_demo.py` 本地 3 passed / 6 skipped、远程 9 passed（缺私有工件）；
 `test_real_data_audit.py` 本地 27 passed、远程 25 passed / 2 skipped（该机缺私有导出）；
-`test_ccmq60.py` 两端均 11 passed / 2 skipped；其余文件两端同为 985 项。
+`test_ccmq60.py` 两端均 11 passed / 2 skipped；其余文件两端同为 1003 项。
 按文件相加与两端总数一致，差异均有明确环境原因，没有把 skip 写成 PASS。
 
 证据级别不变：`LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`；
@@ -410,4 +410,33 @@ cache 与 identities 长度一致；另补 1 项原子性测试（monkeypatch �
 
 本地 `1042 passed, 9 skipped`、`tests/lifecycle` `209 passed`；
 远程 `acam-lab` `1054 passed, 4 skipped`、`tests/lifecycle` `209 passed`；
+两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。证据级别与三门禁不变。
+
+### 10.10 第八轮复评（HEAD `633872a`）与严格 JSON 取值边界
+
+第八轮对 `633872a` 的确认复评：Codex 给出 8.4 / 8.5 并否决，确认第七轮四项原始
+复现已修，但指出 `json.dumps` 本身会调用任意对象方法，仍有 3 项 P2 / 1 项 P3：
+非字符串键被强制转成字符串导致身份碰撞（`{1:"x"}` 与 `{"1":"x"}` 同身份）；
+`sort_keys=True` 调用自定义键的 `__lt__`、嵌套 dict 子类覆盖 `items()` 会向外抛异常；
+字符串子类覆盖 `upper()` 仍能阻断显式 SAFE_STOP；以及 10.5 的收集/结果数对账不自洽。
+
+**处置：不再让 `json.dumps` 接触任意对象。**
+
+- 新增 `_strict_json()`：只接受**精确内建类型**（`None`/`bool`/`int`/`str`/`float`/
+  `list`/`dict`），键必须 `type(key) is str`，float 必须有限，深度上限 64 触发拒绝而非
+  截断；其余（含所有子类、tuple、set、bytes、任意对象）一律抛 `_UnsafePayload`，
+  入口返回 `REJECTED`。之后才对重建出的纯 JSON 值调用 `canonical_json`。
+- `_is_safe_stop()` 用 `type(...) is str` 精确比较、不调用 `upper()` / `__str__`；
+  显式 `safe_stop`/`user_stop` 标志优先短路，满足「SAFE_STOP 无条件返回」。
+- `_request_identity` 捕获 `_UnsafePayload` 与序列化异常，返回 `None`；停止检测在
+  身份计算之前，停止路径不写缓存。
+- 10.5 基线表按最终 HEAD 重新实测：本地收集 1052 / 结果 1053（1044 passed / 9 skipped），
+  远程收集 1060 / 结果 1060（1056 passed / 4 skipped），逐文件对账同步更新。
+
+新增 3 项回归（非字符串键与恶意 `__lt__` 键、字符串子类值、字符串子类 signal 下
+显式停止不被阻断），4 项突变（严格键检查、精确标量类型、停止精确字符串比较、
+停止标志优先）全部命中。累计 38 项突变检查全部命中。
+
+本地 `1044 passed, 9 skipped`、`tests/lifecycle` `211 passed`；
+远程 `acam-lab` `1056 passed, 4 skipped`、`tests/lifecycle` `211 passed`；
 两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。证据级别与三门禁不变。
