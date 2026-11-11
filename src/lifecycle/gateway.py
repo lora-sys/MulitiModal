@@ -217,23 +217,55 @@ def _structured_names(container: Any) -> set[str]:
     return names
 
 
-def _stable(value: Any) -> Any:
-    """Normalize arbitrary payload values into deterministic JSON-safe data.
+_IDENTITY_MAX_DEPTH = 24
 
-    Envelope and dict entry points accept NaN, bytes and other non-JSON values;
-    the idempotency digest must never raise on them, especially for SAFE_STOP.
+
+def _stable(
+    value: Any, _depth: int = 0, _path: frozenset[int] = frozenset()
+) -> list[Any]:
+    """Typed, cycle-safe encoding for idempotency digests.
+
+    Each branch carries a type tag so no two distinct values collide. The output
+    contains only JSON-safe scalars/lists, so ``digest`` cannot raise. Opaque
+    objects are labelled by type plus a best-effort repr (in-process only).
     """
+    if _depth > _IDENTITY_MAX_DEPTH:
+        return ["depth-limit", type(value).__name__]
+    if value is None:
+        return ["none"]
+    if isinstance(value, bool):
+        return ["bool", value]
+    if isinstance(value, str):
+        return ["str", value]
+    if isinstance(value, bytes):
+        return ["bytes", value.hex()]
+    if isinstance(value, int):
+        return ["int", str(value)]
+    if isinstance(value, float):
+        encoded = value.hex() if math.isfinite(value) else f"nonfinite:{value!r}"
+        return ["float", encoded]
+    marker = id(value)
+    if marker in _path:
+        return ["cycle", type(value).__name__]
+    path = _path | {marker}
     if isinstance(value, Mapping):
-        return {str(k): _stable(v) for k, v in value.items()}
+        items = [
+            [_stable(k, _depth + 1, path), _stable(v, _depth + 1, path)]
+            for k, v in value.items()
+        ]
+        items.sort(key=canonical_json)
+        return ["map", items]
     if isinstance(value, (list, tuple)):
-        return [_stable(v) for v in value]
+        return ["seq", [_stable(v, _depth + 1, path) for v in value]]
     if isinstance(value, (set, frozenset)):
-        return sorted(repr(v) for v in value)
-    if isinstance(value, float) and not math.isfinite(value):
-        return f"nonfinite:{value!r}"
-    if value is None or isinstance(value, (str, int, bool)):
-        return value
-    return f"{type(value).__name__}:{value!r}"
+        parts = [_stable(v, _depth + 1, path) for v in value]
+        parts.sort(key=canonical_json)
+        return ["set", parts]
+    try:
+        shown = repr(value)
+    except Exception:
+        shown = "<unrepresentable>"
+    return ["obj", type(value).__name__, shown]
 
 
 def _request_identity(req: Envelope) -> str:
@@ -340,6 +372,7 @@ class Gateway:
 
         self._cache: dict[str, Envelope] = {}
         self._cache_identities: dict[str, str] = {}
+        self._stopped_ids: set[str] = set()
         self.idempotency_counter: dict[str, int] = {}
         self.idempotency_hits: int = 0
         self._in_flight: dict[str, int] = {m: 0 for m in ALLOWED_MODES}
@@ -387,7 +420,7 @@ class Gateway:
             or req.payload.get("user_stop") is True
             or req.payload.get("action") == "safe_stop"
         )
-        if is_safe_stop:
+        if req.request_id in self._stopped_ids or is_safe_stop:
             res = make_envelope(
                 schema_version=req.schema_version,
                 request_id=req.request_id,
@@ -410,7 +443,8 @@ class Gateway:
                     "safe_stop": True,
                 },
             )
-            self._store_cache(req, res)
+            if req.request_id:
+                self._stopped_ids.add(req.request_id)
             return res
 
         if req.request_id in self._cache:

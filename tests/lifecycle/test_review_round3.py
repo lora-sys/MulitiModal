@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -283,7 +285,115 @@ def test_non_json_payloads_never_break_fail_closed_responses(value, stop):
     assert res.status == expected
     assert res.payload.get("prediction") is None
     assert res.payload["control_command"] is None
-    assert len(gateway._cache) == len(gateway._cache_identities) == 1
+    # SAFE_STOP is independent of cache writes; scored requests still write
+    # cache and identity together.
+    expected_entries = 0 if stop else 1
+    assert len(gateway._cache) == len(gateway._cache_identities) == expected_entries
+
+
+def test_identity_encoding_is_typed_and_collision_free():
+    """P2 (round-6 Codex): finite float must not collide with its string form."""
+    assert gw._stable(1.0)[0] == "float"
+    assert gw._stable("float:1.0")[0] == "str"
+    assert gw._stable(1.0) != gw._stable("float:1.0")
+    assert gw._stable(1) != gw._stable("1")
+    assert gw._stable(True) != gw._stable(1)
+    assert gw._stable(b"abc") != gw._stable("616263")
+    gateway = gw.Gateway()
+    first = gw.make_envelope(
+        request_id="typed", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
+        payload={"value": 1.0},
+    )
+    assert gateway.handle(first).status == STATUS_OK
+    changed = gw.make_envelope(
+        request_id="typed", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
+        payload={"value": "float:1.0"},
+    )
+    assert gateway.handle(changed).status == STATUS_REJECTED
+
+
+def test_cyclic_or_unrepresentable_payloads_never_break_safe_stop():
+    """P2 (round-6 Codex): cycles / throwing __repr__ must not block SAFE_STOP."""
+    cycle = []
+    cycle.append(cycle)
+
+    class BadRepr:
+        def __repr__(self):
+            raise RuntimeError("boom")
+
+    assert ["cycle", "list"] in gw._stable({"value": cycle})[1][0][1][1]
+    for payload in (
+        {"safe_stop": True, "value": cycle},
+        {"safe_stop": True, "value": BadRepr()},
+        {"value": cycle},
+        {"value": BadRepr()},
+    ):
+        gateway = gw.Gateway()
+        req = gw.make_envelope(
+            request_id="opaque", mode=gw.MODE_B_REALTIME, payload=payload
+        )
+        res = gateway.handle(req)
+        expected = (
+            STATUS_SAFE_STOP if payload.get("safe_stop") else STATUS_NOT_AVAILABLE
+        )
+        assert res.status == expected
+        assert res.payload.get("prediction") is None
+        assert len(gateway._cache) == len(gateway._cache_identities)
+
+
+def test_map_identity_is_order_independent():
+    """Two dicts with the same items in different insertion order must match."""
+    first = {"a": 1, "b": 2, "c": 3}
+    second = {"c": 3, "b": 2, "a": 1}
+    assert gw._stable(first) == gw._stable(second)
+    gateway = gw.Gateway()
+    base = gw.make_envelope(
+        request_id="ordered", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
+        payload={"features": first},
+    )
+    assert gateway.handle(base).status == STATUS_OK
+    replay = gw.make_envelope(
+        request_id="ordered", session_id="S1", mode=gw.MODE_A_PRE_ONLY,
+        payload={"features": second},
+    )
+    assert gateway.handle(replay).status == STATUS_OK
+
+
+def test_deep_but_acyclic_payload_is_bounded():
+    """Depth cap must stop recursion without raising."""
+    deep: object = "leaf"
+    for _ in range(2000):
+        deep = {"next": deep}
+    encoded = gw._stable({"value": deep})
+    assert canonical_json(encoded)
+    gateway = gw.Gateway()
+    req = gw.make_envelope(
+        request_id="deep", mode=gw.MODE_B_REALTIME, payload={"value": deep}
+    )
+    res = gateway.handle(req)
+    assert res.status == STATUS_NOT_AVAILABLE
+    assert res.payload["prediction"] is None
+
+
+def test_set_identity_is_stable_across_hash_seeds():
+    """P3 (round-6 Codex): set encoding must not depend on PYTHONHASHSEED."""
+    import subprocess
+
+    script = (
+        "import sys; sys.path.insert(0, 'src'); "
+        "from lifecycle.gateway import _stable; "
+        "print(_stable({frozenset({'a','b','c','d'}), 'x', 1, 2.5}))"
+    )
+    outputs = set()
+    for seed in ("1", "2", "3"):
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True, text=True, env={**os.environ, "PYTHONHASHSEED": seed},
+            check=True,
+        )
+        outputs.add(proc.stdout.strip())
+    assert len(outputs) == 1
 
 
 def test_cache_write_is_atomic_when_identity_fails(monkeypatch):

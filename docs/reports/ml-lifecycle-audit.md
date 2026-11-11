@@ -297,8 +297,8 @@ Claude Opus 5.5 给出 8.9 / 9.5 并否决，唯一否决理由是「确定性�
 |---|---|---|
 | 精确命令 | `PYTHONPATH=src:. .venv/bin/python -m pytest -q` | 同左 |
 | 收集用例（`--collect-only -q`） | 1034 | 1042 |
-| 通过 / 跳过 | 1038 / 9 | 1050 / 4 |
-| `pytest tests/lifecycle -q` | 205 passed | 205 passed |
+| 通过 / 跳过 | 1043 / 9 | 1055 / 4 |
+| `pytest tests/lifecycle -q` | 210 passed | 210 passed |
 | `ruff check src tests scripts` | 零告警 | 零告警 |
 | `lifecycle_verify.py` | 15/15 PASS | 15/15 PASS |
 
@@ -361,3 +361,23 @@ cache 与 identities 长度一致；另补 1 项原子性测试（monkeypatch �
 远程 `acam-lab` `1050 passed, 4 skipped`、`tests/lifecycle` `205 passed`；
 两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。10.5 的基线表按最终 HEAD 更新，
 10.4 保留为第二轮历史快照。证据级别与三门禁不变。
+
+### 10.8 第六轮复评（HEAD `c7a0303`）与身份编码的 2 项 P2 + 1 项 P3
+
+第六轮对 `c7a0303` 的确认复评：Codex（gpt-6.1-sol）给出 8.4 / 8.5 并否决，
+确认第五轮 P2 已解决，但指出 `_stable` 归一化引入 3 个新问题：
+
+| 编号 | 级别 | 问题 | 处置 |
+|---|---|---|---|
+| R6-1 | P2 | 自引用容器触发无限递归、`__repr__` 抛异常的对象仍会让身份摘要失败并阻断 SAFE_STOP | `_stable` 改为带类型标签的递归编码：路径集合检测环（`["cycle", type]`）、深度上限 24（`["depth-limit", type]`）、`repr` 用 `try/except` 兜底；SAFE_STOP 改为**不写缓存**，改用 `_stopped_ids` 粘性集合，返回路径与身份摘要彻底解耦 |
+| R6-2 | P2 | 有限浮点走「字符串化」分支，与 `"float:1.0"` 这类字符串碰撞，导致不同 payload 被判定为同一幂等关键 | 所有分支带类型标签：`["float", value.hex()]` / `["str", value]` / `["int", str(value)]` / `["bool", value]` / `["bytes", hex]` / `["none"]`，不同类型不再碰撞 |
+| R6-3 | P3 | 集合与不透明对象的 `repr` 受 `PYTHONHASHSEED` 影响，文档「确定性」声明过强 | 集合/映射均按 `canonical_json` 排序后编码；不透明对象显式标注为进程内尽力表示，不再声称跨进程确定性 |
+
+新增 8 项回归：类型标签与冲突拒绝、环/异常 `repr` 下 SAFE_STOP 不受阻、映射键顺序无关、
+2000 层深嵌套有界、跨 `PYTHONHASHSEED` 集合编码稳定，以及 SAFE_STOP 零缓存写入。
+**28 项突变全部命中**（第三轮 15 + 第四轮 3 + 第五轮 2 + 第六轮 8）。
+累计 21 项 finding（15 + 2 + 1 + 3）全部落盘、56 项新增回归。
+
+本地 `1043 passed, 9 skipped`、`tests/lifecycle` `210 passed`；
+远程 `acam-lab` `1055 passed, 4 skipped`、`tests/lifecycle` `210 passed`；
+两端 `ruff` 零告警、`lifecycle_verify.py` `15/15 PASS`。证据级别与三门禁不变。
