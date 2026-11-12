@@ -24,7 +24,7 @@ from .programs import (
     ProgramValidationError,
     parse_program_context,
 )
-from .schema import PHASE_DURING, ProtocolContextV1, SchemaError
+from .schema import ProtocolContextV1, SchemaError
 
 POLICY_VERSION = "massage-rec-v1"
 CONTROL_STATUS_NOT_CONNECTED = "NOT_CONNECTED"
@@ -514,10 +514,6 @@ def _preferred_duration(
     if pref.max_duration_s is None:
         return None
     return min(pref.max_duration_s, capability.duration_max_s)
-
-
-def recommendation_for_phase(phase: str) -> bool:
-    return phase == PHASE_DURING
 
 
 __all__ = [
