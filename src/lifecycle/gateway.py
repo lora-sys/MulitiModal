@@ -82,10 +82,6 @@ class ModeIsolationError(GatewayError):
     """Raised on illegal cross-mode feature or data leakage."""
 
 
-class ThrottleError(GatewayError):
-    """Raised when in-flight request capacity is exhausted."""
-
-
 @dataclass(frozen=True)
 class SessionState:
     """Immutable reconstructed session state without invented measurements."""
@@ -464,8 +460,7 @@ class Gateway:
         try:
             return self._process_request(raw_request)
         except GatewayError:
-            # strict_mode uses ModeIsolationError/ThrottleError as deliberate
-            # control flow; let them reach the caller unchanged.
+            # strict_mode exposes mode isolation failures to the caller.
             raise
         except Exception:
             # Fail-closed totality: a malformed request can never raise out of
@@ -926,7 +921,6 @@ __all__ = [
     "STATUS_STALE",
     "SessionState",
     "TERMINAL_STATUSES",
-    "ThrottleError",
     "canonical_json",
     "digest",
     "envelope_from_dict",

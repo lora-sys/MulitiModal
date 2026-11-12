@@ -1,8 +1,7 @@
 """Single local/CI verification entry for the physiology main line (#95).
 
-Default scope is the new engineering surface so pre-existing repo-wide lint
-debt is not confused with this work. ``--full`` runs the whole repository and
-reports the known legacy failures honestly.
+Default scope covers physiology tests and lint. ``--full`` runs the whole
+repository test suite and lint scope.
 """
 
 from __future__ import annotations

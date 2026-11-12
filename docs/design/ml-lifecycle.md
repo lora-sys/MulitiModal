@@ -326,50 +326,6 @@
 
 ---
 
-## 7. 契约与代码现状审计发现（Audit Findings & Defect Resolution）
+## 7. 审计与验收
 
-在落地全生命周期过程中，团队对实际代码与历史 Issue 开展了逐路径实测核对，发现并纠正了多项真实缺陷，避免虚假的 CI 通过：
-
-1. **`core/__init__.py` 顶层饥饿导入导致纯净环境崩溃（A1 缺陷）**：
-   - *现象*：原代码在顶层 `import .models`（内部强引用 `torch`），导致干净 CI 环境在没有安装 PyTorch 时，连纯 stdlib 的 `core.specs` 都无法加载。
-   - *修复*：采用 PEP 562 `__getattr__` 惰性解析 torch 依赖符号；`core.specs` 保持顶层导出。纯净环境可安全导入纯契约。
-2. **全仓 Ruff 违规遗留项（A2 缺陷）**：
-   - *现象*：存在 8 处代码风格违规（E501 行长超出、B905 zip 缺少 strict、I001 导包排序）。
-   - *修复*：机械修复全仓代码并保持既有 281 项测试行为不变，`pyproject.toml` 针对单页看板文件明确排除特定行长规则。
-3. **`pyproject.toml` 空标记与测试收集冲突（A3, A4, A8 缺陷）**：
-   - *现象*：旧配置声明了 `fast` 标记但无任何用例使用；`test_training.py` 存在同名重名；pytest 收集阶段跨模块加载了依赖 torch 的测试。
-   - *修复*：新增独立的 `tests/lifecycle/test_contracts_fast.py`（标为 fast）；重命名避免导入冲突；在 CI 中明确分离 fast 契约通道与神经测试跳过逻辑。
-4. **管道快照时间戳引入不确定性（A6 缺陷）**：
-   - *现象*：`snapshot.created_at` 曾使用墙钟时间，导致对完全相同的数据执行两次生成不同快照哈希。
-   - *修复*：生成时统一锚定数据集中最早的 `event_time`；缓存命中时继承先前运行身份，确保逐字节完全一致。
-5. **阶段命名冲突纠偏（A7 缺陷）**：
-   - *现象*：训练阶段的验证步骤曾被命名为 `validate`，与数据管道的质检 `validate` 冲突。
-   - *修复*：训练侧命名规范化为 `validate_model`，生命周期主阶段补充显式 `prepare`。
-6. **无 torch 时全仓收集崩溃（A8 缺陷）**：
-   - *现象*：`pytest -m fast` 会收集全仓，`tests/runtime/*`、`tests/core/*` 在收集期导入 torch-backed 模块，产生 5 个 collection error。
-   - *修复*：fast 门禁改为明确路径 `pytest tests/lifecycle/test_contracts_fast.py -m fast -q`；fast 门禁本就只应跑 stdlib 契约文件，不是缩窄通过数。
-7. **评审团首轮捕获的三项管道/源能力缺陷（A9 缺陷，Step 5 Preview 8.6 分）**：
-   - *现象*：`sources.py` 的 SIMULATED+CONNECTED 守卫条件写反，带空 conformance 的假真设备可构造；`pipeline.py` 的 resume 游标仅按 `dataset_sha256` 继承，配置变化会把 7 行好 snapshot 覆盖成 0 行；同名不同字节的批次被当成重复静默丢弃；缓存 QC 损坏会直接崩溃。
-   - *修复*：SIMULATED+CONNECTED 无条件拒判；`deps_match` 同时匹配 dataset/schema/code/config/rules；`_batch_key` 加入 raw sha256 并对碰撞隔离登记 + 强制 re-ingest；缓存损坏时清空游标全量重算并登记 drift。每项均配"撤回修复则测试失败"的突变验证。
-8. **CI 描述与实际依赖不符（A10 缺陷）**：
-   - *现象*：CI 头部声称"no torch"，但 fast/synthetic job 安装的 `requirements-dev.txt` 含 `transformers`；冻结研究线没有 CI 保护；私有数据断言只查路径不查内容。
-   - *修复*：注释改为"专用 `no-torch` job 才是无 torch 的证明"；新增 `frozen-lines` job 跑研究/证候/数据/证据/标签/脚本套件（384 passed / 9 skipped）；新增真实 session id 与 raw hash 的内容级扫描（不匹配合法字段名、排除 workflow 自身）。
-
-### 首轮评审状态
-
-三模型评审团（Gemini 3.8 Flash / Step 5 Preview / Claude Opus 5.5）要求质量与实现程度两轴均 ≥9.0。
-Step 5 Preview 首轮给出 8.7 / 8.6 → **8.6**，13 项 finding 已全部处置（`e334cb0`）；
-Gemini 3.8 Flash 给出 9.6 / 9.8 → **9.6**，G1–G5 五个 P3 已全部处置（`02c7e25`）；
-Claude Opus 5.5 仍在运行。**首轮未达标项尚未复评前本分支不合并**，评分与处置记录见
-[docs/reports/ml-lifecycle-audit.md](../reports/ml-lifecycle-audit.md) 第 10 节。
-
----
-
-## 8. 文档与规范元数据声明
-
-- **文档字数与段落统计**：
-  - 核心正文包含 8 大主章节、24 个子节、8 张架构及状态矩阵表格、1 幅 ASCII 门禁拓扑图。
-  - 涵盖全部 7 大生命周期阶段与 15 项统一验收检查的代码定义。
-- **规范一致性校验结论**：
-  - 代码库与设计文档中涉及的所有类名、常量名、文件路径均与实际源码完全一致。
-  - 无任何捏造的 API、无未经实测的性能数据、无超越工程边界的临床医学宣称。
+实现期间的审计和问题处理记录见 [生命周期审计报告](../reports/ml-lifecycle-audit.md)，验收范围及结果见 [生命周期验收报告](../reports/ml-lifecycle-acceptance.md)。报告记录的是对应时间的结果；当前状态以代码和重新运行的检查为准。
