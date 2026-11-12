@@ -1,5 +1,7 @@
 # #61 架构审计与最小实施方案
 
+> 历史快照：本文记录 2026-11-03 的代码与方案。自主循环和旧 harness 后来已移除，当前研究约束见 [AGENTS.md](../../AGENTS.md)。
+
 日期：2026-11-03。分支 `feat/issue-61-autoresearch-module`（工作树 `~/repos/MulitiModal-issue-61`）。
 范围：把已有研究引擎补成**真正自主、可诊断、可观测**的独立模块，并交付独立 Skill 与轻量 Dashboard。**不重写已有系统。**
 
