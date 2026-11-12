@@ -47,8 +47,10 @@ Pre/Post 端点与 `y_delta_*` 标签；参考训练集只用于核对，不作�
    而 `hr`/`spo2`/`micro_hrv`/`fatigue_index`/`vendor_score` 仍取首条记录的值。
    **这两条读数——`rr=0` 的语义与"完成记录"的身份——都是未经厂商字段字典确认的假设**，
    不是已知语义；它们在该抽取集上复现了全部参考值，仅此而已。
-4. Pre/Post 各合成一个 `PhysioEventV1`，每指标至多一个 `MeasurementV1`，
-   `provenance.source_record` 为组锚记录，保证端点独立；
+4. Pre/Post 各合成一个 `PhysioEventV1`，每指标至多一个 `MeasurementV1`。
+   `provenance.source_record` 仍为组锚记录，仅用于端点级追溯；**它不足以证明每个指标的独立性**。
+   P0-01 起每个有效测量在 `MeasurementV1.notes` 另记 `value_source_record`。
+   Pre/Post 端点组有任何原始记录重叠时拒绝该模块端点；同指标的来源记录缺失或相同时拒绝标签。
 5. 时间戳为文件内裸本地时间：按 UTC 读取，**只用相对顺序与差值**，因此偏移不可能改变任何标签；
    裸时间戳仍登记为 `naive_timestamp` QC。
 
@@ -114,3 +116,13 @@ Pre 端点值；`delta_vendor_fatigue` 是两个厂商分之差。因此该预�
 - `GO_REAL_DATA_TRAINING(physio)`、`GO_RESEARCH_CLAIMS(physio)` 仍为 `NOT_GRANTED`，
   不因本次接入放宽。
 - 结论级别 `LOCAL_EXPERIMENTAL` / `AGENT_ISOLATION_UNVERIFIED` / `SMOKE_ONLY`。
+
+## 8. P0-01 至 P0-03 后续数据纪律
+
+与 `docs/design/physio-collection-admission-v1.md` 对齐：
+
+- 这是历史 5 条导出集的**反推映射**，不是未来采集协议的权威。
+- 跨 Session 复用相同来源记录，或者同一 `subject_key` 的 Session 时间窗口重叠时，一律让所涉 Session 的派生响应标签拒绝准入。单个模态的端点组重叠只拒绝该模态差值，不屏蔽独立有效的其他模态。仅有相同旧账号不等于同一物理受试者。
+- 厂商疲劳分数变化只可用于工程代理目标；独立疲劳参考标签尚未收集。
+- `src/physio/admission_report.py` 为每条 Session 输出观测输入、缺失输入、逐字段标签类型与拒绝原因；此报告不自动解锁真实数据训练门禁。
+- 这套改动不追溯修改私有原始表，现存数据必须重新导入并重新生成 QC 报告才能获得新的结果。
